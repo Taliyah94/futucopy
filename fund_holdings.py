@@ -28,17 +28,7 @@
 
       // QQQ 日线历史（曲线图「QQQ 涨跌幅(基准)」对比线用）：每天增量追加新交易日，
       // 已有历史以存盘数据为准（防源端截断/换源抹史），仅最后一天会被新抓取刷新
-      "qqq_daily": [{"d": "2026-02-06", "c": 518.20}, ...],   // 升序，{d:日期, c:收盘价}
-
-      // 房产数据（房天下小区成交记录，看板「房产」卡片用：71.56㎡ × 最新成交单价）
-      "_property": {
-        "community": {"name": "瑞源水岸", "district": "黄岛区辛安", "city": "青岛"},
-        "updated": "2026-09-21 03:27:45",     // 最近一次抓取成功的时间
-        "live_fetched": {"soufun": true, "lianjia": false},  // 本次实时抓取是否成功
-        "stale_sources": [],        // 本次抓取失败、数据停留在旧值的来源
-        "deals": [{"date": "2026-08-09", "area_m2": 71.56, "total_wan": 56.0,
-                   "unit_price": 7826, "source": "房天下"}, ...]   // 按日期倒序
-      }
+      "qqq_daily": [{"d": "2026-02-06", "c": 518.20}, ...]    // 升序，{d:日期, c:收盘价}
     }
 
 字段含义
@@ -81,11 +71,9 @@ _daily_quotes（顶层，非基金键，前端按基金代码遍历时会被自�
 """
 
 import argparse
-import gzip
 import json
 import os
 import re
-import subprocess
 import sys
 import time
 import datetime as _dt
@@ -703,222 +691,6 @@ def merge_qqq_daily(old, fresh):
 
 
 # ---------------------------------------------------------------------------
-# 房产数据（房天下 · 青岛黄岛 瑞源水岸）
-# ---------------------------------------------------------------------------
-# 看板「房产」卡片：总额 = 71.56㎡ × 最新一笔成交单价，明细按成交时间倒序展示。
-# 数据源：房天下小区成交页 qd.esf.fang.com/loupan/<id>/chengjiao/，表格列为
-#   房源面积 | 成交时间 | 成交总价 | 成交均价 | 信息来源
-# 房天下有频率风控：触发时 302 到 check.3g.fang.com 的滑块验证页（正文含
-# "请完成下列验证"）。故这里做了三件事：
-#   1. 翻页之间 sleep 降频，失败退避重试；
-#   2. 识别到验证页即判定本次抓取失败，保留旧数据（绝不写出空 deals）；
-#   3. 无论本次是否抓取，都会把旧 _property 原样带回结果，避免覆盖丢失。
-PROPERTY_KEY = "_property"
-PROPERTY_CONF = {
-    "city": "qd",          # 房天下城市站（青岛）
-    "id": "2411123345",    # 房天下小区 ID：青岛·瑞源·水岸
-    "community": {"name": "瑞源水岸", "district": "黄岛区辛安", "city": "青岛"},
-    "source": "房天下",
-}
-SOUFUN_DEAL_URL = "https://{city}.esf.fang.com/loupan/{id}/chengjiao/t11-a11-p{page}/"
-SOUFUN_MAX_PAGES = 5            # 成交记录最多翻几页（每页 20 条，覆盖 35 条历史足够）
-SOUFUN_PAGE_GAP = 2             # 翻页间隔（秒）：请求过快会被房天下判定为爬虫
-SOUFUN_CHECK_HINT = "请完成下列验证"   # 风控页特征串
-
-# 成交表格行：<td><p>71.56㎡</p></td><td><p>2026-08-09</p></td><td><p>56万</p></td><td><p>7826元/㎡</p></td>
-_RE_DEAL_ROW = re.compile(
-    r"<tr[^>]*>\s*<td[^>]*>\s*<p[^>]*>\s*([\d.]+)\s*㎡\s*</p>.*?"
-    r"<td[^>]*>\s*<p[^>]*>\s*(\d{4}-\d{2}-\d{2})\s*</p>.*?"
-    r"<td[^>]*>\s*<p[^>]*>\s*([\d.]+)\s*万\s*</p>.*?"
-    r"<td[^>]*>\s*<p[^>]*>\s*([\d,]+)\s*元/㎡\s*</p>",
-    re.S,
-)
-
-
-def _curl_text(url, timeout=30, referer=None):
-    """用系统 curl 取页面文本，失败返回 None。
-
-    房天下风控对客户端指纹敏感：实测同一时刻 curl 能取到页面、Python urllib
-    直接返回滑块验证页，故优先走 curl；没有 curl 时由 _urllib_text 兜底。
-    """
-    try:
-        cmd = ["curl", "-sSL", "--compressed", "--max-time", str(timeout),
-               "-A", USER_AGENT, "-H", "Accept-Language: zh-CN,zh;q=0.9"]
-        if referer:
-            cmd += ["-e", referer]
-        cmd.append(url)
-        out = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                             timeout=timeout + 5)
-        if out.returncode != 0 or not out.stdout:
-            return None
-        return out.stdout.decode("utf-8", "ignore")
-    except (OSError, subprocess.SubprocessError):
-        return None
-
-
-def _urllib_text(url, timeout=30, referer=None):
-    """用 urllib 取页面文本（curl 不可用时的兜底）。"""
-    headers = {"User-Agent": USER_AGENT, "Accept-Language": "zh-CN,zh;q=0.9"}
-    if referer:
-        headers["Referer"] = referer
-    req = urllib.request.Request(url, headers=headers)
-    raw = urllib.request.urlopen(req, timeout=timeout).read()
-    if raw[:2] == b"\x1f\x8b":  # 少数节点返回 gzip
-        raw = gzip.decompress(raw)
-    return raw.decode("utf-8", "ignore")
-
-
-def _http_text(url, timeout=30, referer=None):
-    """GET 一个页面并返回 (文本, None)；命中房天下风控页返回 (None, 原因)。"""
-    txt = _curl_text(url, timeout=timeout, referer=referer)
-    if txt is None:
-        try:
-            txt = _urllib_text(url, timeout=timeout, referer=referer)
-        except Exception as e:  # noqa: BLE001 - 两条通道都失败才报错
-            return None, str(e)
-    if not txt:
-        return None, "空响应"
-    if SOUFUN_CHECK_HINT in txt or "check.3g.fang.com" in txt:
-        return None, "命中房天下反爬验证页"
-    return txt, None
-
-
-def parse_soufun_deals(html):
-    """解析成交表格 -> [{"date","area_m2","total_wan","unit_price"}, ...]（页内原序）。"""
-    out = []
-    for m in _RE_DEAL_ROW.finditer(html or ""):
-        area, date, total, unit = m.groups()
-        try:
-            rec = {"date": date, "area_m2": float(area),
-                   "total_wan": float(total),
-                   "unit_price": int(unit.replace(",", ""))}
-        except ValueError:
-            continue
-        if rec["area_m2"] > 0 and rec["total_wan"] > 0 and rec["unit_price"] > 0:
-            out.append(rec)
-    return out
-
-
-def fetch_soufun_property(conf=PROPERTY_CONF, max_pages=SOUFUN_MAX_PAGES,
-                          retries=3, timeout=30, quiet=False):
-    """抓取房天下小区成交记录，返回 (property, note)。
-
-    property 为 None 表示没抓到（多半被风控），调用方应保留旧数据；
-    note 记录本次抓取的瑕疵（如中途被风控拦截导致记录不全），不影响主流程。
-    """
-    city, cid = conf.get("city"), conf.get("id")
-    base = "https://%s.esf.fang.com" % city
-    deals, seen = [], set()
-    blocked_at = None   # 第一页命中风控的页码（数据可能不全）
-    for page in range(11, 11 + max_pages):
-        url = SOUFUN_DEAL_URL.format(city=city, id=cid, page=page)
-        txt = None
-        for attempt in range(1, retries + 1):
-            try:
-                txt, err = _http_text(url, timeout=timeout, referer=base + "/")
-                if err:
-                    raise RuntimeError(err)
-                break
-            except Exception as e:  # noqa: BLE001 - 网络异常/风控统一退避重试
-                if attempt == retries:
-                    if blocked_at is None:
-                        blocked_at = page
-                    if not quiet:
-                        sys.stderr.write("  [房产] 成交页 p%d 抓取失败：%s\n" % (page, e))
-                else:
-                    time.sleep(2 * attempt)
-        if not txt:
-            break
-        rows = parse_soufun_deals(txt)
-        if not rows:
-            # 空页有两种：翻到底了（仍有表头）/ 拿到风控或异常页（没表头）
-            if "成交时间" not in txt:
-                if blocked_at is None:
-                    blocked_at = page
-                if not quiet:
-                    sys.stderr.write("  [房产] 成交页 p%d 返回的不是成交列表\n" % page)
-            break
-        added = 0
-        for r in rows:
-            key = (r["date"], r["area_m2"], r["total_wan"])
-            if key in seen:
-                continue
-            seen.add(key)
-            deals.append(r)
-            added += 1
-        if added == 0:      # 整页都是见过的记录，说明翻到底了
-            break
-        time.sleep(SOUFUN_PAGE_GAP)   # 降频，避免触发房天下风控
-    if not deals:
-        return None, "未取到成交记录"
-
-    note = None
-    if blocked_at is not None:
-        note = "p%d 起被风控拦截，成交记录可能不全" % blocked_at
-        if not quiet:
-            sys.stderr.write("  [房产] %s\n" % note)
-
-    src = conf.get("source", "房天下")
-    for r in deals:
-        r["source"] = src
-    prop = {
-        "community": dict(conf.get("community") or {}),
-        "updated": _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "live_fetched": {"soufun": True, "lianjia": False},
-        "stale_sources": [],
-        "deals": sorted(deals, key=lambda x: x["date"], reverse=True),
-    }
-    return prop, note
-
-
-def load_existing_property(path):
-    """读取已存盘 JSON 里的 _property（本脚本写入，也可能被手工补过成交记录）。"""
-    if not (path and os.path.exists(path)):
-        return None
-    try:
-        with open(path, encoding="utf-8") as f:
-            obj = json.load(f)
-    except Exception:  # noqa: BLE001 - 旧文件损坏当无房产数据
-        return None
-    part = obj.get(PROPERTY_KEY)
-    if not isinstance(part, dict):
-        return None
-    # 均价字段（market）已废弃：看板只读 deals，读到就丢掉，下次写回时自然清干净
-    part.pop("market", None)
-    return part
-
-
-def merge_property(old, fresh):
-    """合并新旧房产数据：成交记录按 (成交日期, 面积) 去重，旧条目优先。
-
-    键只取日期+面积：房天下页面把总价取整到万（如 54.5 万显示为 54 万），
-    若把总价也计入键，同一笔成交会被当成两条重复插入。
-    旧条目优先，保住手工/链家补全的小数精度与 source 标注；新数据只补充新出现的成交。
-    fresh 为 None（本次抓取失败）时原样返回 old，绝不写出空 deals。
-    """
-    if not fresh:
-        return old
-    if not old:
-        return fresh
-    merged = dict(old)
-    merged["community"] = old.get("community") or fresh.get("community")
-    merged["updated"] = fresh.get("updated") or old.get("updated")
-    live = dict(old.get("live_fetched") or {})
-    live.update(fresh.get("live_fetched") or {})
-    merged["live_fetched"] = live
-    # 本次房天下抓成功了，就把上次失败留下的 stale 标记清掉
-    merged["stale_sources"] = [s for s in (old.get("stale_sources") or []) if s != "soufun"]
-    by_key = {}
-    for d in (old.get("deals") or []):
-        if isinstance(d, dict) and d.get("date"):
-            by_key[(d["date"], d.get("area_m2"))] = d
-    for d in (fresh.get("deals") or []):
-        by_key.setdefault((d["date"], d.get("area_m2")), d)
-    merged["deals"] = sorted(by_key.values(), key=lambda x: x.get("date") or "", reverse=True)
-    return merged
-
-
-# ---------------------------------------------------------------------------
 # 主流程
 # ---------------------------------------------------------------------------
 def load_config(path):
@@ -1107,8 +879,6 @@ def main(argv=None):
                     help="跳过日股/韩股行情快照抓取")
     ap.add_argument("--no-qqq", action="store_true",
                     help="跳过 QQQ 日线抓取（曲线图基准对比用）")
-    ap.add_argument("--no-property", action="store_true",
-                    help="跳过房产数据抓取（房天下小区成交记录）；旧数据仍会原样保留")
     ap.add_argument("--snapshot-days", type=int, default=SNAPSHOT_DAYS,
                     help="行情快照保留天数（默认 %d）" % SNAPSHOT_DAYS)
     args = ap.parse_args(argv)
@@ -1158,35 +928,6 @@ def main(argv=None):
         elif not args.quiet:
             sys.stderr.write("  [QQQ] 未取得日线，跳过\n")
 
-    # 房产数据（房天下小区成交记录）。
-    # 旧 _property 必须无条件带回结果：result 是全新 dict，不带上的话写文件会抹掉房产数据。
-    old_prop = load_existing_property(args.output)
-    if not args.no_property:
-        prop, note = fetch_soufun_property(retries=args.retries, quiet=args.quiet)
-        if prop:
-            result[PROPERTY_KEY] = merge_property(old_prop, prop)
-            if not args.quiet:
-                d0 = (prop["deals"] or [{}])[0]
-                sys.stderr.write("  [房产] %s 成交 %d 条，最新 %s %s元/㎡%s\n" % (
-                    (prop.get("community") or {}).get("name", "-"), len(prop["deals"]),
-                    d0.get("date", "-"), d0.get("unit_price", "-"),
-                    "" if not note else "（%s）" % note))
-        else:
-            # 抓取失败：原样沿用旧数据，并把房天下标记为「本次未取到」
-            if old_prop:
-                kept = dict(old_prop)
-                stale = [s for s in (kept.get("stale_sources") or []) if s != "soufun"]
-                stale.append("soufun")
-                kept["stale_sources"] = stale
-                kept["live_fetched"] = dict(kept.get("live_fetched") or {})
-                kept["live_fetched"]["soufun"] = False
-                result[PROPERTY_KEY] = kept
-            if not args.quiet:
-                sys.stderr.write("  [房产] 抓取失败（%s），沿用旧数据 %d 条\n"
-                                 % (note or "未知原因", len((old_prop or {}).get("deals") or [])))
-    elif old_prop:
-        result[PROPERTY_KEY] = old_prop
-
     # 增量合并：与存盘文件取并集（同日新覆盖旧），抓取失败的部分沿用旧数据
     if not args.no_merge:
         merge_with_existing(result, args.output, codes, quiet=args.quiet)
@@ -1213,7 +954,7 @@ def main(argv=None):
             sys.stderr.write("写文件失败：%s\n上方 JSON 仍可直接复制使用\n" % e)
 
     # 统计：成功（含代理）与失败（无 items）。跳过顶层非基金键（qqq_daily / _daily_quotes）
-    NON_FUND_KEYS = (SNAPSHOT_KEY, "qqq_daily", PROPERTY_KEY)
+    NON_FUND_KEYS = (SNAPSHOT_KEY, "qqq_daily")
     ok = sum(1 for k, v in result.items()
              if k not in NON_FUND_KEYS and isinstance(v, dict) and v.get("items"))
     failed = len([c for c in codes if c not in result or not result[c].get("items")])

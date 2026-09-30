@@ -1035,11 +1035,9 @@
     const stockEquityCny = (ibkrCash + rtPosVal) * FX;
     const stockTodayCny = todayPnlUsd * FX;
     const stockPnlCny = rows.reduce((s, r) => s + (r.pnl || 0), 0) * FX;
-    // 证券累计盈亏（USD）= IBKR 净值(实时=现金+持仓，不含TQQQ) + TQQQ市值 − IBKR充入 − TQQQ买入
-    // IBKR充入 = EFT 五笔 21,841.22 + 手动CNH入金 2,725.80 = 24,567.02（与汇丰美国流出 24,567.02 对账一致）
-    const TQQQ_BUY = (tqqq && tqqq.trades && tqqq.trades[0]) ? tqqq.trades[0].shares * tqqq.trades[0].price : 0;
-    const stockCumUsd = ibkrCash + rtPosVal - 24567.02 - TQQQ_BUY;
-    const stockCumCny = stockCumUsd * FX;
+    // 证券累计盈亏（CNY）= 证券权益实时折算 − 人民币本金 167,600（forexTrades 四笔 CNH 合计，含 TQQQ 的 17,600）
+    // 口径：实际掏口袋的人民币，换汇手续费/点差自动计入盈亏；usInvest=167600 互证
+    const stockCumCny = (ibkrCash + rtPosVal) * FX - 167600;
     setTxt('stockSumVal', f2(rtPosVal * FX), 1);
     setTxt('stockSumToday', f2(stockTodayCny, true), stockTodayCny);
     setTxt('stockSumPnl', f2(stockPnlCny, true), stockPnlCny);

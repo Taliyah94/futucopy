@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>资产看板</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div class="app">
+
+  <!-- ================= 顶栏 ================= -->
+  <header class="topbar">
+    <div class="topbar__left">
+      <button class="icon-btn" title="返回"><svg viewBox="0 0 24 24" class="ic"><path d="M15 5l-7 7 7 7"/></svg></button>
+      <button class="icon-btn" title="前进"><svg viewBox="0 0 24 24" class="ic"><path d="M9 5l7 7-7 7"/></svg></button>
+      <button class="icon-btn" title="刷新"><svg viewBox="0 0 24 24" class="ic"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg></button>
+    </div>
+
+    <div class="topbar__search">
+      <svg viewBox="0 0 24 24" class="ic"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+      <input type="text" placeholder="搜索股票 / 代码 / 名称" />
+    </div>
+
+    <div class="topbar__brand">
+      <span class="brand__logo" aria-hidden="true"></span>
+      <span class="brand__name">资产看板</span>
+      <span class="brand__et num" id="brandEt">美东 --:--:--</span>
+      <b class="session-tag" id="brandSession" hidden>盘前</b>
+    </div>
+
+  </header>
+
+  <!-- ================= 工作区 ================= -->
+  <div class="workspace">
+
+    <!-- 左侧图标导航条 -->
+    <nav class="rail">
+      <button class="rail__item is-active" data-view="market" title="自选"><svg viewBox="0 0 24 24" class="ic"><path d="M12 3l2.6 5.6 6.1.7-4.5 4.2 1.2 6-5.4-3-5.4 3 1.2-6L3.3 9.3l6.1-.7z"/></svg></button>
+      <button class="rail__item" data-view="account" title="账户"><svg viewBox="0 0 24 24" class="ic"><path d="M4 20V9M9 20V4M14 20v-7M19 20V7"/></svg></button>
+      <button class="rail__item" title="资讯"><svg viewBox="0 0 24 24" class="ic"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 9h8M8 13h8M8 17h5"/></svg></button>
+      <button class="rail__item" title="选股器"><svg viewBox="0 0 24 24" class="ic"><path d="M4 6h16M7 12h10M10 18h4"/></svg></button>
+      <button class="rail__item" title="交易"><svg viewBox="0 0 24 24" class="ic"><path d="M4 18l5-5 4 3 7-8"/><path d="M16 8h4v4"/></svg></button>
+      <button class="rail__item" title="我的"><svg viewBox="0 0 24 24" class="ic"><circle cx="12" cy="8" r="4"/><path d="M4 20a8 8 0 0 1 16 0"/></svg></button>
+      <div class="rail__spacer"></div>
+      <button class="rail__avatar" title="个人中心"></button>
+    </nav>
+
+    <!-- 自选列表 -->
+    <aside class="watchlist">
+      <div class="watchlist__head">
+        <span class="wl__title">自选</span>
+        <div class="wl__actions">
+          <button class="icon-btn icon-btn--sm" id="wlCollapse" title="收起自选"><svg viewBox="0 0 24 24" class="ic"><path d="M14 6l-6 6 6 6"/></svg></button>
+        </div>
+      </div>
+
+      <div class="wl__tabs" data-tabs="group">
+        <button class="tab is-active">全部</button>
+        <button class="tab">美股</button>
+        <button class="tab">沪深</button>
+        <button class="tab">期货</button>
+        <button class="tab">加密货币</button>
+      </div>
+
+      <div class="wl__columns">
+        <span>名称代码</span>
+        <span>最新价</span>
+        <span>涨跌幅</span>
+      </div>
+
+      <ul class="wl__list" id="watchlist"></ul>
+    </aside>
+
+    <!-- 图表区 -->
+    <main class="chart-area">
+      <!-- 面板收起后的浮动展开按钮 -->
+      <button class="panel-expand panel-expand--l" id="wlExpand" title="展开自选" hidden><svg viewBox="0 0 24 24" class="ic"><path d="M10 6l6 6-6 6"/></svg></button>
+      <button class="panel-expand panel-expand--r" id="cpExpand" title="展开资讯" hidden><svg viewBox="0 0 24 24" class="ic"><path d="M14 6l-6 6 6 6"/></svg></button>
+
+      <div class="quote-head">
+        <div class="quote-head__id">
+          <span class="q-code" id="qCode">ORCL</span>
+          <span class="q-name" id="qName">甲骨文</span>
+        </div>
+        <div class="quote-head__price">
+          <span class="q-last" id="qLast">137.790</span>
+          <span class="q-change" id="qChange">+5.190</span>
+          <span class="q-pct" id="qPct">+3.91%</span>
+        </div>
+        <div class="quote-head__tools">
+          <button class="icon-btn icon-btn--sm" title="指标"><svg viewBox="0 0 24 24" class="ic"><path d="M4 18l5-6 4 3 7-9"/></svg></button>
+          <button class="icon-btn icon-btn--sm" title="画线"><svg viewBox="0 0 24 24" class="ic"><path d="M4 20l14-14"/><circle cx="18" cy="6" r="2"/></svg></button>
+          <button class="icon-btn icon-btn--sm" title="截图"><svg viewBox="0 0 24 24" class="ic"><rect x="3" y="6" width="18" height="14" rx="2"/><circle cx="12" cy="13" r="4"/></svg></button>
+          <button class="icon-btn icon-btn--sm" title="全屏"><svg viewBox="0 0 24 24" class="ic"><path d="M4 9V4h5M20 15v5h-5M15 4h5v5M9 20H4v-5"/></svg></button>
+        </div>
+      </div>
+
+      <div class="chart-toolbar">
+        <div class="ct-periods" data-tabs="period">
+          <button class="ct-tab is-active" id="periodTab">分时</button>
+          <button class="ct-tab">5日</button>
+          <button class="ct-tab">日K</button>
+          <button class="ct-tab">周K</button>
+          <button class="ct-tab">月K</button>
+          <button class="ct-tab">季K</button>
+          <button class="ct-tab">年K</button>
+        </div>
+        <!-- 美股分时时段下拉（仿富途：盘前/盘中/盘后/夜盘/全天） -->
+        <ul class="session-menu" id="usSessionMenu" hidden>
+          <li data-session="pre">
+            <svg class="s-ic" viewBox="0 0 14 14" fill="currentColor"><rect x="1" y="2" width="5" height="10" rx="1.2"/><rect x="8" y="2" width="5" height="10" rx="1.2" opacity=".22"/></svg>
+            盘前<b class="ck">✓</b>
+          </li>
+          <li data-session="regular" class="is-sel">
+            <svg class="s-ic" viewBox="0 0 14 14" fill="currentColor"><rect x="1" y="2" width="5" height="10" rx="1.2"/><rect x="8" y="2" width="5" height="10" rx="1.2"/></svg>
+            盘中<b class="ck">✓</b>
+          </li>
+          <li data-session="post">
+            <svg class="s-ic" viewBox="0 0 14 14" fill="currentColor"><rect x="1" y="2" width="5" height="10" rx="1.2" opacity=".22"/><rect x="8" y="2" width="5" height="10" rx="1.2"/></svg>
+            盘后<b class="ck">✓</b>
+          </li>
+          <li data-session="night">
+            <svg class="s-ic" viewBox="0 0 14 14" fill="currentColor"><rect x="1" y="1" width="12" height="12" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.4"/><text x="7" y="9.8" text-anchor="middle" font-size="6.5" font-weight="700" fill="currentColor">24</text></svg>
+            夜盘<b class="ck">✓</b>
+          </li>
+          <li data-session="all">
+            <svg class="s-ic" viewBox="0 0 14 14" fill="currentColor"><rect x="1" y="1" width="12" height="12" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.4"/><text x="7" y="9.8" text-anchor="middle" font-size="6.5" font-weight="700" fill="currentColor">1D</text></svg>
+            全天<b class="ck">✓</b>
+          </li>
+        </ul>
+        <div class="ct-sep"></div>
+        <div class="ct-types">
+          <button class="icon-btn icon-btn--sm is-active" title="时间线"><svg viewBox="0 0 24 24" class="ic"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg></button>
+          <button class="icon-btn icon-btn--sm" title="蜡烛"><svg viewBox="0 0 24 24" class="ic"><path d="M7 4v16M7 8h3v8H7zM17 4v16M14 6h3v6h-3z"/></svg></button>
+        </div>
+        <div class="ct-right">
+          <button class="icon-btn icon-btn--sm" title="十字光标"><svg viewBox="0 0 24 24" class="ic"><path d="M12 3v18M3 12h18"/></svg></button>
+          <button class="icon-btn icon-btn--sm" title="对比"><svg viewBox="0 0 24 24" class="ic"><path d="M4 7h10M4 17h6M14 10h6M10 20h10"/></svg></button>
+          <button class="icon-btn icon-btn--sm" title="复权"><svg viewBox="0 0 24 24" class="ic"><path d="M4 12a8 8 0 1 1 3 6.2"/><path d="M4 7v5h5"/></svg></button>
+          <button class="icon-btn icon-btn--sm" title="设置"><svg viewBox="0 0 24 24" class="ic"><circle cx="12" cy="12" r="3"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21"/></svg></button>
+        </div>
+      </div>
+
+      <div class="chart-stage">
+        <canvas id="priceChart"></canvas>
+      </div>
+
+      <div class="chart-indicators" data-tabs="indicator">
+        <button class="ci-tab">BOLL</button>
+        <button class="ci-tab">EMA</button>
+        <button class="ci-tab">VWAP</button>
+        <button class="ci-tab">神奇九转</button>
+        <button class="ci-tab">MA</button>
+        <button class="ci-tab is-active">成交量</button>
+        <button class="ci-tab">MACD</button>
+        <button class="ci-tab">KDJ</button>
+        <button class="ci-tab">ARBR</button>
+        <button class="ci-tab">CR</button>
+        <button class="ci-tab">DMA</button>
+        <button class="ci-tab">EMV</button>
+        <button class="ci-tab">RSI</button>
+        <button class="ci-tab">IV</button>
+        <button class="ci-tab">市盈率</button>
+      </div>
+    </main>
+
+    <!-- 评论面板 -->
+    <aside class="comment-panel">
+      <div class="cp__head" data-tabs="feed">
+        <button class="cp-tab is-active">最新</button>
+        <button class="cp-tab">推荐</button>
+        <button class="icon-btn icon-btn--sm cp__close" title="收起"><svg viewBox="0 0 24 24" class="ic"><path d="M9 5l7 7-7 7"/></svg></button>
+      </div>
+
+      <div class="cp__compose">
+        <svg viewBox="0 0 24 24" class="ic"><path d="M4 20l3-8 10-8 3 3-8 10-8 3z"/></svg>
+        <input type="text" placeholder="分享心情或投资心得" />
+      </div>
+
+      <ul class="cp__list" id="commentList"></ul>
+    </aside>
+
+    <!-- ================= 账户视图（仿富途账户页，点击左侧 rail「账户」打开） ================= -->
+    <section class="account-view" id="accountView" hidden>
+
+      <!-- 左侧：账户资产摘要 -->
+      <aside class="acc-side">
+        <div class="acc-side__card">
+          <div class="acc-side__label">总资产 · CNY <svg class="ic ic--info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8v.5"/></svg></div>
+          <div class="acc-side__total num" id="accTotalVal">--</div>
+          <svg class="acc-side__spark" viewBox="0 0 100 24" preserveAspectRatio="none"><path id="accSpark" d="" fill="none" stroke="#ff8f1f" stroke-width="1.5"/></svg>
+        </div>
+
+        <ul class="acc-side__list">
+          <li class="is-active">
+            <b class="as-name">盈透证券账户(U18576039)</b>
+            <div class="as-line as-line--2r"><div class="asl-col"><span>总资产 · CNY</span><b class="num" id="accTotalVal2">--</b></div><div class="asl-col asl-col--r"><span>今日盈亏</span><i class="num" id="accTotalNote">--</i></div></div>
+            <div class="as-group">
+              <div class="as-line as-line--2r is-active" data-cat="stock">
+                <div class="asl-col"><span>证券</span><b class="num" id="accStockVal">--</b></div>
+                <div class="asl-col asl-col--r"><span>今日盈亏</span><i class="num" id="accStockNote">--</i><i class="num" id="accStockPct">--</i></div>
+              </div>
+              <div class="as-line as-line--2r" data-cat="fund">
+                <div class="asl-col"><span>基金</span><b class="num" id="accFundVal">--</b></div>
+                <div class="asl-col asl-col--r"><span>昨日收益</span><i class="num" id="accFundNote">--</i></div>
+              </div>
+              <div class="as-line as-line--2r" data-cat="cash">
+                <div class="asl-col"><span>现金</span><b class="num" id="accCashVal">--</b></div>
+              </div>
+            </div>
+          </li>
+        </ul>
+      </aside>
+
+      <!-- 主区：账户总览 + 持仓 -->
+      <div class="acc-main">
+        <div class="acc-head">
+          <h2>盈透证券账户(U18576039)</h2>
+          <button class="icon-btn icon-btn--sm" title="收起"><svg viewBox="0 0 24 24" class="ic"><path d="M6 9l6 6 6-6"/></svg></button>
+        </div>
+
+        <!-- ============ 证券页 ============ -->
+        <div class="acc-page" data-cat-page="stock">
+
+        <!-- 五列指标 -->
+        <div class="acc-metrics">
+          <div class="acc-metric">
+            <h4>资产 <svg class="ic ic--info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8v.5"/></svg></h4>
+            <div class="m-row"><span>证券市值</span><b class="num" id="mStockVal">--</b></div>
+            <div class="m-row"><span>· 多头市值</span><b class="num" id="mStockLong">--</b></div>
+            <div class="m-row"><span>· 空头市值</span><b class="num" id="mStockShort">--</b></div>
+            <div class="m-row"><span>在途资产 <svg class="ic ic--info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8v.5"/></svg></span><b class="num">0.00</b></div>
+            <div class="m-row"><span>冻结资金</span><b class="num">0.00</b></div>
+          </div>
+          <div class="acc-metric">
+            <h4>现金明细</h4>
+            <div class="m-row"><span>现金总值 ·CNY</span><b class="num" id="mCashCny">--</b></div>
+            <div class="m-row"><span><svg class="flag" viewBox="0 0 16 16"><defs><clipPath id="fclip"><circle cx="8" cy="8" r="8"/></clipPath></defs><g clip-path="url(#fclip)"><rect width="16" height="16" fill="#fff"/><rect y="1.8" width="16" height="1.5" fill="#d80031"/><rect y="5" width="16" height="1.5" fill="#d80031"/><rect y="8.2" width="16" height="1.5" fill="#d80031"/><rect y="11.4" width="16" height="1.5" fill="#d80031"/><rect y="14.5" width="16" height="1.5" fill="#d80031"/><rect width="8" height="7" fill="#2e52b2"/></g></svg> USD</span><b class="num" id="mCashUsd">--</b></div>
+          </div>
+          <div class="acc-metric">
+            <h4>现金可提</h4>
+            <div class="m-row"><span>可提总值 ·CNY</span><b class="num">--</b></div>
+            <div class="m-row"><span><svg class="flag" viewBox="0 0 16 16"><g clip-path="url(#fclip)"><rect width="16" height="16" fill="#fff"/><rect y="1.8" width="16" height="1.5" fill="#d80031"/><rect y="5" width="16" height="1.5" fill="#d80031"/><rect y="8.2" width="16" height="1.5" fill="#d80031"/><rect y="11.4" width="16" height="1.5" fill="#d80031"/><rect y="14.5" width="16" height="1.5" fill="#d80031"/><rect width="8" height="7" fill="#2e52b2"/></g></svg> USD</span><b class="num">--</b></div>
+          </div>
+          <div class="acc-metric">
+            <h4>购买力 <svg class="ic ic--info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8v.5"/></svg></h4>
+            <div class="m-row"><span>最大购买力 ·CNY</span><b class="num">--</b></div>
+            <div class="m-row"><span><svg class="flag" viewBox="0 0 16 16"><g clip-path="url(#fclip)"><rect width="16" height="16" fill="#fff"/><rect y="1.8" width="16" height="1.5" fill="#d80031"/><rect y="5" width="16" height="1.5" fill="#d80031"/><rect y="8.2" width="16" height="1.5" fill="#d80031"/><rect y="11.4" width="16" height="1.5" fill="#d80031"/><rect y="14.5" width="16" height="1.5" fill="#d80031"/><rect width="8" height="7" fill="#2e52b2"/></g></svg> USD</span><b class="num">--</b></div>
+          </div>
+          <div class="acc-metric">
+            <h4>风险水平</h4>
+            <div class="m-row"><span>风险状态</span><b></b></div>
+            <div class="m-row"><span>红杆倍数</span><b></b></div>
+            <div class="m-row"><span>剩余流动性</span><b></b></div>
+            <div class="m-row"><span>初始保证金</span><b></b></div>
+            <div class="m-row"><span>维持保证金</span><b></b></div>
+          </div>
+        </div>
+
+        <!-- 功能按钮行 -->
+        <div class="acc-actions">
+          <button><svg class="ic c-blue" viewBox="0 0 24 24"><rect x="3" y="8" width="15" height="11" rx="2"/><path d="M7 8V6a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v9"/><path d="M12 12v5M9.5 14.5L12 17l2.5-2.5"/></svg><span>存入资金</span></button>
+          <button><svg class="ic c-cyan" viewBox="0 0 24 24"><rect x="6" y="5" width="15" height="11" rx="2"/><path d="M2 8v9a2 2 0 0 0 2 2h13"/><path d="M13.5 8.5L11 11l2.5 2.5"/></svg><span>提取资金</span></button>
+          <button><svg class="ic c-blue" viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M12 16v4M10 18h4"/></svg><span>新股认购</span></button>
+          <button><svg class="ic c-purple" viewBox="0 0 24 24"><path d="M4 8h13M14 4.5L17.5 8 14 11.5"/><path d="M20 16H7M10 12.5L6.5 16l3.5 3.5"/></svg><span>货币兑换</span></button>
+          <button><svg class="ic c-orange" viewBox="0 0 24 24"><path d="M7 10h13M17 6.5L20.5 10 17 13.5"/><path d="M17 17H4M7 13.5L3.5 17 7 20.5"/></svg><span>资金调拨</span></button>
+          <button><svg class="ic c-blue" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="16" rx="2"/><path d="M4 10h16M8 3v4M16 3v4"/><path d="M9 15l2 2 4-4"/></svg><span>年度报表</span></button>
+          <button><svg class="ic c-green" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="4" cy="6" r="1.2"/><circle cx="4" cy="12" r="1.2"/><circle cx="4" cy="18" r="1.2"/></svg><span>资金明细</span></button>
+          <button><svg class="ic c-green" viewBox="0 0 24 24"><path d="M6 3h12v18l-2-1.5L14 21l-2-1.5L10 21l-2-1.5L6 21z"/><path d="M9 8h6M9 12h6"/></svg><span>我的账单</span></button>
+          <button><svg class="ic c-orange" viewBox="0 0 24 24"><path d="M4 8a2 2 0 0 0 0 8v3h16v-3a2 2 0 0 1 0-8V5H4z"/><path d="M12 6v2M12 11v2M12 16v2" stroke-dasharray="1 3"/></svg><span>卡券</span></button>
+          <button><svg class="ic c-orange" viewBox="0 0 24 24"><rect x="3" y="12" width="18" height="8" rx="2"/><path d="M12 3v10M8.5 6.5L12 3l3.5 3.5"/></svg><span>转入股票</span></button>
+        </div>
+
+        <!-- 持仓 tabs -->
+        <div class="acc-tabs">
+          <button class="is-active">持仓</button>
+          <button>订单(0)</button>
+          <button>历史</button>
+          <button>今日统计</button>
+        </div>
+
+        <!-- 筛选行 -->
+        <div class="acc-filter">
+          <button class="acc-select">全部市场 <i class="caret"></i></button>
+          <button class="acc-select">全部币种 <i class="caret"></i></button>
+          <div class="acc-search">
+            <svg viewBox="0 0 24 24" class="ic"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+            <input type="text" placeholder="代码 / 名称" />
+          </div>
+          <button class="icon-btn icon-btn--sm" title="导出"><svg viewBox="0 0 24 24" class="ic"><path d="M12 15V4M8 7l4-4 4 4"/><path d="M4 15v4h16v-4"/></svg></button>
+          <span class="acc-filter__spacer"></span>
+          <button class="acc-batch">批量平仓</button>
+        </div>
+
+        <!-- 汇总行：市值 / 今日盈亏 / 持仓收益 -->
+        <div class="acc-sumline">
+          <button class="acc-sumline__cur">市值 (CNY) <i class="caret"></i></button>
+          <b class="num" id="stockSumVal">0.00</b>
+          <span class="sum-label">今日盈亏</span>
+          <b class="num" id="stockSumToday">0.00</b>
+          <span class="sum-label">持仓收益</span>
+          <b class="num" id="stockSumPnl">0.00</b>
+        </div>
+
+        <!-- 持仓表（当前为空） -->
+        <div class="acc-table-wrap">
+          <table class="acc-table">
+            <thead>
+              <tr>
+                <th>操作</th><th>代码</th><th>名称</th><th>持有数量</th><th>可用数量</th>
+                <th>现价</th><th>摊薄成本价</th><th>市值</th><th>盈亏比例</th><th>持仓盈亏</th><th>今日盈亏</th>
+              </tr>
+            </thead>
+            <tbody id="stockTbody"></tbody>
+          </table>
+          <div class="acc-empty" id="stockEmpty" hidden>
+            <svg viewBox="0 0 48 48" class="acc-empty__ic"><path d="M6 14a4 4 0 0 1 4-4h10l4 5h14a4 4 0 0 1 4 4v17a4 4 0 0 1-4 4H10a4 4 0 0 1-4-4z" fill="#e3e7ee"/></svg>
+            <p>暂无数据</p>
+          </div>
+        </div>
+
+        </div><!-- /证券页 -->
+
+        <!-- ============ 基金页 ============ -->
+        <div class="acc-page" data-cat-page="fund" hidden>
+          <div class="acc-metrics acc-metrics--single">
+            <div class="acc-metric">
+              <h4>资产 <svg class="ic ic--info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8v.5"/></svg></h4>
+              <div class="m-row"><span>昨日收益</span><b class="num" id="fundMYest">--</b></div>
+              <div class="m-row"><span>在途资产 <svg class="ic ic--info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8v.5"/></svg></span><b class="num">0.00</b></div>
+              <div class="m-row"><span>累计收益</span><b class="num" id="fundMCum">--</b></div>
+            </div>
+          </div>
+
+          <!-- 功能按钮行 -->
+          <div class="acc-actions">
+            <button><svg class="ic c-blue" viewBox="0 0 24 24"><rect x="3" y="8" width="15" height="11" rx="2"/><path d="M7 8V6a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v9"/><path d="M12 12v5M9.5 14.5L12 17l2.5-2.5"/></svg><span>存入资金</span></button>
+            <button><svg class="ic c-purple" viewBox="0 0 24 24"><path d="M4 8h13M14 4.5L17.5 8 14 11.5"/><path d="M20 16H7M10 12.5L6.5 16l3.5 3.5"/></svg><span>货币兑换</span></button>
+            <button><svg class="ic c-blue" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="16" rx="2"/><path d="M4 10h16M8 3v4M16 3v4"/><path d="M9 15l2 2 4-4"/></svg><span>年度报表</span></button>
+            <button><svg class="ic c-green" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="4" cy="6" r="1.2"/><circle cx="4" cy="12" r="1.2"/><circle cx="4" cy="18" r="1.2"/></svg><span>资金明细</span></button>
+            <button><svg class="ic c-green" viewBox="0 0 24 24"><path d="M6 3h12v18l-2-1.5L14 21l-2-1.5L10 21l-2-1.5L6 21z"/><path d="M9 8h6M9 12h6"/></svg><span>我的结单</span></button>
+          </div>
+
+          <!-- 持仓 tabs -->
+          <div class="acc-tabs">
+            <button class="is-active">持仓</button>
+            <button>订单</button>
+            <button>历史</button>
+          </div>
+
+          <!-- 筛选行 -->
+          <div class="acc-filter">
+            <button class="acc-select">全部币种 <i class="caret"></i></button>
+            <div class="acc-search">
+              <svg viewBox="0 0 24 24" class="ic"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+              <input type="text" placeholder="代码 / 名称" />
+            </div>
+            <button class="icon-btn icon-btn--sm" title="导出"><svg viewBox="0 0 24 24" class="ic"><path d="M12 15V4M8 7l4-4 4 4"/><path d="M4 15v4h16v-4"/></svg></button>
+          </div>
+
+          <!-- 汇总行 -->
+          <div class="acc-sumline">
+            <button class="acc-sumline__cur">市值 (CNY) <i class="caret"></i></button>
+            <b class="num" id="fundSumVal">--</b>
+            <span class="sum-label">持仓收益</span>
+            <b class="num" id="fundSumProfit">--</b>
+          </div>
+
+          <!-- 持仓表（JS 渲染基金数据） -->
+          <div class="acc-table-wrap">
+            <table class="acc-table">
+              <thead>
+                <tr>
+                  <th>操作</th><th>名称</th><th>ISIN代码</th><th>持仓金额</th><th>持仓份额</th>
+                  <th>昨日收益</th><th>持仓收益</th><th>持仓占比</th><th>币种</th>
+                </tr>
+              </thead>
+              <tbody id="fundTbody"></tbody>
+            </table>
+          </div>
+        </div><!-- /基金页 -->
+
+        <!-- ============ 现金页（按债券模板） ============ -->
+        <div class="acc-page" data-cat-page="cash" hidden>
+          <div class="acc-metrics acc-metrics--single">
+            <div class="acc-metric">
+              <h4>资产 <svg class="ic ic--info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8v.5"/></svg></h4>
+              <div class="m-row"><span>应计利息</span><b class="num">0.00</b></div>
+              <div class="m-row"><span>持仓收益</span><b class="num">0.00</b></div>
+            </div>
+          </div>
+
+          <!-- 功能按钮行 -->
+          <div class="acc-actions">
+            <button><svg class="ic c-blue" viewBox="0 0 24 24"><rect x="3" y="8" width="15" height="11" rx="2"/><path d="M7 8V6a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v9"/><path d="M12 12v5M9.5 14.5L12 17l2.5-2.5"/></svg><span>存入资金</span></button>
+            <button><svg class="ic c-purple" viewBox="0 0 24 24"><path d="M4 8h13M14 4.5L17.5 8 14 11.5"/><path d="M20 16H7M10 12.5L6.5 16l3.5 3.5"/></svg><span>货币兑换</span></button>
+            <button><svg class="ic c-green" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="4" cy="6" r="1.2"/><circle cx="4" cy="12" r="1.2"/><circle cx="4" cy="18" r="1.2"/></svg><span>资金明细</span></button>
+            <button><svg class="ic c-green" viewBox="0 0 24 24"><path d="M6 3h12v18l-2-1.5L14 21l-2-1.5L10 21l-2-1.5L6 21z"/><path d="M9 8h6M9 12h6"/></svg><span>我的结单</span></button>
+          </div>
+
+          <!-- 持仓 tabs -->
+          <div class="acc-tabs">
+            <button class="is-active">持仓</button>
+            <button>订单</button>
+            <button>历史</button>
+          </div>
+
+          <!-- 筛选行 -->
+          <div class="acc-filter">
+            <div class="acc-search">
+              <svg viewBox="0 0 24 24" class="ic"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+              <input type="text" placeholder="输入名称" />
+            </div>
+            <button class="icon-btn icon-btn--sm" title="导出"><svg viewBox="0 0 24 24" class="ic"><path d="M12 15V4M8 7l4-4 4 4"/><path d="M4 15v4h16v-4"/></svg></button>
+          </div>
+
+          <!-- 汇总行 -->
+          <div class="acc-sumline">
+            <button class="acc-sumline__cur">市值 (CNY) <i class="caret"></i></button>
+            <b class="num" id="cashSumVal">--</b>
+            <span class="sum-label">持仓收益</span>
+            <b class="num" id="cashSumProfit">0.00</b>
+          </div>
+
+          <!-- 持仓表（当前为空） -->
+          <div class="acc-table-wrap">
+            <table class="acc-table">
+              <thead>
+                <tr>
+                  <th>操作</th><th>名称</th><th>ISIN代码</th><th>市值</th><th>持有面值</th>
+                  <th>参考中间价</th><th>持仓成本</th><th>应计利息</th><th>已获利息</th>
+                  <th>持仓收益</th><th>持仓占比</th><th>币种</th>
+                </tr>
+              </thead>
+              <tbody id="cashTbody"></tbody>
+            </table>
+            <div class="acc-empty" id="cashEmpty" hidden>
+              <svg viewBox="0 0 48 48" class="acc-empty__ic"><path d="M6 14a4 4 0 0 1 4-4h10l4 5h14a4 4 0 0 1 4 4v17a4 4 0 0 1-4 4H10a4 4 0 0 1-4-4z" fill="#e3e7ee"/></svg>
+              <p>暂无数据</p>
+            </div>
+          </div>
+        </div><!-- /现金页 -->
+      </div>
+    </section>
+
+  </div>
+
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

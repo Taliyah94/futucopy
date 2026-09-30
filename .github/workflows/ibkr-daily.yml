@@ -1,0 +1,72 @@
+name: IBKR 每日资产同步
+
+on:
+  schedule:
+    # 每天 UTC 05:10 跑一次（北京时间 13:10）
+    # cron 固定按 UTC 执行，无时区概念，不再绑定美东时区，无需随夏令时/冬令时切换。
+    - cron: "10 5 * * *"   # UTC 05:10 = 北京时间 13:10
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "强制重新同步（忽略今日已同步标记）"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write        # 允许把更新后的 Asset_parsed.json 提交回仓库
+
+concurrency:
+  group: ibkr-daily
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    # 单次轻量：每个阶段最多 2 次尝试（首次 + 退避 20s 重试 1 次），最坏约 1 分钟。
+    # 给 5 分钟余量，足以覆盖 IBKR 接口抖动与 Actions 自身调度延迟。
+    timeout-minutes: 5
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 运行 IBKR 1day 解析脚本
+        env:
+          IBKR_TOKEN: ${{ secrets.IBKR_TOKEN }}
+          IBKR_QUERY_ID_1DAY: ${{ secrets.IBKR_QUERY_ID_1DAY }}
+          JSON_PATH: ${{ github.workspace }}/Asset_parsed.json
+          FORCE_ARG: ${{ github.event.inputs.force == 'true' && '--force' || '' }}
+        run: |
+          set -o pipefail
+          OUT=$(python parse_ibkr_asset1day.py $FORCE_ARG 2>&1); RC=$?
+          echo "$OUT"
+          if [ $RC -ne 0 ]; then
+            echo "::error::脚本报错（退出码 $RC）"
+            exit $RC
+          fi
+          if echo "$OUT" | grep -q "\[ok\] 同步成功"; then
+            echo "✅ 本次已写入数据"
+          elif echo "$OUT" | grep -q "\[skip\] 今日"; then
+            echo "ℹ️ 今日已同步过，跳过（正常）"
+          elif echo "$OUT" | grep -q "\[warn\] 拉取失败"; then
+            echo "::warning::IBKR 报表未就绪，本次未写入（次日 05:10 UTC 再试）"
+          fi
+
+      - name: 提交并推送更新后的 JSON
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Asset_parsed.json
+          # 仅当 JSON 有变化才提交（避免无谓的空提交触发 Pages 重建）
+          if git diff --cached --quiet; then
+            echo "Asset_parsed.json 无变化，跳过提交"
+          else
+            git commit -m "chore: 每日同步 IBKR 资产快照 $(date +%Y-%m-%d)"
+            git push
+          fi

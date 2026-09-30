@@ -1,0 +1,1228 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+抓取基金季报十大持仓 -> 输出 fund_holdings.json
+
+用途
+----
+本脚本从东方财富 fundf10 接口抓取各只基金的「季度报告 · 十大重仓股」
+（topline=10，即前十大；半年报虽有更全明细但不取，见下），
+整理成资产看板（index.html）可导入的 JSON 结构：
+
+    {
+      "000043": {
+        "report": "2026-06-30",
+        "items": [{"c": "AAPL", "n": "苹果", "p": 8.29, "m": "us"}, ...],
+        "nav": [[时间戳(ms), 单位净值], ...],   // 净值历史（紧凑二维数组，升序）；proxy 类基金无此字段
+        "alloc": {"stock": 91.66, "bond": 0.0, "cash": 5.88}  // 资产配置(占净比%)：股票/债券/现金，供盘中估值未知块近似
+      },
+      "016532": {"report": "跟踪纳斯达克100", "proxy": true, "items": [...]},
+
+      // 非美股（港/A/日/韩）行情快照：每天存一次，看板按目标日取收盘价与当日涨跌
+      "_daily_quotes": {
+        "kr005930": [{"date": "20260904", "close": 255500, "prevClose": 250000,
+                      "ts": "2026-09-04 14:30:05"}, ...],   // 升序，最多 5 条
+        "hk02513":  [{"date": "20260904", "close": 1075, "prevClose": 1108,
+                      "ts": "2026/09/04 16:08:05"}, ...]
+      },
+
+      // QQQ 日线历史（曲线图「QQQ 涨跌幅(基准)」对比线用）：每天增量追加新交易日，
+      // 已有历史以存盘数据为准（防源端截断/换源抹史），仅最后一天会被新抓取刷新
+      "qqq_daily": [{"d": "2026-02-06", "c": 518.20}, ...],   // 升序，{d:日期, c:收盘价}
+
+      // 房产数据（房天下小区成交记录，看板「房产」卡片用：71.56㎡ × 最新成交单价）
+      "_property": {
+        "community": {"name": "瑞源水岸", "district": "黄岛区辛安", "city": "青岛"},
+        "updated": "2026-09-21 03:27:45",     // 最近一次抓取成功的时间
+        "live_fetched": {"soufun": true, "lianjia": false},  // 本次实时抓取是否成功
+        "stale_sources": [],        // 本次抓取失败、数据停留在旧值的来源
+        "deals": [{"date": "2026-08-09", "area_m2": 71.56, "total_wan": 56.0,
+                   "unit_price": 7826, "source": "房天下"}, ...]   // 按日期倒序
+      }
+    }
+
+字段含义
+  report : 季报日期，格式 YYYY-MM-30（季末）；代理基金为文字说明
+  items  : 十大持仓列表（按占净值比例降序，固定前 10 条）
+           c = 证券代码, n = 名称, p = 占净值比例(%), m = 市场(us/hk/sh/sz/jp/kr)
+           注：半年报会披露 20-30 条完整明细（含 ISIN 全码），本脚本刻意不取；
+           market_of 仍保留 ISIN 识别，以备个别前十大里出现这类代码
+  proxy  : true 表示用代理（如纳斯达克100ETF联接用 QQQ 代理，不抓东方财富）
+
+_daily_quotes（顶层，非基金键，前端按基金代码遍历时会被自然忽略）
+  看板原本靠东方财富 push2his 取港/A/日/韩的历史日K，但该接口对日股(176.)/韩股(177.)
+  恒返回空，且每次打开页面都要现抓一遍（慢、且受跨域与限流影响）。
+  改为每天用腾讯 qt.gtimg.cn 存一次「现价/昨收/行情时间」，攒出近 5 个交易日的序列，
+  看板直接按目标日取 close 当基准、close/prevClose-1 当当日涨跌，无需再请求东方财富。
+  同日期覆盖，抓取失败保留旧值。
+
+用法
+----
+  # 默认输出 fund_holdings.json（基金列表见下方 DEFAULT_CODES）
+  python3 fund_holdings.py
+
+  # 指定输出文件
+  python3 fund_holdings.py -o holdings.json
+
+  # 用配置文件覆盖基金列表（配置文件形如 {"codes": ["000043", ...], "proxy": {"016532": true}}）
+  python3 fund_holdings.py -c fund_codes.json
+
+  # 命令行直接指定要抓的基金（逗号分隔，覆盖默认）
+  python3 fund_holdings.py --codes 000043,270023
+
+  # CI 中只想看结果、不写文件
+  python3 fund_holdings.py --quiet --no-write
+
+说明
+----
+  - 接口来自东方财富 fundf10，仅用于个人资产记录，请遵守其 robots / 频率限制。
+  - 浏览器端直连该接口会被跨域拦截，因此改为「脚本/CI 抓取 -> 提交 JSON -> 看板导入」。
+  - 本脚本只负责「抓取并产出 JSON」，不负责提交；提交由 GitHub Actions 完成。
+"""
+
+import argparse
+import gzip
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import datetime as _dt
+import urllib.request
+from html.parser import HTMLParser
+
+# ---------------------------------------------------------------------------
+# 腾讯行情时间戳 → 美东交易日(YYYYMMDD)
+# 腾讯时间戳为「北京时间」；而前端预测层目标日以「美东」为准，快照日期必须与之
+# 对齐，否则会出现「北京 09-08 抓的数据其实是美东 09-07，却被当成未来跳过」的错位。
+# 故此处把北京时间戳换算成美东日期后再写入快照。
+# ---------------------------------------------------------------------------
+try:
+    from zoneinfo import ZoneInfo as _ZI
+    _TZ_BJ = _ZI("Asia/Shanghai")
+    _TZ_ET = _ZI("America/New_York")
+    def _et_trade_date(ts_raw, fallback):
+        s = re.sub(r"\D", "", ts_raw or "")
+        if len(s) < 14:
+            return fallback
+        try:
+            bj = _dt.datetime.strptime(s[:14], "%Y%m%d%H%M%S").replace(tzinfo=_TZ_BJ)
+            return bj.astimezone(_TZ_ET).strftime("%Y%m%d")
+        except Exception:
+            return fallback
+except Exception:  # 无 IANA 时区库（如 Windows 缺 tzdata）时手动换算
+    def _us_dst(y, m, d):
+        # 美东夏令时：3 月第 2 个周日起，到 11 月第 1 个周日止
+        if m < 3 or m > 11:
+            return False
+        if 3 < m < 11:
+            return True
+        if m == 3:
+            wd = _dt.date(y, 3, 1).weekday()
+            second_sun = 1 + (6 - wd) % 7 + 7
+            return d >= second_sun
+        wd = _dt.date(y, 11, 1).weekday()
+        first_sun = 1 + (6 - wd) % 7
+        return d < first_sun
+    def _et_trade_date(ts_raw, fallback):
+        s = re.sub(r"\D", "", ts_raw or "")
+        if len(s) < 14:
+            return fallback
+        try:
+            bj = _dt.datetime.strptime(s[:14], "%Y%m%d%H%M%S")
+        except Exception:
+            return fallback
+        # 北京 UTC+8；美东夏令时(EDT, UTC-4)差 12h，冬令时(EST, UTC-5)差 13h
+        diff = 13 if _us_dst(bj.year, bj.month, bj.day) else 12
+        et = bj - _dt.timedelta(hours=diff)
+        return et.strftime("%Y%m%d")
+
+# ---------------------------------------------------------------------------
+# 默认基金列表（与 index.html 的 FUND_HOLDINGS 对齐）
+# ---------------------------------------------------------------------------
+DEFAULT_CODES = ["000043", "270023", "021277", "016532", "016533","539002"]
+
+# 走代理的基金：东方财富无有效季报，用 QQQ 代理，保持不动
+DEFAULT_PROXY = {"016532": True, "016533": True}
+
+QQQ_PROXY = {
+    "report": "跟踪纳斯达克100",
+    "proxy": True,
+    "items": [{"c": "QQQ", "m": "us", "n": "纳斯达克100ETF", "p": 100}],
+}
+
+# 基金资产配置（股/债/现金占净比 %）：用于「未知持仓块」用 QQQ 涨跌近似的盘中估值。
+# 代理基金(跟踪纳斯达克100)视为 100% 权益，硬编码。
+PROXY_ALLOC = {"stock": 100.0, "bond": 0.0, "cash": 0.0}
+# Data_assetAllocation 的 series.name -> 输出键
+ALLOC_NAMES = {"股票占净比": "stock", "债券占净比": "bond", "现金占净比": "cash"}
+
+USER_AGENT = "Mozilla/5.0"
+REFERER = "https://fundf10.eastmoney.com/"
+BASE_URL = "https://fundf10.eastmoney.com/FundArchivesDatas.aspx?type=jjcc&code=%s&topline=10"
+
+
+# ---------------------------------------------------------------------------
+# 工具函数
+# ---------------------------------------------------------------------------
+# 东方财富行情链接里的市场前缀（//quote.eastmoney.com/unify/r/<前缀>.<代码>）。
+# 这是最可靠的市场线索：A股/港股/美股都会被东财收录并带链接；
+# 日股/韩股东财【未收录】（无链接、data-texch 为空），只能靠代码格式或名称推断。
+EM_MARKET_MAP = {
+    "105": "us",   # 纳斯达克（NVDA / MU / AVGO ...）
+    "106": "us",   # 纽交所（TSM / LLY / GLW ...）
+    "116": "hk",   # 港股（02513 智谱 ...）
+    "0": "sz",     # 深圳（300408 三环集团 ...）
+    "1": "sh",     # 上海（600519 贵州茅台 ...）
+}
+
+# 东财未收录时的兜底名单（韩国6位代码与A股6位代码格式完全相同，无法从格式区分）
+# 日股 285A（铠侠）已由「4位数字+字母」的格式规则命中，无需列在此处；
+# 4004（Resonac）是纯 4 位数字、格式规则认不出来，才需要名单兜底。
+KNOWN_JP_CODES = {"4004"}          # Resonac（东京证交所）
+KNOWN_KR_CODES = {"000660", "005930"}  # SK海力士 / 三星电子（韩国交易所）
+JP_NAME_KEYS = ("kioxia", "铠侠")
+KR_NAME_KEYS = ("海力士", "三星", "sk hynix", "samsung")
+
+# 未收录且名单未命中时，是否用腾讯行情接口反查市场（可识别新增日韩股，需联网）
+ENABLE_QT_PROBE = True
+
+# ---------------------------------------------------------------------------
+# 非美股（港/A/日/韩）行情快照
+# ---------------------------------------------------------------------------
+# 东方财富 push2his 对日股(176.) / 韩股(177.) 恒返回空 data，取不到历史日K；
+# 港股/A股虽然能取到，但每次打开页面都要现抓一遍，慢且依赖跨域接口。
+# 腾讯 qt.gtimg.cn 能给出「现价 / 昨收 / 行情时间」但没有历史K。
+# 因此每天跑一次，把当天快照存进 JSON，攒出近 N 个交易日的序列供看板按目标日取值。
+# 美股不在此列：盘前/盘后与 Bybit 实时价另有一套逻辑，继续走腾讯实时。
+SNAPSHOT_MARKETS = ("hk", "sz", "sh", "jp", "kr")
+SNAPSHOT_DAYS = 5                # 每个代码保留最近几个交易日
+SNAPSHOT_KEY = "_daily_quotes"   # 顶层键名（非 6 位基金代码，前端遍历时会被忽略）
+QT_BATCH = 20                    # 腾讯行情单次批量查询的代码数
+
+
+def probe_market(code, timeout=6):
+    """用腾讯行情反查代码所属市场：依次试 kr/hk/sh/sz，返回首个有行情的市场。
+
+    看板最终就是用 qt.gtimg.cn 读这些代码，所以以它为准最可靠；失败返回 None。
+    只对 6 位数字代码调用（韩股与 A 股格式完全相同、无法从格式区分的场景），
+    日股代码是「4位数字+字母」，不会走到这里，故不试 jp 前缀。
+    """
+    for mk in ("kr", "hk", "sh", "sz"):
+        try:
+            req = urllib.request.Request(
+                "https://qt.gtimg.cn/q=%s%s" % (mk, code),
+                headers={"User-Agent": USER_AGENT},
+            )
+            txt = urllib.request.urlopen(req, timeout=timeout).read().decode("gbk", "ignore")
+            if ('v_%s%s="' % (mk, code)) in txt and "pv_none_match" not in txt:
+                return mk
+        except Exception:  # noqa: BLE001 - 探测失败即换下一个市场
+            continue
+    return None
+
+
+def market_of(code, name="", em_prefix=None):
+    """判断证券市场，返回 us/hk/sh/sz/jp/kr。
+
+    判定优先级：
+      1. 东财行情链接前缀（最可靠，A股/港股/美股均被收录）
+      2. 日股/韩股代码格式与已知名单（东财未收录的场景）
+      3. 腾讯行情反查（解决韩国6位代码与A股6位代码格式冲突）
+      4. 纯代码格式兜底（完全没有东财线索时的旧逻辑）
+    """
+    code = (code or "").strip()
+    nm = (name or "").lower()
+
+    # 1) 东财行情链接前缀
+    if em_prefix and str(em_prefix) in EM_MARKET_MAP:
+        return EM_MARKET_MAP[str(em_prefix)]
+
+    # 2) 东财未收录：多为日股/韩股。日股代码形如 285A（4位数字+字母）
+    if re.match(r"^\d{4}[A-Za-z]$", code):
+        return "jp"
+    if code in KNOWN_JP_CODES or any(k in nm for k in JP_NAME_KEYS):
+        return "jp"
+    if code in KNOWN_KR_CODES or any(k in nm for k in KR_NAME_KEYS):
+        return "kr"
+
+    # 2.5) ISIN 全码（topline>10 的半年报明细里部分日韩股只给 ISIN，
+    #      如 JP3914400001 村田制作所 / KR7009150004 三星电机）
+    #      台股 ISIN(TW...) 不再转 tw：腾讯无台股行情、看板也没有 tw 分支，
+    #      标注出来只会落到未知市场画杠，与其如此不如归 us 由上游名单兜底。
+    m_isin = re.match(r"^([A-Z]{2})[A-Z0-9]{9}\d$", code)
+    if m_isin:
+        return {"JP": "jp", "KR": "kr"}.get(m_isin.group(1), "us")
+
+    # 3) 6位数字：韩股与A股格式完全相同，用腾讯行情反查（失败则回落第 4 步）
+    if ENABLE_QT_PROBE and re.match(r"^\d{6}$", code):
+        probed = probe_market(code)
+        if probed:
+            return probed
+
+    # 4) 纯代码格式兜底（注意：4位数字+字母已在第 2 步判为日股，这里不会再遇到）
+    if re.match(r"^[A-Za-z]+$", code):
+        return "us"
+    if re.match(r"^\d{5}$", code):
+        return "hk"
+    if re.match(r"^\d{6}$", code):
+        return "sh" if code[:2] in ("60", "68", "90") else "sz"
+    return "us"
+
+
+def fetch_content(code, retries=3, timeout=30):
+    """抓取单只基金的季报 HTML 片段，返回 (content, report)。失败返回 (None, None)。"""
+    url = BASE_URL % code
+    last_err = None
+    for attempt in range(1, retries + 1):
+        try:
+            req = urllib.request.Request(
+                url, headers={"User-Agent": USER_AGENT, "Referer": REFERER}
+            )
+            raw = urllib.request.urlopen(req, timeout=timeout).read().decode("utf-8", "ignore")
+            m = re.search(r'content:"(.*?)"\s*,', raw, re.S)
+            if not m:
+                return None, None
+            content = (
+                m.group(1)
+                .replace('\\"', '"')
+                .replace("\\'", "'")
+                .replace("\\n", "")
+                .replace("\\t", "")
+            )
+            rep = re.search(r"(\d{4})年(\d)季度", raw)
+            report = "%s-%02d-30" % (rep.group(1), int(rep.group(2)) * 3) if rep else ""
+            return content, report
+        except Exception as e:  # noqa: BLE001 - 网络异常统一重试
+            last_err = e
+            if attempt < retries:
+                time.sleep(2 * attempt)  # 简单退避
+    sys.stderr.write("  [异常] %s: %s\n" % (code, last_err))
+    return None, None
+
+
+def parse_asset_allocation(raw):
+    """从 pingzhongdata/{code}.js 的 Data_assetAllocation 解析最新一期 股票/债券/现金 占净比(%)。
+
+    结构：Data_assetAllocation = {"series":[{"name":"股票占净比","data":[...]}, ...], "categories":[...]}
+    每个 series 的 data 数组与 categories 对齐，取末位(最新一期)。任一缺失返回 None。
+    """
+    m = re.search(r"Data_assetAllocation\s*=\s*(\{.*?\})\s*;", raw, re.S)
+    if not m:
+        return None
+    try:
+        obj = json.loads(m.group(1))
+    except Exception:  # noqa: BLE001 - 解析失败当无配置
+        return None
+    series = obj.get("series") if isinstance(obj, dict) else None
+    if not isinstance(series, list):
+        return None
+    out = {}
+    for s in series:
+        nm = s.get("name") if isinstance(s, dict) else None
+        if nm in ALLOC_NAMES and isinstance(s.get("data"), list) and s["data"]:
+            try:
+                out[ALLOC_NAMES[nm]] = round(float(s["data"][-1]), 2)
+            except (TypeError, ValueError):
+                pass
+    return out or None
+
+
+def fetch_nav(code, retries=3, timeout=30):
+    """抓取基金净值历史 Data_netWorthTrend，返回 [[t_ms, nav], ...]（紧凑、升序）或 None。
+
+    数据源与浏览器端一致：fund.eastmoney.com/pingzhongdata/{code}.js，
+    其中 Data_netWorthTrend = [{"x": 时间戳(ms), "y": 单位净值, ...}, ...]。
+    仅取 (x, y) 两列，单位净值 <=0 的脏数据丢弃；输出紧凑二维数组 [[t_ms, nav], ...]。
+    """
+    url = "https://fund.eastmoney.com/pingzhongdata/%s.js" % code
+    last_err = None
+    for attempt in range(1, retries + 1):
+        try:
+            req = urllib.request.Request(
+                url, headers={"User-Agent": USER_AGENT, "Referer": "https://fundf10.eastmoney.com/"}
+            )
+            raw = urllib.request.urlopen(req, timeout=timeout).read().decode("utf-8", "ignore")
+            m = re.search(r"Data_netWorthTrend\s*=\s*(\[.*?\])\s*;", raw, re.S)
+            if not m:
+                return None
+            arr = json.loads(m.group(1))
+            out = []
+            for row in arr:
+                if not isinstance(row, dict):
+                    continue
+                t, nav = row.get("x"), row.get("y")
+                if not isinstance(nav, (int, float)) or not isinstance(t, (int, float)):
+                    continue
+                if nav <= 0:
+                    continue
+                out.append([int(t), round(float(nav), 4)])
+            alloc = parse_asset_allocation(raw)
+            return (out if out else None), alloc
+        except Exception as e:  # noqa: BLE001 - 网络异常统一重试
+            last_err = e
+            if attempt < retries:
+                time.sleep(2 * attempt)
+    sys.stderr.write("  [nav异常] %s: %s\n" % (code, last_err))
+    return None, None
+
+
+def collect_snapshot_symbols(result):
+    """从抓取结果里收集非美股（港/A/日/韩）的腾讯行情代码，如 hk02513 / sz300408 / jp285A。
+
+    跳过 ISIN 全码（如 JP3914400001）：腾讯不认，查了也是空。
+    """
+    isin = re.compile(r"^[A-Z]{2}[A-Z0-9]{9}\d$")
+    syms = []
+    for entry in (result or {}).values():
+        if not isinstance(entry, dict):
+            continue
+        for it in entry.get("items") or []:
+            mk = (it or {}).get("m")
+            code = (it or {}).get("c", "")
+            if mk in SNAPSHOT_MARKETS and not isin.match(code):
+                # 代码保留原始大小写：日股 285A 末位大写，腾讯对大小写敏感（jp285a 查不到）
+                s = "%s%s" % (mk, code)
+                if s not in syms:
+                    syms.append(s)
+    return syms
+
+
+def fetch_qt_quotes(syms, retries=3, timeout=15):
+    """批量拉腾讯行情，返回 {sym: {"date","close","prevClose","ts"}}。
+
+    qt.gtimg.cn 字段：p[3] 现价 / p[4] 昨收 / p[30] 行情时间。
+    时间格式两种：A股 "20260828161406"、日韩股 "2026-09-04 14:30:29"，
+    统一取前 8 位数字当日期（YYYYMMDD），便于字符串比较。
+    单个代码失败不影响其他代码。
+    """
+    out = {}
+    if not syms:
+        return out
+    for i in range(0, len(syms), QT_BATCH):
+        chunk = syms[i:i + QT_BATCH]
+        url = "https://qt.gtimg.cn/q=" + ",".join(chunk)
+        txt = None
+        for attempt in range(1, retries + 1):
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+                txt = urllib.request.urlopen(req, timeout=timeout).read().decode("gbk", "ignore")
+                break
+            except Exception as e:  # noqa: BLE001 - 网络异常统一重试
+                if attempt == retries:
+                    sys.stderr.write("  [行情失败] %s: %s\n" % (",".join(chunk), e))
+                else:
+                    time.sleep(2 * attempt)
+        if not txt:
+            continue
+        for sym in chunk:
+            m = re.search('v_%s="([^"]*)"' % re.escape(sym), txt)
+            if not m:
+                continue
+            p = m.group(1).split("~")
+            if len(p) < 31:
+                continue
+            try:
+                close, prev = float(p[3]), float(p[4])
+            except (ValueError, IndexError):
+                continue
+            if close <= 0:
+                continue
+            date = re.sub(r"\D", "", p[30])[:8]
+            if len(date) != 8:
+                continue
+            # 腾讯时间戳为北京时间，换算成美东交易日再写快照（与前端预测层目标日口径一致）
+            date = _et_trade_date(p[30], date)
+            if not date:
+                continue
+            out[sym] = {
+                "date": date,
+                "close": round(close, 4),
+                "prevClose": round(prev, 4) if prev > 0 else None,
+                "ts": p[30],
+            }
+    return out
+
+
+def load_existing_snapshots(path):
+    """读取已存盘 JSON 里的快照，兼容旧键 _jpkr_quotes（合并后只按新键写回）。"""
+    out = {}
+    if not (path and os.path.exists(path)):
+        return out
+    try:
+        with open(path, encoding="utf-8") as f:
+            obj = json.load(f)
+    except Exception as e:  # noqa: BLE001 - 旧文件损坏则当空，不阻断主流程
+        sys.stderr.write("  [快照] 读取旧文件失败，本次不累积：%s\n" % e)
+        return out
+    part = obj.get(SNAPSHOT_KEY)
+    if not isinstance(part, dict):
+        return out
+    for sym, rows in part.items():
+        if not isinstance(rows, list):
+            continue
+        by_date = {}
+        for r in out.get(sym, []) + rows:
+            if isinstance(r, dict) and r.get("date"):
+                by_date[r["date"]] = r
+        if by_date:
+            out[sym] = [by_date[d] for d in sorted(by_date)]
+    return out
+
+
+def merge_quote_snapshots(old, new, keep=SNAPSHOT_DAYS):
+    """合并新旧快照：同日期覆盖，按日期升序，只留最近 keep 条。
+
+    old 为已存盘的结构 {"kr005930": [{date, close, prevClose, ts}, ...]}，
+    new 为本次抓取结果；抓取失败（new 缺某个 sym）时该 sym 原样保留。
+    """
+    merged = {}
+    if isinstance(old, dict):
+        for k, v in old.items():
+            if isinstance(v, list):
+                rows = [x for x in v if isinstance(x, dict) and x.get("date")]
+                if rows:
+                    merged[k] = rows
+    for sym, rec in (new or {}).items():
+        rows = [x for x in merged.get(sym, []) if x.get("date") != rec["date"]]
+        rows.append(rec)
+        rows.sort(key=lambda x: x["date"])
+        merged[sym] = rows[-keep:]
+    return merged
+
+
+class _TableParser(HTMLParser):
+    """把季报表格解析成二维单元格列表。
+
+    东方财富 jjcc 内容里通常含两张表：第一张是「十大重仓股」(占净值比例 %)，
+    第二张是「持仓变动」(同列名但数值为市值/股数，会污染结果)。
+    这里只收集【最外层第一张表】的行。
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.rows = []
+        self.row_markets = []       # 每行从行情链接里解析出的东财市场前缀（未收录则为 None）
+        self._tds = []
+        self._td_markets = []
+        self._td_market = None
+        self._in_td = False
+        self._buf = ""
+        self._table_depth = 0       # 当前 <table> 嵌套深度
+        self._first_done = False    # 第一张表已结束则不再收集
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "table":
+            self._table_depth += 1
+        elif tag == "tr" and self._table_depth == 1 and not self._first_done:
+            self._tds = []
+            self._td_markets = []
+        elif tag == "td" and self._table_depth == 1 and not self._first_done:
+            self._in_td = True
+            self._buf = ""
+            self._td_market = None
+        elif tag == "a" and self._in_td:
+            # 行情链接形如 //quote.eastmoney.com/unify/r/105.MU，前缀即市场
+            m = re.search(r"unify/r/(\d+)\.", dict(attrs).get("href", "") or "")
+            if m:
+                self._td_market = m.group(1)
+
+    def handle_data(self, data):
+        if self._in_td:
+            self._buf += data
+
+    def handle_endtag(self, tag):
+        if tag == "table":
+            if self._table_depth == 1:
+                self._first_done = True  # 第一张表结束
+            self._table_depth = max(0, self._table_depth - 1)
+        elif tag == "td" and self._table_depth == 1 and not self._first_done:
+            self._tds.append(self._buf.strip())
+            self._td_markets.append(self._td_market)
+            self._in_td = False
+        elif tag == "tr" and self._table_depth == 1 and not self._first_done:
+            if self._tds:
+                self.rows.append(self._tds)
+                self.row_markets.append(self._td_markets)
+
+
+def parse(content):
+    """从 content 解析出十大持仓 items 列表。"""
+    p = _TableParser()
+    p.feed(content)
+    items = []
+    for i, r in enumerate(p.rows):
+        if len(r) < 7:
+            continue
+        seq, code, name, pct = r[0], r[1], r[2], r[6]
+        if not re.match(r"^\d+$", seq):
+            continue
+        if not code or code in ("--", ""):
+            continue
+        try:
+            ratio = float(pct.replace("%", "").replace(",", ""))
+        except ValueError:
+            continue
+        # 东财市场前缀：取本行首个行情链接的前缀；为 None 表示东财未收录（多为日股/韩股）
+        mkts = p.row_markets[i] if i < len(p.row_markets) else []
+        em_prefix = next((x for x in mkts if x), None)
+        items.append(
+            {"c": code, "n": name, "p": round(ratio, 2),
+             "m": market_of(code, name, em_prefix)}
+        )
+    return items
+
+
+# ---------------------------------------------------------------------------
+# QQQ 日线历史（曲线图 TWR 基准对比用）
+# ---------------------------------------------------------------------------
+# 看板的「曲线图」会把 QQQ 当日净值归一化为累计涨跌幅，与组合的 TWR 放在同一
+# 根收益率轴上对比（谁是基准、谁跑赢一目了然）。这需要 QQQ 的每日收盘价序列。
+#
+# 数据源：优先腾讯 appstock fqkline（与脚本其余行情同源），但该接口对美股「带起
+# 止日期」查询会退化、且「最近 N 条」模式对美股只返回首末两条，拿不到连续历史；
+# 故回退新浪美股日K（US_MinKService.getDailyK），实测返回 2001 年至今完整日线。
+# 每天跑一次会重新抓取全量并更新，曲线图据此自动刷新。
+QQQ_SINA = "https://stock.finance.sina.com.cn/usstock/api/jsonp.php/var%20_/US_MinKService.getDailyK?symbol=QQQ&___qn=3&_=1"
+
+
+def fetch_qqq_daily(retries=3, timeout=30):
+    """抓取 QQQ 日线历史，返回 [{"d": "YYYY-MM-DD", "c": 收盘价}, ...]（升序）。
+
+    先试腾讯，失败回退新浪。两者都失败返回 None（不阻断主流程）。
+    """
+    last_err = None
+    # 1) 腾讯 appstock fqkline（同源；仅作为首选项，美股历史可能不全）
+    for attempt in range(1, retries + 1):
+        try:
+            url = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=usQQQ,day,,,800,qfq"
+            req = urllib.request.Request(
+                url, headers={"User-Agent": USER_AGENT, "Referer": "https://gu.qq.com/"}
+            )
+            raw = urllib.request.urlopen(req, timeout=timeout).read().decode("utf-8", "ignore")
+            obj = json.loads(raw)
+            day = obj.get("data", {}).get("usQQQ", {}).get("day", [])
+            out = []
+            for row in day:
+                if not isinstance(row, (list, dict)):
+                    continue
+                d = row[0] if isinstance(row, list) else row.get("date")
+                c = row[2] if isinstance(row, list) else row.get("close")
+                try:
+                    close = float(c)
+                except (ValueError, TypeError):
+                    continue
+                if close <= 0 or not d:
+                    continue
+                out.append({"d": d, "c": round(close, 2)})
+            if len(out) >= 5:  # 腾讯对美股常只给首末两条，不足以做连续对比
+                out.sort(key=lambda x: x["d"])
+                return out
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            if attempt < retries:
+                time.sleep(2 * attempt)
+    # 2) 新浪美股日K（完整历史）
+    for attempt in range(1, retries + 1):
+        try:
+            req = urllib.request.Request(
+                QQQ_SINA, headers={"User-Agent": USER_AGENT, "Referer": "https://stock.finance.sina.com.cn/"}
+            )
+            raw = urllib.request.urlopen(req, timeout=timeout).read().decode("utf-8", "ignore")
+            i, j = raw.find("["), raw.rfind("]")
+            if i < 0 or j < 0:
+                continue
+            arr = json.loads(raw[i:j + 1])
+            out = []
+            for x in arr:
+                d = x.get("d")
+                c = x.get("c")
+                if not d or c is None:
+                    continue
+                try:
+                    close = float(c)
+                except (ValueError, TypeError):
+                    continue
+                if close <= 0:
+                    continue
+                out.append({"d": d, "c": round(close, 2)})
+            if out:
+                out.sort(key=lambda x: x["d"])
+                return out
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            if attempt < retries:
+                time.sleep(2 * attempt)
+    sys.stderr.write("  [QQQ] 抓取失败: %s\n" % last_err)
+    return None
+
+
+def load_existing_qqq(path):
+    """读取已存盘 JSON 里的 qqq_daily 日线历史，作为增量追加的基底。"""
+    if not (path and os.path.exists(path)):
+        return []
+    try:
+        with open(path, encoding="utf-8") as f:
+            obj = json.load(f)
+    except Exception as e:  # noqa: BLE001 - 旧文件损坏则当空，退回全量
+        sys.stderr.write("  [QQQ] 读取旧文件失败，本次全量重抓：%s\n" % e)
+        return []
+    part = obj.get("qqq_daily")
+    if not isinstance(part, list):
+        return []
+    out = []
+    for r in part:
+        if not (isinstance(r, dict) and r.get("d") and r.get("c") is not None):
+            continue
+        try:
+            close = float(r["c"])
+        except (ValueError, TypeError):
+            continue
+        if close > 0:
+            out.append({"d": str(r["d"]), "c": round(close, 2)})
+    out.sort(key=lambda x: x["d"])
+    return out
+
+
+def merge_qqq_daily(old, fresh):
+    """增量合并 QQQ 日线：
+    - 旧历史（< 旧数据最后一天）原样保留，防止源端截断或换源抹掉已有历史；
+    - 旧数据最后一天及之后以新抓取为准（刷新当日收盘价 + 追加新交易日）。
+    任一侧为空则直接返回另一侧。"""
+    if not old:
+        return fresh or []
+    if not fresh:
+        return old
+    last_d = old[-1]["d"]
+    by_d = {r["d"]: r for r in old}
+    for r in fresh:
+        if r["d"] >= last_d:
+            by_d[r["d"]] = r
+    return sorted(by_d.values(), key=lambda x: x["d"])
+
+
+# ---------------------------------------------------------------------------
+# 房产数据（房天下 · 青岛黄岛 瑞源水岸）
+# ---------------------------------------------------------------------------
+# 看板「房产」卡片：总额 = 71.56㎡ × 最新一笔成交单价，明细按成交时间倒序展示。
+# 数据源：房天下小区成交页 qd.esf.fang.com/loupan/<id>/chengjiao/，表格列为
+#   房源面积 | 成交时间 | 成交总价 | 成交均价 | 信息来源
+# 房天下有频率风控：触发时 302 到 check.3g.fang.com 的滑块验证页（正文含
+# "请完成下列验证"）。故这里做了三件事：
+#   1. 翻页之间 sleep 降频，失败退避重试；
+#   2. 识别到验证页即判定本次抓取失败，保留旧数据（绝不写出空 deals）；
+#   3. 无论本次是否抓取，都会把旧 _property 原样带回结果，避免覆盖丢失。
+PROPERTY_KEY = "_property"
+PROPERTY_CONF = {
+    "city": "qd",          # 房天下城市站（青岛）
+    "id": "2411123345",    # 房天下小区 ID：青岛·瑞源·水岸
+    "community": {"name": "瑞源水岸", "district": "黄岛区辛安", "city": "青岛"},
+    "source": "房天下",
+}
+SOUFUN_DEAL_URL = "https://{city}.esf.fang.com/loupan/{id}/chengjiao/t11-a11-p{page}/"
+SOUFUN_MAX_PAGES = 5            # 成交记录最多翻几页（每页 20 条，覆盖 35 条历史足够）
+SOUFUN_PAGE_GAP = 2             # 翻页间隔（秒）：请求过快会被房天下判定为爬虫
+SOUFUN_CHECK_HINT = "请完成下列验证"   # 风控页特征串
+
+# 成交表格行：<td><p>71.56㎡</p></td><td><p>2026-08-09</p></td><td><p>56万</p></td><td><p>7826元/㎡</p></td>
+_RE_DEAL_ROW = re.compile(
+    r"<tr[^>]*>\s*<td[^>]*>\s*<p[^>]*>\s*([\d.]+)\s*㎡\s*</p>.*?"
+    r"<td[^>]*>\s*<p[^>]*>\s*(\d{4}-\d{2}-\d{2})\s*</p>.*?"
+    r"<td[^>]*>\s*<p[^>]*>\s*([\d.]+)\s*万\s*</p>.*?"
+    r"<td[^>]*>\s*<p[^>]*>\s*([\d,]+)\s*元/㎡\s*</p>",
+    re.S,
+)
+
+
+def _curl_text(url, timeout=30, referer=None):
+    """用系统 curl 取页面文本，失败返回 None。
+
+    房天下风控对客户端指纹敏感：实测同一时刻 curl 能取到页面、Python urllib
+    直接返回滑块验证页，故优先走 curl；没有 curl 时由 _urllib_text 兜底。
+    """
+    try:
+        cmd = ["curl", "-sSL", "--compressed", "--max-time", str(timeout),
+               "-A", USER_AGENT, "-H", "Accept-Language: zh-CN,zh;q=0.9"]
+        if referer:
+            cmd += ["-e", referer]
+        cmd.append(url)
+        out = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                             timeout=timeout + 5)
+        if out.returncode != 0 or not out.stdout:
+            return None
+        return out.stdout.decode("utf-8", "ignore")
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _urllib_text(url, timeout=30, referer=None):
+    """用 urllib 取页面文本（curl 不可用时的兜底）。"""
+    headers = {"User-Agent": USER_AGENT, "Accept-Language": "zh-CN,zh;q=0.9"}
+    if referer:
+        headers["Referer"] = referer
+    req = urllib.request.Request(url, headers=headers)
+    raw = urllib.request.urlopen(req, timeout=timeout).read()
+    if raw[:2] == b"\x1f\x8b":  # 少数节点返回 gzip
+        raw = gzip.decompress(raw)
+    return raw.decode("utf-8", "ignore")
+
+
+def _http_text(url, timeout=30, referer=None):
+    """GET 一个页面并返回 (文本, None)；命中房天下风控页返回 (None, 原因)。"""
+    txt = _curl_text(url, timeout=timeout, referer=referer)
+    if txt is None:
+        try:
+            txt = _urllib_text(url, timeout=timeout, referer=referer)
+        except Exception as e:  # noqa: BLE001 - 两条通道都失败才报错
+            return None, str(e)
+    if not txt:
+        return None, "空响应"
+    if SOUFUN_CHECK_HINT in txt or "check.3g.fang.com" in txt:
+        return None, "命中房天下反爬验证页"
+    return txt, None
+
+
+def parse_soufun_deals(html):
+    """解析成交表格 -> [{"date","area_m2","total_wan","unit_price"}, ...]（页内原序）。"""
+    out = []
+    for m in _RE_DEAL_ROW.finditer(html or ""):
+        area, date, total, unit = m.groups()
+        try:
+            rec = {"date": date, "area_m2": float(area),
+                   "total_wan": float(total),
+                   "unit_price": int(unit.replace(",", ""))}
+        except ValueError:
+            continue
+        if rec["area_m2"] > 0 and rec["total_wan"] > 0 and rec["unit_price"] > 0:
+            out.append(rec)
+    return out
+
+
+def fetch_soufun_property(conf=PROPERTY_CONF, max_pages=SOUFUN_MAX_PAGES,
+                          retries=3, timeout=30, quiet=False):
+    """抓取房天下小区成交记录，返回 (property, note)。
+
+    property 为 None 表示没抓到（多半被风控），调用方应保留旧数据；
+    note 记录本次抓取的瑕疵（如中途被风控拦截导致记录不全），不影响主流程。
+    """
+    city, cid = conf.get("city"), conf.get("id")
+    base = "https://%s.esf.fang.com" % city
+    deals, seen = [], set()
+    blocked_at = None   # 第一页命中风控的页码（数据可能不全）
+    for page in range(11, 11 + max_pages):
+        url = SOUFUN_DEAL_URL.format(city=city, id=cid, page=page)
+        txt = None
+        for attempt in range(1, retries + 1):
+            try:
+                txt, err = _http_text(url, timeout=timeout, referer=base + "/")
+                if err:
+                    raise RuntimeError(err)
+                break
+            except Exception as e:  # noqa: BLE001 - 网络异常/风控统一退避重试
+                if attempt == retries:
+                    if blocked_at is None:
+                        blocked_at = page
+                    if not quiet:
+                        sys.stderr.write("  [房产] 成交页 p%d 抓取失败：%s\n" % (page, e))
+                else:
+                    time.sleep(2 * attempt)
+        if not txt:
+            break
+        rows = parse_soufun_deals(txt)
+        if not rows:
+            # 空页有两种：翻到底了（仍有表头）/ 拿到风控或异常页（没表头）
+            if "成交时间" not in txt:
+                if blocked_at is None:
+                    blocked_at = page
+                if not quiet:
+                    sys.stderr.write("  [房产] 成交页 p%d 返回的不是成交列表\n" % page)
+            break
+        added = 0
+        for r in rows:
+            key = (r["date"], r["area_m2"], r["total_wan"])
+            if key in seen:
+                continue
+            seen.add(key)
+            deals.append(r)
+            added += 1
+        if added == 0:      # 整页都是见过的记录，说明翻到底了
+            break
+        time.sleep(SOUFUN_PAGE_GAP)   # 降频，避免触发房天下风控
+    if not deals:
+        return None, "未取到成交记录"
+
+    note = None
+    if blocked_at is not None:
+        note = "p%d 起被风控拦截，成交记录可能不全" % blocked_at
+        if not quiet:
+            sys.stderr.write("  [房产] %s\n" % note)
+
+    src = conf.get("source", "房天下")
+    for r in deals:
+        r["source"] = src
+    prop = {
+        "community": dict(conf.get("community") or {}),
+        "updated": _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "live_fetched": {"soufun": True, "lianjia": False},
+        "stale_sources": [],
+        "deals": sorted(deals, key=lambda x: x["date"], reverse=True),
+    }
+    return prop, note
+
+
+def load_existing_property(path):
+    """读取已存盘 JSON 里的 _property（本脚本写入，也可能被手工补过成交记录）。"""
+    if not (path and os.path.exists(path)):
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            obj = json.load(f)
+    except Exception:  # noqa: BLE001 - 旧文件损坏当无房产数据
+        return None
+    part = obj.get(PROPERTY_KEY)
+    if not isinstance(part, dict):
+        return None
+    # 均价字段（market）已废弃：看板只读 deals，读到就丢掉，下次写回时自然清干净
+    part.pop("market", None)
+    return part
+
+
+def merge_property(old, fresh):
+    """合并新旧房产数据：成交记录按 (成交日期, 面积) 去重，旧条目优先。
+
+    键只取日期+面积：房天下页面把总价取整到万（如 54.5 万显示为 54 万），
+    若把总价也计入键，同一笔成交会被当成两条重复插入。
+    旧条目优先，保住手工/链家补全的小数精度与 source 标注；新数据只补充新出现的成交。
+    fresh 为 None（本次抓取失败）时原样返回 old，绝不写出空 deals。
+    """
+    if not fresh:
+        return old
+    if not old:
+        return fresh
+    merged = dict(old)
+    merged["community"] = old.get("community") or fresh.get("community")
+    merged["updated"] = fresh.get("updated") or old.get("updated")
+    live = dict(old.get("live_fetched") or {})
+    live.update(fresh.get("live_fetched") or {})
+    merged["live_fetched"] = live
+    # 本次房天下抓成功了，就把上次失败留下的 stale 标记清掉
+    merged["stale_sources"] = [s for s in (old.get("stale_sources") or []) if s != "soufun"]
+    by_key = {}
+    for d in (old.get("deals") or []):
+        if isinstance(d, dict) and d.get("date"):
+            by_key[(d["date"], d.get("area_m2"))] = d
+    for d in (fresh.get("deals") or []):
+        by_key.setdefault((d["date"], d.get("area_m2")), d)
+    merged["deals"] = sorted(by_key.values(), key=lambda x: x.get("date") or "", reverse=True)
+    return merged
+
+
+# ---------------------------------------------------------------------------
+# 主流程
+# ---------------------------------------------------------------------------
+def load_config(path):
+    """读取可选的 fund_codes.json 配置。返回 (codes, proxy) 或 (None, None)。"""
+    if not path or not os.path.exists(path):
+        return None, None
+    with open(path, encoding="utf-8") as f:
+        cfg = json.load(f)
+    codes = cfg.get("codes")
+    proxy = cfg.get("proxy", {})
+    if not isinstance(codes, list) or not codes:
+        raise ValueError("配置文件中 codes 必须为非空数组")
+    return codes, {str(k): bool(v) for k, v in proxy.items()}
+
+
+def scrape(codes, proxy, retries=3, quiet=False):
+    """抓取所有基金，返回结果 dict。"""
+    result = {}
+    for code in codes:
+        code = str(code).strip()
+        if not code:
+            continue
+        if proxy.get(code):
+            # 代理基金(纳斯达克100ETF联接)：不直接持股，资产配置以东财真实占净比为准
+            entry = {
+                "report": QQQ_PROXY["report"],
+                "proxy": True,
+                "items": [dict(it) for it in QQQ_PROXY["items"]],
+            }
+            _nav, alloc = fetch_nav(code, retries=retries)
+            if not alloc:
+                alloc = dict(PROXY_ALLOC)
+            bond = float(alloc.get("bond", 0.0) or 0.0)
+            cash = float(alloc.get("cash", 0.0) or 0.0)
+            # 股权暴露(=100-债-现金)：ETF联接基金只持有 ETF，其权重即股权暴露，
+            # 剩余为现金/债券缓冲。这样 13 行明细合计 = 股权暴露 + 债 + 现金 = 100%，
+            # 盘中预测也顺带体现现金拖累(predPct = 股权暴露% × QQQ)。
+            equity = round(max(0.0, 100.0 - bond - cash), 2)
+            entry["items"][0]["p"] = equity
+            entry["alloc"] = alloc
+            result[code] = entry
+            if not quiet:
+                sys.stderr.write("  [代理] %s 使用 QQQ 代理(股权暴露 %.2f%%, 现金 %.2f%%)\n" % (code, equity, cash))
+            continue
+        if not quiet:
+            sys.stderr.write("  [抓取] %s ...\n" % code)
+        try:
+            content, report = fetch_content(code, retries=retries)
+            if content:
+                items = parse(content)
+                if items:
+                    nav, alloc = fetch_nav(code, retries=retries)
+                    entry = {"report": report, "items": items}
+                    if nav:
+                        entry["nav"] = nav
+                    if alloc:
+                        entry["alloc"] = alloc
+                    result[code] = entry
+                else:
+                    sys.stderr.write("  [空] %s 未解析到持仓\n" % code)
+            else:
+                sys.stderr.write("  [失败] %s 未取到内容\n" % code)
+        except Exception as e:  # noqa: BLE001
+            sys.stderr.write("  [异常] %s: %s\n" % (code, e))
+    return result
+
+
+def trim_nav(result, asset_path, buffer_days=60, quiet=False):
+    """就地裁剪各基金 nav：保留 [最早买入交易日 - buffer_days, ...] 之后的部分。
+
+    nav 时间戳为 ms（东财按北京时间零点取整）。最早交易日取 Asset_parsed.json
+    seed.pa_funds[].trades 里最早一笔的 date（YYYY-MM-DD）。基金无记录/文件缺失
+    则该基金保持原样。返回裁剪统计 {code: (before, after)}。
+    """
+    trade_date = {}
+    try:
+        with open(asset_path, encoding="utf-8") as f:
+            ap = json.load(f)
+        for pf in (ap.get("seed") or {}).get("pa_funds", []):
+            code = str(pf.get("code") or "")
+            ds = [t.get("date") for t in (pf.get("trades") or [])
+                  if isinstance(t, dict) and t.get("date")]
+            if code and ds:
+                trade_date[code] = min(ds)
+    except Exception as e:  # noqa: BLE001 - 找不到/损坏则整体不裁剪
+        if not quiet:
+            sys.stderr.write("  [nav裁剪] 读 %s 失败，跳过裁剪：%s\n" % (asset_path, e))
+        return {}
+
+    day_ms = 86400 * 1000
+    stats = {}
+    for code, entry in result.items():
+        if not isinstance(entry, dict):
+            continue
+        nav = entry.get("nav")
+        if not isinstance(nav, list) or not nav:
+            continue
+        d = trade_date.get(str(code))
+        if not d:
+            continue
+        y, m, dd = (int(x) for x in d.split("-"))
+        cutoff = _dt.datetime(y, m, dd, tzinfo=_dt.timezone.utc).timestamp() * 1000 \
+            - buffer_days * day_ms
+        kept = [row for row in nav
+                if isinstance(row, (list, tuple)) and row and row[0] >= cutoff]
+        if len(kept) < len(nav):
+            entry["nav"] = kept
+            stats[code] = (len(nav), len(kept))
+            if not quiet:
+                sys.stderr.write("  [nav裁剪] %s：%d -> %d 条（最早交易日 %s - %d 天）\n"
+                                 % (code, len(nav), len(kept), d, buffer_days))
+    return stats
+
+
+def merge_nav(old_nav, new_nav):
+    """新旧 nav 按时间戳取并集：同日以新值为准，按时间升序返回。"""
+    rows = {}
+    for r in (old_nav or []) + (new_nav or []):
+        if isinstance(r, (list, tuple)) and r and isinstance(r[0], (int, float)):
+            rows[r[0]] = r
+    return [rows[k] for k in sorted(rows)]
+
+
+def merge_with_existing(result, path, codes, quiet=False):
+    """与已存盘 JSON 增量合并（就地改 result）：
+
+    - nav：旧 nav ∪ 本次抓到的 nav（同日新覆盖旧）——东财每次返回全史，
+      合并的意义在抓取中断/部分失败时不丢历史；
+    - 单项失败兜底：本次某基金没抓到持仓（items 缺失）→ 整条沿用旧条目；
+      本次抓到持仓但 nav 缺失 → 只沿用旧 nav；
+    - 只处理本次 codes 列表内的基金（从配置移除的基金不会残留在结果里）；
+    - _daily_quotes / qqq_daily 已由各自增量逻辑处理，此处跳过。
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            old = json.load(f)
+    except Exception:  # noqa: BLE001 - 首次运行/文件损坏则无旧数据可并
+        return
+    if not isinstance(old, dict):
+        return
+    for code in codes:
+        code = str(code).strip()
+        old_entry = old.get(code)
+        if not isinstance(old_entry, dict):
+            continue
+        new_entry = result.get(code)
+        if not isinstance(new_entry, dict) or not new_entry.get("items"):
+            # 整只失败：沿用旧条目（nav/report/alloc 全保留）
+            if old_entry.get("items"):
+                result[code] = old_entry
+                if not quiet:
+                    sys.stderr.write("  [增量] %s 本次未抓到，沿用旧数据\n" % code)
+            continue
+        old_nav = old_entry.get("nav")
+        if isinstance(old_nav, list) and old_nav and not new_entry.get("nav"):
+            new_entry["nav"] = old_nav
+            if not quiet:
+                sys.stderr.write("  [增量] %s 本次未取到 nav，沿用旧 %d 条\n" % (code, len(old_nav)))
+        elif isinstance(old_nav, list) and old_nav and new_entry.get("nav"):
+            merged = merge_nav(old_nav, new_entry["nav"])
+            if len(merged) > len(new_entry["nav"]):
+                new_entry["nav"] = merged
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(
+        description="抓取基金季报十大持仓 -> fund_holdings.json"
+    )
+    ap.add_argument("-o", "--output", default="fund_holdings.json",
+                    help="输出 JSON 路径（默认 fund_holdings.json）")
+    ap.add_argument("-c", "--config", default=None,
+                    help="基金列表配置文件 fund_codes.json")
+    ap.add_argument("--codes", default=None,
+                    help="逗号分隔的基金代码，覆盖默认列表")
+    ap.add_argument("--no-write", action="store_true",
+                    help="只打印 JSON，不写文件")
+    ap.add_argument("--quiet", action="store_true",
+                    help="减少 stderr 输出")
+    ap.add_argument("--retries", type=int, default=3,
+                    help="单只基金抓取失败重试次数（默认 3）")
+    ap.add_argument("--no-trim-nav", action="store_true",
+                    help="跳过 nav 裁剪（默认按最早交易日-60天缓冲截掉更早历史）")
+    ap.add_argument("--no-merge", action="store_true",
+                    help="跳过与存盘文件的增量合并（默认并集+失败沿用旧数据）")
+    ap.add_argument("--no-snapshots", action="store_true",
+                    help="跳过日股/韩股行情快照抓取")
+    ap.add_argument("--no-qqq", action="store_true",
+                    help="跳过 QQQ 日线抓取（曲线图基准对比用）")
+    ap.add_argument("--no-property", action="store_true",
+                    help="跳过房产数据抓取（房天下小区成交记录）；旧数据仍会原样保留")
+    ap.add_argument("--snapshot-days", type=int, default=SNAPSHOT_DAYS,
+                    help="行情快照保留天数（默认 %d）" % SNAPSHOT_DAYS)
+    args = ap.parse_args(argv)
+
+    # 确定基金列表：命令行 > 配置文件 > 默认
+    codes, proxy = load_config(args.config)
+    if codes is None:
+        codes, proxy = list(DEFAULT_CODES), dict(DEFAULT_PROXY)
+    if args.codes:
+        codes = [c.strip() for c in args.codes.split(",") if c.strip()]
+        # 命令行指定时，代理仅保留命中者
+        proxy = {c: proxy.get(c, False) for c in codes}
+
+    codes = [c for c in codes if c not in (None, "")]
+    if not codes:
+        sys.stderr.write("错误：没有任何要抓取的基金代码\n")
+        return 2
+
+    result = scrape(codes, proxy, retries=args.retries, quiet=args.quiet)
+
+    # 非美股（港/A/日/韩）行情快照：每天存一条，攒出近 N 个交易日序列供看板直接读取
+    if not args.no_snapshots:
+        syms = collect_snapshot_symbols(result)
+        if syms:
+            quotes = fetch_qt_quotes(syms, retries=args.retries)
+            if not args.quiet:
+                sys.stderr.write("  [快照] 港/A/日/韩 %d 个代码，取到 %d 个\n" % (len(syms), len(quotes)))
+            # 读取已存盘文件里的旧快照，合并后回写（--no-write 时也能累积）
+            old = load_existing_snapshots(args.output)
+            merged = merge_quote_snapshots(old, quotes, keep=max(1, args.snapshot_days))
+            if merged:
+                result[SNAPSHOT_KEY] = merged
+        elif not args.quiet:
+            sys.stderr.write("  [快照] 无非美股持仓，跳过\n")
+
+    # QQQ 日线历史（曲线图 TWR 基准对比）：增量追加，已有历史以存盘数据为准
+    if not args.no_qqq:
+        qqq_old = load_existing_qqq(args.output)
+        qqq = fetch_qqq_daily(retries=args.retries)
+        qqq_merged = merge_qqq_daily(qqq_old, qqq)
+        if qqq_merged:
+            result["qqq_daily"] = qqq_merged
+            if not args.quiet:
+                _n_new = len(qqq_merged) - len(qqq_old) if qqq_old else len(qqq_merged)
+                sys.stderr.write("  [QQQ] 日线 %d 条（%s ~ %s，新增 %d 条）\n" % (
+                    len(qqq_merged), qqq_merged[0]["d"], qqq_merged[-1]["d"], _n_new))
+        elif not args.quiet:
+            sys.stderr.write("  [QQQ] 未取得日线，跳过\n")
+
+    # 房产数据（房天下小区成交记录）。
+    # 旧 _property 必须无条件带回结果：result 是全新 dict，不带上的话写文件会抹掉房产数据。
+    old_prop = load_existing_property(args.output)
+    if not args.no_property:
+        prop, note = fetch_soufun_property(retries=args.retries, quiet=args.quiet)
+        if prop:
+            result[PROPERTY_KEY] = merge_property(old_prop, prop)
+            if not args.quiet:
+                d0 = (prop["deals"] or [{}])[0]
+                sys.stderr.write("  [房产] %s 成交 %d 条，最新 %s %s元/㎡%s\n" % (
+                    (prop.get("community") or {}).get("name", "-"), len(prop["deals"]),
+                    d0.get("date", "-"), d0.get("unit_price", "-"),
+                    "" if not note else "（%s）" % note))
+        else:
+            # 抓取失败：原样沿用旧数据，并把房天下标记为「本次未取到」
+            if old_prop:
+                kept = dict(old_prop)
+                stale = [s for s in (kept.get("stale_sources") or []) if s != "soufun"]
+                stale.append("soufun")
+                kept["stale_sources"] = stale
+                kept["live_fetched"] = dict(kept.get("live_fetched") or {})
+                kept["live_fetched"]["soufun"] = False
+                result[PROPERTY_KEY] = kept
+            if not args.quiet:
+                sys.stderr.write("  [房产] 抓取失败（%s），沿用旧数据 %d 条\n"
+                                 % (note or "未知原因", len((old_prop or {}).get("deals") or [])))
+    elif old_prop:
+        result[PROPERTY_KEY] = old_prop
+
+    # 增量合并：与存盘文件取并集（同日新覆盖旧），抓取失败的部分沿用旧数据
+    if not args.no_merge:
+        merge_with_existing(result, args.output, codes, quiet=args.quiet)
+
+    # nav 裁剪：按各基金最早买入交易日-60天缓冲截掉更早的历史（前端 buildSeries 只从
+    # 最早交易日起取数，更早的 nav 属无用冗余；东财 pingzhongdata 每次返回全史，
+    # 不裁剪则文件每天膨胀回 600KB+）。最早交易日读同目录 Asset_parsed.json 的
+    # seed.pa_funds[].trades；找不到该文件或某基金无交易日记录则该基金不裁剪。
+    if not args.no_trim_nav:
+        trim_nav(result, os.path.join(os.path.dirname(os.path.abspath(args.output)) or ".",
+                                      "Asset_parsed.json"), quiet=args.quiet)
+
+    js = json.dumps(result, ensure_ascii=False, indent=2)
+
+    if args.no_write:
+        print(js)
+    else:
+        try:
+            with open(args.output, "w", encoding="utf-8") as f:
+                f.write(js)
+            if not args.quiet:
+                sys.stderr.write("\n已写入 %s\n" % args.output)
+        except Exception as e:  # noqa: BLE001
+            sys.stderr.write("写文件失败：%s\n上方 JSON 仍可直接复制使用\n" % e)
+
+    # 统计：成功（含代理）与失败（无 items）。跳过顶层非基金键（qqq_daily / _daily_quotes）
+    NON_FUND_KEYS = (SNAPSHOT_KEY, "qqq_daily", PROPERTY_KEY)
+    ok = sum(1 for k, v in result.items()
+             if k not in NON_FUND_KEYS and isinstance(v, dict) and v.get("items"))
+    failed = len([c for c in codes if c not in result or not result[c].get("items")])
+    if not args.quiet:
+        sys.stderr.write("成功 %d 只，失败 %d 只\n" % (ok, failed))
+
+    # 全部失败则非零退出，方便 CI 判定
+    return 0 if ok > 0 else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

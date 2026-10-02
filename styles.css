@@ -239,8 +239,21 @@ html, body {
   position: relative;
 }
 
-/* 面板收起/展开 */
-.watchlist.is-collapsed, .comment-panel.is-collapsed { display: none !important; }
+/* 面板收起/展开：宽度过渡动画（不用 display 硬切） */
+.watchlist, .comment-panel {
+  overflow: hidden;
+  transition: flex-basis .25s ease, opacity .22s ease;
+}
+.watchlist.is-collapsed, .comment-panel.is-collapsed {
+  flex-basis: 0;
+  opacity: 0;
+  border-right-width: 0;
+  border-left-width: 0;
+  pointer-events: none;
+}
+/* 收起过程中内容保持固有宽度，避免文字被挤压重排 */
+.watchlist > * { width: var(--wl-w); }
+.comment-panel > * { width: var(--cp-w); }
 .panel-expand[hidden] { display: none !important; }
 .panel-expand {
   position: absolute; top: 12px; z-index: 30;
@@ -502,6 +515,16 @@ html, body {
   white-space: nowrap;
 }
 .acc-metric .m-row b { font-weight: 700; color: var(--text); }
+/* USD 原值括注（灰色小字，紧跟 CNY 金额） */
+.acc-metric .m-row .m-usd {
+  flex: none; min-width: 62px; text-align: right;
+  font-size: 10px; font-style: normal; color: var(--text-3);
+}
+/* 「资产」卡要多放一行 USD 括注，宽度放宽 */
+.acc-metrics .acc-metric:first-child { flex: 1.5 1 210px; min-width: 210px; }
+/* 指标卡的盈亏数字同样绿涨红跌 */
+.acc-metric .m-row b.up { color: var(--up); }
+.acc-metric .m-row b.down { color: var(--down); }
 
 /* 功能按钮行 */
 .acc-actions { display: flex; flex-wrap: wrap; gap: 2px; margin: 14px 0 6px; }
@@ -561,6 +584,20 @@ html, body {
   border-bottom: 1px solid var(--border);
 }
 .acc-table th:nth-child(-n+3) { text-align: left; }
+
+/* 可排序表头（双三角图标，富途样式） */
+.acc-table th[data-sort] { cursor: pointer; user-select: none; }
+.acc-table th[data-sort]:hover { color: var(--text-2); }
+.th-sort__ic {
+  width: 13px; height: 13px; margin-left: 5px;
+  vertical-align: -2px; color: var(--text-2);
+  opacity: .75; transition: opacity .15s, color .15s;
+}
+.th-sort__ic path { transition: opacity .15s; }
+.acc-table th.is-asc, .acc-table th.is-desc { color: var(--text); font-weight: 600; }
+.acc-table th.is-asc .th-sort__ic, .acc-table th.is-desc .th-sort__ic { opacity: 1; color: var(--accent); }
+/* 未选中的方向三角变淡 */
+.acc-table th.is-asc .th-sort__ic .tri-dn, .acc-table th.is-desc .th-sort__ic .tri-up { opacity: .25; }
 .acc-empty { text-align: center; color: var(--text-3); padding: 56px 0 40px; font-size: 12px; }
 .acc-empty p { margin: 10px 0 0; }
 .acc-empty__ic { width: 52px; height: 52px; }
@@ -595,11 +632,141 @@ html, body {
 }
 .acc-sumline b { font-size: 13px; font-weight: 700; color: var(--text); }
 .acc-sumline .sum-label { margin-left: 12px; }
+/* 汇总行的盈亏数字保持绿涨红跌（需与上面的 .acc-sumline b 同等特异度） */
+.acc-sumline b.up { color: var(--up); }
+.acc-sumline b.down { color: var(--down); }
 
 /* 持仓表数据行 */
 .acc-table td {
   padding: 8px 10px; text-align: right; white-space: nowrap;
   color: var(--text); border-bottom: 1px solid var(--border);
 }
+/* 盈亏 / 收益率 / 今日盈亏等数字：绿涨红跌（.acc-table td 的 color 需让位） */
+.acc-table td.num.up, .acc-table td.up { color: var(--up); }
+.acc-table td.num.down, .acc-table td.down { color: var(--down); }
 .acc-table td:nth-child(-n+3) { text-align: left; }
 .td-link { cursor: pointer; }
+
+/* ===================== 全部账户总览页（模仿富途） ===================== */
+.acc-overview { padding-bottom: 20px; }
+
+/* 品类 / 币种分布 */
+.ao-dist { display: flex; gap: 56px; padding: 16px 20px 18px; border-bottom: 1px solid var(--border); }
+.ao-dist__col { flex: 1; max-width: 430px; }
+.ao-dist__col h4 { margin: 0 0 12px; font-size: 13px; font-weight: 700; color: var(--text); }
+.ao-bar { display: flex; height: 6px; border-radius: 3px; overflow: hidden; background: var(--panel-2); margin-bottom: 12px; }
+.ao-bar span { display: block; height: 100%; min-width: 2px; }
+.ao-legend { list-style: none; margin: 0; padding: 0; }
+.ao-legend li { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-2); padding: 3px 0; }
+.ao-legend .dot { width: 8px; height: 8px; border-radius: 2px; flex: none; }
+.ao-legend b { margin-left: auto; font-weight: 600; color: var(--text); }
+
+/* 走势 tab + 时间范围 */
+.ao-chart-head { display: flex; align-items: center; gap: 16px; padding: 14px 20px 0; flex-wrap: wrap; }
+.ao-tabs { display: flex; gap: 2px; background: var(--panel-2); border-radius: 6px; padding: 2px; }
+.ao-tabs button { border: 0; background: transparent; font-size: 12px; padding: 5px 14px; border-radius: 5px; cursor: pointer; color: var(--text-2); font-family: inherit; }
+.ao-tabs button.is-active { background: var(--panel); color: var(--text); font-weight: 700; box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08); }
+.ao-ranges { display: flex; gap: 6px; margin-left: auto; }
+.ao-ranges button { border: 1px solid var(--border); background: var(--panel); font-size: 12px; padding: 4px 12px; border-radius: 5px; cursor: pointer; color: var(--text-2); font-family: inherit; }
+.ao-ranges button.is-active { border-color: var(--accent); color: var(--accent); font-weight: 700; }
+.ao-ranges button:disabled { color: #c3cad6; cursor: not-allowed; }
+
+/* 统计 + 图表 */
+.ao-stats { display: flex; gap: 44px; padding: 14px 20px 2px; }
+.ao-stat span { display: block; font-size: 11px; color: var(--text-3); margin-bottom: 2px; }
+.ao-stat b { font-size: 20px; font-weight: 700; }
+/* 统计行：默认显示区间统计，悬停时切换为该日净值/当日收益（类名由 JS 切到 .ao-stats.is-hover） */
+.ao-stat--hover { display: none; }
+.ao-stats.is-hover .ao-stat--hover { display: block; }
+.ao-stats.is-hover .ao-stat--range { display: none; }
+.ao-chart-wrap { height: 300px; margin: 8px 12px 0; cursor: crosshair; }
+.ao-chart-wrap canvas { display: block; width: 100%; height: 100%; }
+
+/* 顶部「总资产」大卡片 = 总览页入口（选中态黑框挂卡片上） */
+/* 顶部「总资产」大卡片 = 总览页入口（选中态黑框套在卡片外，留出内边距避免贴字） */
+.acc-side__card {
+  border-radius: 8px;
+  padding: 10px 12px 8px;
+  margin: -2px -6px 0;              /* 负边距抵消 padding，保证卡片宽度与侧栏对齐 */
+  transition: background .15s, box-shadow .15s;
+}
+.acc-side__card.is-clickable { cursor: pointer; }
+.acc-side__card.is-clickable:hover { background: var(--panel-2); }
+.acc-side__card.is-active { box-shadow: 0 0 0 1px var(--text); }
+
+/* ===================== 账户「历史」子页（成交/订单/成交订单） ===================== */
+.acc-history { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.acc-history[hidden] { display: none; }
+.acc-hist__head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; border-bottom: 1px solid var(--border);
+  font-size: 12px; color: var(--text-2); white-space: nowrap;
+}
+.acc-hist__head b { font-size: 13px; font-weight: 700; color: var(--text); }
+.acc-hist__head .num { font-weight: 600; color: var(--text); }
+.acc-hist__head .ic--info { width: 13px; height: 13px; color: var(--text-3); }
+.acc-hist__sep { width: 1px; height: 12px; background: var(--border); }
+.acc-history .acc-table th:nth-child(-n+2),
+.acc-history .acc-table td:nth-child(-n+2) { text-align: left; }
+.acc-table .td-code { color: var(--text-3); font-size: 10px; margin-left: 4px; }
+
+/* 账户页「持仓/历史」切换：块级元素带 display 需强制覆盖 [hidden] */
+.acc-page [hidden] { display: none !important; }
+
+/* ===================== 盈亏数字统一绿涨红跌 =====================
+   .acc-table td / .acc-sumline b / .asl-col--r i / .acc-metric .m-row b
+   都带自己的 color 且选择器更具体，会盖掉全局 .up/.down，这里按区块补齐。 */
+.acc-table td.num.up, .acc-table td.up { color: var(--up); }
+.acc-table td.num.down, .acc-table td.down { color: var(--down); }
+.acc-sumline b.up, .acc-sumline b.down { color: inherit; }
+.acc-sumline b.up { color: var(--up); }
+.acc-sumline b.down { color: var(--down); }
+.acc-metric .m-row b.up { color: var(--up); }
+.acc-metric .m-row b.down { color: var(--down); }
+/* 侧栏：.asl-col--r i（灰）与 .as-line b 需让位给 up/down */
+.as-line .asl-col i.up, .as-line .asl-col i.down { color: inherit; }
+.as-line .asl-col i.up, .as-line b.up, .as-line i.up { color: var(--up); }
+.as-line .asl-col i.down, .as-line b.down, .as-line i.down { color: var(--down); }
+
+/* ===================== 资金明细弹窗 ===================== */
+.dlg { position: fixed; inset: 0; z-index: 200; }
+.dlg[hidden] { display: none !important; }
+.dlg__mask { position: absolute; inset: 0; background: rgba(15, 23, 42, 0.42); }
+.dlg__box {
+  position: relative; margin: 6vh auto 0; width: min(760px, 92vw);
+  max-height: 84vh; display: flex; flex-direction: column;
+  background: var(--panel); border-radius: 10px; box-shadow: 0 18px 48px rgba(15, 23, 42, 0.24);
+  overflow: hidden;
+}
+.dlg__head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 14px; border-bottom: 1px solid var(--border);
+}
+.dlg__head b { font-size: 14px; font-weight: 700; }
+.dlg__sum {
+  display: flex; gap: 34px; padding: 12px 14px 4px; font-size: 12px; color: var(--text-2);
+  flex-wrap: wrap;
+}
+.dlg__sum b { display: block; margin-top: 2px; font-size: 17px; font-weight: 700; color: var(--text); }
+.dlg__sum b.up { color: var(--up); }
+.dlg__sum b.down { color: var(--down); }
+.dlg__body { flex: 1 1 auto; overflow-y: auto; padding: 0 6px; }
+.dlg__table { min-width: 520px; }
+.dlg__table td:first-child, .dlg__table th:first-child { text-align: left; }
+.dlg__foot {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 14px; border-top: 1px solid var(--border);
+  font-size: 12px; color: var(--text-2);
+}
+.dlg__pages { display: flex; align-items: center; gap: 8px; }
+.dlg__pages button {
+  border: 1px solid var(--border); background: var(--panel); cursor: pointer;
+  font-size: 12px; padding: 4px 12px; border-radius: 5px; color: var(--text-2); font-family: inherit;
+}
+.dlg__pages button:hover:not(:disabled) { color: var(--text); background: var(--panel-2); }
+.dlg__pages button:disabled { color: #c3cad6; cursor: not-allowed; }
+
+/* 资金明细：入金/申购小字说明 */
+.dlg-table .dlg-sub { color: var(--text-3); font-size: 10px; margin-left: 3px; }
+/* 资金明细：TWR 基准日之前的空仓期行（收益率显示 --）淡显 */
+.dlg-table tr.is-prebase td { color: var(--text-3); }

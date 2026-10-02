@@ -721,6 +721,9 @@ def scrape(codes, proxy, retries=3, quiet=False):
                 "items": [dict(it) for it in QQQ_PROXY["items"]],
             }
             _nav, alloc = fetch_nav(code, retries=retries)
+            # 代理基金同样要落 nav：016532/016533（ETF联接）在东财是有净值的，
+            # 之前这里把 _nav 丢弃，导致 fund_holdings.json 里这两只没有 nav，
+            # 前端「资金明细」历史序列会把它们过滤掉、合计对不上持仓表。
             if not alloc:
                 alloc = dict(PROXY_ALLOC)
             bond = float(alloc.get("bond", 0.0) or 0.0)
@@ -731,9 +734,12 @@ def scrape(codes, proxy, retries=3, quiet=False):
             equity = round(max(0.0, 100.0 - bond - cash), 2)
             entry["items"][0]["p"] = equity
             entry["alloc"] = alloc
+            if _nav:
+                entry["nav"] = _nav
             result[code] = entry
             if not quiet:
-                sys.stderr.write("  [代理] %s 使用 QQQ 代理(股权暴露 %.2f%%, 现金 %.2f%%)\n" % (code, equity, cash))
+                sys.stderr.write("  [代理] %s 使用 QQQ 代理(股权暴露 %.2f%%, 现金 %.2f%%)%s\n" % (
+                    code, equity, cash, "" if _nav else "，未取到 nav"))
             continue
         if not quiet:
             sys.stderr.write("  [抓取] %s ...\n" % code)

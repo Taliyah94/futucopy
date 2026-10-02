@@ -36,6 +36,25 @@ jobs:
         with:
           python-version: "3.11"
 
+      # ---------------------------------------------------------------
+      # 密钥自检：脚本缺 IBKR_TOKEN / IBKR_QUERY_ID_1DAY 时会在 1 秒内
+      # sys.exit(1)（退出码 1），而 [warn]/[skip]/[ok] 三条正常路径都是
+      # 退出码 0 —— 所以「job 10 秒就红」几乎必然是 secrets 没配，
+      # 与其让人对着 "脚本报错（退出码 1）" 猜，不如在这里直接点名。
+      # 注意：这里只判断「secrets 是否存在」，不打印 secrets 的内容。
+      # ---------------------------------------------------------------
+      - name: 检查 Secrets 是否配置
+        run: |
+          MISSING=()
+          [ -z "${{ secrets.IBKR_TOKEN }}" ] && MISSING+=("IBKR_TOKEN")
+          [ -z "${{ secrets.IBKR_QUERY_ID_1DAY }}" ] && MISSING+=("IBKR_QUERY_ID_1DAY")
+          if [ ${#MISSING[@]} -ne 0 ]; then
+            echo "::error::仓库缺少需要的 Secrets：${MISSING[*]}"
+            echo "        请在仓库 Settings → Secrets and variables → Actions 添加后再重跑。"
+            exit 1
+          fi
+          echo "✅ IBKR_TOKEN / IBKR_QUERY_ID_1DAY 已配置"
+
       - name: 运行 IBKR 1day 解析脚本
         env:
           IBKR_TOKEN: ${{ secrets.IBKR_TOKEN }}
@@ -47,7 +66,9 @@ jobs:
           OUT=$(python parse_ibkr_asset1day.py $FORCE_ARG 2>&1); RC=$?
           echo "$OUT"
           if [ $RC -ne 0 ]; then
-            echo "::error::脚本报错（退出码 $RC）"
+            echo "$OUT" | grep -q "ERROR: 需设置 IBKR_TOKEN" \
+              && echo "::error::脚本报的是缺密钥，请看上一步「检查 Secrets 是否配置」" \
+              || echo "::error::脚本报错（退出码 $RC），请看上方堆栈"
             exit $RC
           fi
           if echo "$OUT" | grep -q "\[ok\] 同步成功"; then
@@ -55,7 +76,9 @@ jobs:
           elif echo "$OUT" | grep -q "\[skip\] 今日"; then
             echo "ℹ️ 今日已同步过，跳过（正常）"
           elif echo "$OUT" | grep -q "\[warn\] 拉取失败"; then
-            echo "::warning::IBKR 报表未就绪，本次未写入（次日 05:10 UTC 再试）"
+            echo "::warning::IBKR 报表未就绪，本次未写入（次日 UTC 05:10 再试）"
+          else
+            echo "ℹ️ 脚本退出码为 0 但未命中 [ok]/[skip]/[warn]，检查上方日志"
           fi
 
       - name: 提交并推送更新后的 JSON

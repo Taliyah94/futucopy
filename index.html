@@ -2,6 +2,8 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8" />
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+<meta http-equiv="Pragma" content="no-cache" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>资产看板</title>
 <link rel="stylesheet" href="styles.css" />
@@ -15,19 +17,19 @@
       <button class="icon-btn" title="返回"><svg viewBox="0 0 24 24" class="ic"><path d="M15 5l-7 7 7 7"/></svg></button>
       <button class="icon-btn" title="前进"><svg viewBox="0 0 24 24" class="ic"><path d="M9 5l7 7-7 7"/></svg></button>
       <button class="icon-btn" title="刷新"><svg viewBox="0 0 24 24" class="ic"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg></button>
-    </div>
+</div>
 
     <div class="topbar__search">
       <svg viewBox="0 0 24 24" class="ic"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
       <input type="text" placeholder="搜索股票 / 代码 / 名称" />
-    </div>
+</div>
 
     <div class="topbar__brand">
       <span class="brand__logo" aria-hidden="true"></span>
       <span class="brand__name">资产看板</span>
       <span class="brand__et num" id="brandEt">美东 --:--:--</span>
       <b class="session-tag" id="brandSession" hidden>盘前</b>
-    </div>
+</div>
 
   </header>
 
@@ -52,8 +54,8 @@
         <span class="wl__title">自选</span>
         <div class="wl__actions">
           <button class="icon-btn icon-btn--sm" id="wlCollapse" title="收起自选"><svg viewBox="0 0 24 24" class="ic"><path d="M14 6l-6 6 6 6"/></svg></button>
-        </div>
-      </div>
+</div>
+</div>
 
       <div class="wl__tabs" data-tabs="group">
         <button class="tab is-active">全部</button>
@@ -61,13 +63,13 @@
         <button class="tab">沪深</button>
         <button class="tab">期货</button>
         <button class="tab">加密货币</button>
-      </div>
+</div>
 
       <div class="wl__columns">
         <span>名称代码</span>
         <span>最新价</span>
         <span>涨跌幅</span>
-      </div>
+</div>
 
       <ul class="wl__list" id="watchlist"></ul>
     </aside>
@@ -82,30 +84,30 @@
         <div class="quote-head__id">
           <span class="q-code" id="qCode">ORCL</span>
           <span class="q-name" id="qName">甲骨文</span>
-        </div>
+</div>
         <div class="quote-head__price">
           <span class="q-last" id="qLast">137.790</span>
           <span class="q-change" id="qChange">+5.190</span>
           <span class="q-pct" id="qPct">+3.91%</span>
-        </div>
+</div>
         <div class="quote-head__tools">
           <button class="icon-btn icon-btn--sm" title="指标"><svg viewBox="0 0 24 24" class="ic"><path d="M4 18l5-6 4 3 7-9"/></svg></button>
           <button class="icon-btn icon-btn--sm" title="画线"><svg viewBox="0 0 24 24" class="ic"><path d="M4 20l14-14"/><circle cx="18" cy="6" r="2"/></svg></button>
           <button class="icon-btn icon-btn--sm" title="截图"><svg viewBox="0 0 24 24" class="ic"><rect x="3" y="6" width="18" height="14" rx="2"/><circle cx="12" cy="13" r="4"/></svg></button>
           <button class="icon-btn icon-btn--sm" title="全屏"><svg viewBox="0 0 24 24" class="ic"><path d="M4 9V4h5M20 15v5h-5M15 4h5v5M9 20H4v-5"/></svg></button>
-        </div>
-      </div>
+</div>
+</div>
 
       <div class="chart-toolbar">
         <div class="ct-periods" data-tabs="period">
-          <button class="ct-tab is-active" id="periodTab">分时</button>
-          <button class="ct-tab">5日</button>
-          <button class="ct-tab">日K</button>
-          <button class="ct-tab">周K</button>
-          <button class="ct-tab">月K</button>
-          <button class="ct-tab">季K</button>
-          <button class="ct-tab">年K</button>
-        </div>
+          <button class="ct-tab is-active" id="periodTab" data-chart-mode="time">分时</button>
+          <button class="ct-tab" data-chart-mode="d5">5日</button>
+          <button class="ct-tab" data-chart-mode="d1">日K</button>
+          <button class="ct-tab" data-chart-mode="wk">周K</button>
+          <button class="ct-tab" data-chart-mode="mo">月K</button>
+          <button class="ct-tab" data-chart-mode="qr">季K</button>
+          <button class="ct-tab" data-chart-mode="yr">年K</button>
+</div>
         <!-- 美股分时时段下拉（仿富途：盘前/盘中/盘后/夜盘/全天） -->
         <ul class="session-menu" id="usSessionMenu" hidden>
           <li data-session="pre">
@@ -133,18 +135,18 @@
         <div class="ct-types">
           <button class="icon-btn icon-btn--sm is-active" title="时间线"><svg viewBox="0 0 24 24" class="ic"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg></button>
           <button class="icon-btn icon-btn--sm" title="蜡烛"><svg viewBox="0 0 24 24" class="ic"><path d="M7 4v16M7 8h3v8H7zM17 4v16M14 6h3v6h-3z"/></svg></button>
-        </div>
+</div>
         <div class="ct-right">
           <button class="icon-btn icon-btn--sm" title="十字光标"><svg viewBox="0 0 24 24" class="ic"><path d="M12 3v18M3 12h18"/></svg></button>
           <button class="icon-btn icon-btn--sm" title="对比"><svg viewBox="0 0 24 24" class="ic"><path d="M4 7h10M4 17h6M14 10h6M10 20h10"/></svg></button>
           <button class="icon-btn icon-btn--sm" title="复权"><svg viewBox="0 0 24 24" class="ic"><path d="M4 12a8 8 0 1 1 3 6.2"/><path d="M4 7v5h5"/></svg></button>
           <button class="icon-btn icon-btn--sm" title="设置"><svg viewBox="0 0 24 24" class="ic"><circle cx="12" cy="12" r="3"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21"/></svg></button>
-        </div>
-      </div>
+</div>
+</div>
 
       <div class="chart-stage">
         <canvas id="priceChart"></canvas>
-      </div>
+</div>
 
       <div class="chart-indicators" data-tabs="indicator">
         <button class="ci-tab">BOLL</button>
@@ -162,7 +164,7 @@
         <button class="ci-tab">RSI</button>
         <button class="ci-tab">IV</button>
         <button class="ci-tab">市盈率</button>
-      </div>
+</div>
     </main>
 
     <!-- 评论面板 -->
@@ -171,12 +173,12 @@
         <button class="cp-tab is-active">最新</button>
         <button class="cp-tab">推荐</button>
         <button class="icon-btn icon-btn--sm cp__close" title="收起"><svg viewBox="0 0 24 24" class="ic"><path d="M9 5l7 7-7 7"/></svg></button>
-      </div>
+</div>
 
       <div class="cp__compose">
         <svg viewBox="0 0 24 24" class="ic"><path d="M4 20l3-8 10-8 3 3-8 10-8 3z"/></svg>
         <input type="text" placeholder="分享心情或投资心得" />
-      </div>
+</div>
 
       <ul class="cp__list" id="commentList"></ul>
     </aside>
@@ -187,10 +189,10 @@
       <!-- 左侧：账户资产摘要 -->
       <aside class="acc-side">
         <div class="acc-side__card">
-          <div class="acc-side__label">总资产 · CNY <svg class="ic ic--info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8v.5"/></svg></div>
+          <div class="acc-side__label">总资产 · CNY</div>
           <div class="acc-side__total num" id="accTotalVal">--</div>
           <svg class="acc-side__spark" viewBox="0 0 100 24" preserveAspectRatio="none"><path id="accSpark" d="" fill="none" stroke="#ff8f1f" stroke-width="1.5"/></svg>
-        </div>
+</div>
 
         <ul class="acc-side__list">
           <li class="is-active">
@@ -200,15 +202,15 @@
               <div class="as-line as-line--2r is-active" data-cat="stock">
                 <div class="asl-col"><span>证券</span><b class="num" id="accStockVal">--</b></div>
                 <div class="asl-col asl-col--r"><span>今日盈亏</span><i class="num" id="accStockNote">--</i><i class="num" id="accStockPct">--</i></div>
-              </div>
+</div>
               <div class="as-line as-line--2r" data-cat="fund">
                 <div class="asl-col"><span>基金</span><b class="num" id="accFundVal">--</b></div>
                 <div class="asl-col asl-col--r"><span>昨日收益</span><i class="num" id="accFundNote">--</i></div>
-              </div>
+</div>
               <div class="as-line as-line--2r" data-cat="cash">
                 <div class="asl-col"><span>现金</span><b class="num" id="accCashVal">--</b></div>
-              </div>
-            </div>
+</div>
+</div>
           </li>
         </ul>
       </aside>
@@ -216,9 +218,65 @@
       <!-- 主区：账户总览 + 持仓 -->
       <div class="acc-main">
         <div class="acc-head">
-          <h2>盈透证券账户(U18576039)</h2>
+          <h2 id="accHeadTitle">盈透证券账户(U18576039)</h2>
           <button class="icon-btn icon-btn--sm" title="收起"><svg viewBox="0 0 24 24" class="ic"><path d="M6 9l6 6 6-6"/></svg></button>
-        </div>
+</div>
+
+        <!-- ============ 全部账户总览页（模仿富途「全部账户」） ============ -->
+        <div class="acc-page" data-cat-page="total" hidden>
+          <div class="acc-overview">
+
+            <!-- 品类 / 币种分布 -->
+            <div class="ao-dist">
+              <div class="ao-dist__col">
+                <h4>品类</h4>
+                <div class="ao-bar" id="aoCatBar"></div>
+                <ul class="ao-legend" id="aoCatLegend"></ul>
+</div>
+              <div class="ao-dist__col">
+                <h4>币种</h4>
+                <div class="ao-bar" id="aoCurBar"></div>
+                <ul class="ao-legend" id="aoCurLegend"></ul>
+</div>
+</div>
+
+            <!-- 走势 tab + 时间范围 -->
+            <div class="ao-chart-head">
+              <div class="ao-tabs" id="aoTabs">
+                <button class="is-active" data-ao-tab="return">收益率走势</button>
+                <button data-ao-tab="asset">资产走势</button>
+</div>
+              <div class="ao-ranges" id="aoRanges">
+                <button data-ao-range="1w" class="is-active">近1周</button>
+                <button data-ao-range="1m">近1月</button>
+                <button data-ao-range="ytd">年初至今</button>
+                <button disabled>自定义</button>
+</div>
+</div>
+
+            <!-- 悬停时：日期 + 资产净值 / 当日收益；未悬停：累计收益 / 区间收益率 -->
+            <div class="ao-stats" id="aoStats">
+              <div class="ao-stat ao-stat--hover">
+                <span id="aoStatDate">--</span>
+                <b class="num" id="aoStatPoint">--</b>
+              </div>
+              <div class="ao-stat ao-stat--hover">
+                <span id="aoStatName">当日收益</span>
+                <b class="num" id="aoStatDay">--</b>
+              </div>
+              <div class="ao-stat ao-stat--range">
+                <span id="aoStatLabel">累计收益 · CNY</span>
+                <b class="num" id="aoStatVal">--</b>
+              </div>
+              <div class="ao-stat ao-stat--range">
+                <span id="aoStatLabel2">区间收益率</span>
+                <b class="num" id="aoStatPct">--</b>
+              </div>
+            </div>
+
+            <div class="ao-chart-wrap" id="aoChartWrap"><canvas id="aoChart"></canvas></div>
+</div>
+</div>
 
         <!-- ============ 证券页 ============ -->
         <div class="acc-page" data-cat-page="stock">
@@ -226,28 +284,23 @@
         <!-- 五列指标 -->
         <div class="acc-metrics">
           <div class="acc-metric">
-            <h4>资产 <svg class="ic ic--info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8v.5"/></svg></h4>
-            <div class="m-row"><span>证券市值</span><b class="num" id="mStockVal">--</b></div>
-            <div class="m-row"><span>· 多头市值</span><b class="num" id="mStockLong">--</b></div>
-            <div class="m-row"><span>· 空头市值</span><b class="num" id="mStockShort">--</b></div>
-            <div class="m-row"><span>在途资产 <svg class="ic ic--info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8v.5"/></svg></span><b class="num">0.00</b></div>
-            <div class="m-row"><span>累计收益</span><b class="num" id="mPnlTotal">--</b></div>
-          </div>
+            <h4>资产</h4>
+            <div class="m-row"><span>证券市值</span><b class="num" id="mStockVal">--</b><i class="m-usd" id="mStockValUsd"></i></div>
+            <div class="m-row"><span>· 多头市值</span><b class="num" id="mStockLong">--</b><i class="m-usd" id="mStockLongUsd"></i></div>
+            <div class="m-row"><span>· 空头市值</span><b class="num" id="mStockShort">--</b><i class="m-usd" id="mStockShortUsd"></i></div>
+            <div class="m-row"><span>在途资产</span><b class="num">0.00</b><i class="m-usd" id="mInTransitUsd">0.00</i></div>
+            <div class="m-row"><span>累计收益</span><b class="num" id="mPnlTotal">--</b><i class="m-usd" id="mPnlTotalUsd"></i></div>
+</div>
           <div class="acc-metric">
             <h4>现金明细</h4>
             <div class="m-row"><span>现金总值 ·CNY</span><b class="num" id="mCashCny">--</b></div>
             <div class="m-row"><span><svg class="flag" viewBox="0 0 16 16"><defs><clipPath id="fclip"><circle cx="8" cy="8" r="8"/></clipPath></defs><g clip-path="url(#fclip)"><rect width="16" height="16" fill="#fff"/><rect y="1.8" width="16" height="1.5" fill="#d80031"/><rect y="5" width="16" height="1.5" fill="#d80031"/><rect y="8.2" width="16" height="1.5" fill="#d80031"/><rect y="11.4" width="16" height="1.5" fill="#d80031"/><rect y="14.5" width="16" height="1.5" fill="#d80031"/><rect width="8" height="7" fill="#2e52b2"/></g></svg> USD</span><b class="num" id="mCashUsd">--</b></div>
-          </div>
+</div>
           <div class="acc-metric">
-            <h4>现金可提</h4>
-            <div class="m-row"><span>可提总值 ·CNY</span><b class="num">--</b></div>
-            <div class="m-row"><span><svg class="flag" viewBox="0 0 16 16"><g clip-path="url(#fclip)"><rect width="16" height="16" fill="#fff"/><rect y="1.8" width="16" height="1.5" fill="#d80031"/><rect y="5" width="16" height="1.5" fill="#d80031"/><rect y="8.2" width="16" height="1.5" fill="#d80031"/><rect y="11.4" width="16" height="1.5" fill="#d80031"/><rect y="14.5" width="16" height="1.5" fill="#d80031"/><rect width="8" height="7" fill="#2e52b2"/></g></svg> USD</span><b class="num">--</b></div>
-          </div>
-          <div class="acc-metric">
-            <h4>购买力 <svg class="ic ic--info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8v.5"/></svg></h4>
+            <h4>购买力</h4>
             <div class="m-row"><span>最大购买力 ·CNY</span><b class="num">--</b></div>
             <div class="m-row"><span><svg class="flag" viewBox="0 0 16 16"><g clip-path="url(#fclip)"><rect width="16" height="16" fill="#fff"/><rect y="1.8" width="16" height="1.5" fill="#d80031"/><rect y="5" width="16" height="1.5" fill="#d80031"/><rect y="8.2" width="16" height="1.5" fill="#d80031"/><rect y="11.4" width="16" height="1.5" fill="#d80031"/><rect y="14.5" width="16" height="1.5" fill="#d80031"/><rect width="8" height="7" fill="#2e52b2"/></g></svg> USD</span><b class="num">--</b></div>
-          </div>
+</div>
           <div class="acc-metric">
             <h4>风险水平</h4>
             <div class="m-row"><span>风险状态</span><b></b></div>
@@ -255,8 +308,8 @@
             <div class="m-row"><span>剩余流动性</span><b></b></div>
             <div class="m-row"><span>初始保证金</span><b></b></div>
             <div class="m-row"><span>维持保证金</span><b></b></div>
-          </div>
-        </div>
+</div>
+</div>
 
         <!-- 功能按钮行 -->
         <div class="acc-actions">
@@ -266,11 +319,11 @@
           <button><svg class="ic c-purple" viewBox="0 0 24 24"><path d="M4 8h13M14 4.5L17.5 8 14 11.5"/><path d="M20 16H7M10 12.5L6.5 16l3.5 3.5"/></svg><span>货币兑换</span></button>
           <button><svg class="ic c-orange" viewBox="0 0 24 24"><path d="M7 10h13M17 6.5L20.5 10 17 13.5"/><path d="M17 17H4M7 13.5L3.5 17 7 20.5"/></svg><span>资金调拨</span></button>
           <button><svg class="ic c-blue" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="16" rx="2"/><path d="M4 10h16M8 3v4M16 3v4"/><path d="M9 15l2 2 4-4"/></svg><span>年度报表</span></button>
-          <button><svg class="ic c-green" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="4" cy="6" r="1.2"/><circle cx="4" cy="12" r="1.2"/><circle cx="4" cy="18" r="1.2"/></svg><span>资金明细</span></button>
+          <button data-detail="stock"><svg class="ic c-green" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="4" cy="6" r="1.2"/><circle cx="4" cy="12" r="1.2"/><circle cx="4" cy="18" r="1.2"/></svg><span>资金明细</span></button>
           <button><svg class="ic c-green" viewBox="0 0 24 24"><path d="M6 3h12v18l-2-1.5L14 21l-2-1.5L10 21l-2-1.5L6 21z"/><path d="M9 8h6M9 12h6"/></svg><span>我的账单</span></button>
           <button><svg class="ic c-orange" viewBox="0 0 24 24"><path d="M4 8a2 2 0 0 0 0 8v3h16v-3a2 2 0 0 1 0-8V5H4z"/><path d="M12 6v2M12 11v2M12 16v2" stroke-dasharray="1 3"/></svg><span>卡券</span></button>
           <button><svg class="ic c-orange" viewBox="0 0 24 24"><rect x="3" y="12" width="18" height="8" rx="2"/><path d="M12 3v10M8.5 6.5L12 3l3.5 3.5"/></svg><span>转入股票</span></button>
-        </div>
+</div>
 
         <!-- 持仓 tabs -->
         <div class="acc-tabs">
@@ -278,7 +331,7 @@
           <button>订单(0)</button>
           <button>历史</button>
           <button>今日统计</button>
-        </div>
+</div>
 
         <!-- 筛选行 -->
         <div class="acc-filter">
@@ -287,11 +340,11 @@
           <div class="acc-search">
             <svg viewBox="0 0 24 24" class="ic"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
             <input type="text" placeholder="代码 / 名称" />
-          </div>
+</div>
           <button class="icon-btn icon-btn--sm" title="导出"><svg viewBox="0 0 24 24" class="ic"><path d="M12 15V4M8 7l4-4 4 4"/><path d="M4 15v4h16v-4"/></svg></button>
           <span class="acc-filter__spacer"></span>
           <button class="acc-batch">批量平仓</button>
-        </div>
+</div>
 
         <!-- 汇总行：市值 / 今日盈亏 / 持仓收益 -->
         <div class="acc-sumline">
@@ -301,15 +354,24 @@
           <b class="num" id="stockSumToday">0.00</b>
           <span class="sum-label">持仓收益</span>
           <b class="num" id="stockSumPnl">0.00</b>
-        </div>
+</div>
 
         <!-- 持仓表（当前为空） -->
         <div class="acc-table-wrap">
-          <table class="acc-table">
+          <table class="acc-table" data-sort-table="stock">
             <thead>
               <tr>
-                <th>操作</th><th>代码</th><th>名称</th><th>持有数量</th><th>可用数量</th>
-                <th>现价</th><th>摊薄成本价</th><th>市值</th><th>盈亏比例</th><th>持仓盈亏</th><th>今日盈亏</th>
+                <th>操作</th>
+                <th data-sort="code">代码<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                <th data-sort="name">名称<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                <th data-sort="qty">持有数量<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                <th data-sort="qty">可用数量<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                <th data-sort="price">现价<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                <th data-sort="cost">摊薄成本价<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                <th data-sort="value">市值<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                <th data-sort="ratio">盈亏比例<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                <th data-sort="pnl">持仓盈亏<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                <th data-sort="today">今日盈亏<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
               </tr>
             </thead>
             <tbody id="stockTbody"></tbody>
@@ -317,37 +379,71 @@
           <div class="acc-empty" id="stockEmpty" hidden>
             <svg viewBox="0 0 48 48" class="acc-empty__ic"><path d="M6 14a4 4 0 0 1 4-4h10l4 5h14a4 4 0 0 1 4 4v17a4 4 0 0 1-4 4H10a4 4 0 0 1-4-4z" fill="#e3e7ee"/></svg>
             <p>暂无数据</p>
-          </div>
-        </div>
+</div>
+</div>
 
-        </div><!-- /证券页 -->
+        <!-- 历史：成交明细 -->
+        <div class="acc-history" data-hist="stock" hidden>
+          <div class="acc-hist__head">
+            <b>成交</b>
+            <span class="acc-hist__sep"></span>
+            <span class="sum-label">成交数量</span>
+            <b class="num" id="stockHistCount">0</b>
+            <span class="acc-hist__sep"></span>
+            <span class="sum-label">总成交额: CNY <i class="caret"></i></span>
+            <b class="num" id="stockHistAmt">0.00</b>
+           
+            <span class="acc-hist__sep"></span>
+            <span class="sum-label">已实现盈亏: USD</span>
+            <b class="num" id="stockHistRealized">0.00</b>
+</div>
+          <div class="acc-table-wrap">
+            <table class="acc-table" data-sort-table="stockH">
+              <thead>
+                <tr>
+                  <th data-sort="name">名称/代码<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                  <th data-sort="side">方向<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                  <th data-sort="price">成交价格<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                  <th data-sort="amount">成交金额/数量<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                  <th data-sort="date">成交时间<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                  <th>市场</th>
+                  <th data-sort="cur">币种<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                  <th data-sort="realized">盈亏额<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                </tr>
+              </thead>
+              <tbody id="stockHistBody"></tbody>
+            </table>
+</div>
+</div>
+
+</div><!-- /证券页 -->
 
         <!-- ============ 基金页 ============ -->
         <div class="acc-page" data-cat-page="fund" hidden>
           <div class="acc-metrics acc-metrics--single">
             <div class="acc-metric">
-              <h4>资产 <svg class="ic ic--info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8v.5"/></svg></h4>
+              <h4>资产</h4>
               <div class="m-row"><span>昨日收益</span><b class="num" id="fundMYest">--</b></div>
-              <div class="m-row"><span>在途资产 <svg class="ic ic--info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8v.5"/></svg></span><b class="num">0.00</b></div>
+              <div class="m-row"><span>在途资产</span><b class="num">0.00</b></div>
               <div class="m-row"><span>累计收益</span><b class="num" id="fundMCum">--</b></div>
-            </div>
-          </div>
+</div>
+</div>
 
           <!-- 功能按钮行 -->
           <div class="acc-actions">
             <button><svg class="ic c-blue" viewBox="0 0 24 24"><rect x="3" y="8" width="15" height="11" rx="2"/><path d="M7 8V6a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v9"/><path d="M12 12v5M9.5 14.5L12 17l2.5-2.5"/></svg><span>存入资金</span></button>
             <button><svg class="ic c-purple" viewBox="0 0 24 24"><path d="M4 8h13M14 4.5L17.5 8 14 11.5"/><path d="M20 16H7M10 12.5L6.5 16l3.5 3.5"/></svg><span>货币兑换</span></button>
             <button><svg class="ic c-blue" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="16" rx="2"/><path d="M4 10h16M8 3v4M16 3v4"/><path d="M9 15l2 2 4-4"/></svg><span>年度报表</span></button>
-            <button><svg class="ic c-green" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="4" cy="6" r="1.2"/><circle cx="4" cy="12" r="1.2"/><circle cx="4" cy="18" r="1.2"/></svg><span>资金明细</span></button>
+            <button data-detail="fund"><svg class="ic c-green" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="4" cy="6" r="1.2"/><circle cx="4" cy="12" r="1.2"/><circle cx="4" cy="18" r="1.2"/></svg><span>资金明细</span></button>
             <button><svg class="ic c-green" viewBox="0 0 24 24"><path d="M6 3h12v18l-2-1.5L14 21l-2-1.5L10 21l-2-1.5L6 21z"/><path d="M9 8h6M9 12h6"/></svg><span>我的结单</span></button>
-          </div>
+</div>
 
           <!-- 持仓 tabs -->
           <div class="acc-tabs">
             <button class="is-active">持仓</button>
             <button>订单</button>
             <button>历史</button>
-          </div>
+</div>
 
           <!-- 筛选行 -->
           <div class="acc-filter">
@@ -355,9 +451,9 @@
             <div class="acc-search">
               <svg viewBox="0 0 24 24" class="ic"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
               <input type="text" placeholder="代码 / 名称" />
-            </div>
+</div>
             <button class="icon-btn icon-btn--sm" title="导出"><svg viewBox="0 0 24 24" class="ic"><path d="M12 15V4M8 7l4-4 4 4"/><path d="M4 15v4h16v-4"/></svg></button>
-          </div>
+</div>
 
           <!-- 汇总行 -->
           <div class="acc-sumline">
@@ -365,55 +461,88 @@
             <b class="num" id="fundSumVal">--</b>
             <span class="sum-label">持仓收益</span>
             <b class="num" id="fundSumProfit">--</b>
-          </div>
+</div>
 
           <!-- 持仓表（JS 渲染基金数据） -->
           <div class="acc-table-wrap">
-            <table class="acc-table">
+            <table class="acc-table" data-sort-table="fund">
               <thead>
                 <tr>
-                  <th>操作</th><th>名称</th><th>ISIN代码</th><th>持仓金额</th><th>持仓份额</th>
-                  <th>昨日收益</th><th>持仓收益</th><th>持仓占比</th><th>币种</th>
+                  <th>操作</th>
+                  <th data-sort="name">名称<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                  <th data-sort="code">ISIN代码<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                  <th data-sort="amount">持仓金额<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                  <th data-sort="shares">持仓份额<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                  <th data-sort="yest">昨日收益<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                  <th data-sort="cum">持仓收益<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                  <th data-sort="weight">持仓占比<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                  <th data-sort="cur">币种<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
                 </tr>
               </thead>
               <tbody id="fundTbody"></tbody>
             </table>
-          </div>
-        </div><!-- /基金页 -->
+</div>
+
+          <!-- 历史：订单 -->
+          <div class="acc-history" data-hist="fund" hidden>
+            <div class="acc-hist__head">
+              <b>订单</b>
+              <span class="acc-hist__sep"></span>
+              <span class="sum-label">订单数量</span>
+              <b class="num" id="fundHistCount">0</b>
+</div>
+            <div class="acc-table-wrap">
+              <table class="acc-table" data-sort-table="fundH">
+                <thead>
+                <tr>
+                  <th data-sort="type">交易类型/状态<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                  <th data-sort="name">产品名称<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                  <th data-sort="amount">金额/份额<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                  <th data-sort="cur">币种<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                  <th data-sort="date">下单时间<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                  <th data-sort="source">订单来源<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                  <th>订单详情</th>
+                </tr>
+                </thead>
+                <tbody id="fundHistBody"></tbody>
+              </table>
+</div>
+</div>
+</div><!-- /基金页 -->
 
         <!-- ============ 现金页（按债券模板） ============ -->
         <div class="acc-page" data-cat-page="cash" hidden>
           <div class="acc-metrics acc-metrics--single">
             <div class="acc-metric">
-              <h4>资产 <svg class="ic ic--info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8v.5"/></svg></h4>
+              <h4>资产</h4>
               <div class="m-row"><span>应计利息</span><b class="num">0.00</b></div>
               <div class="m-row"><span>持仓收益</span><b class="num">0.00</b></div>
-            </div>
-          </div>
+</div>
+</div>
 
           <!-- 功能按钮行 -->
           <div class="acc-actions">
             <button><svg class="ic c-blue" viewBox="0 0 24 24"><rect x="3" y="8" width="15" height="11" rx="2"/><path d="M7 8V6a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v9"/><path d="M12 12v5M9.5 14.5L12 17l2.5-2.5"/></svg><span>存入资金</span></button>
             <button><svg class="ic c-purple" viewBox="0 0 24 24"><path d="M4 8h13M14 4.5L17.5 8 14 11.5"/><path d="M20 16H7M10 12.5L6.5 16l3.5 3.5"/></svg><span>货币兑换</span></button>
-            <button><svg class="ic c-green" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="4" cy="6" r="1.2"/><circle cx="4" cy="12" r="1.2"/><circle cx="4" cy="18" r="1.2"/></svg><span>资金明细</span></button>
+            <button data-detail="cash"><svg class="ic c-green" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="4" cy="6" r="1.2"/><circle cx="4" cy="12" r="1.2"/><circle cx="4" cy="18" r="1.2"/></svg><span>资金明细</span></button>
             <button><svg class="ic c-green" viewBox="0 0 24 24"><path d="M6 3h12v18l-2-1.5L14 21l-2-1.5L10 21l-2-1.5L6 21z"/><path d="M9 8h6M9 12h6"/></svg><span>我的结单</span></button>
-          </div>
+</div>
 
           <!-- 持仓 tabs -->
           <div class="acc-tabs">
             <button class="is-active">持仓</button>
             <button>订单</button>
             <button>历史</button>
-          </div>
+</div>
 
           <!-- 筛选行 -->
           <div class="acc-filter">
             <div class="acc-search">
               <svg viewBox="0 0 24 24" class="ic"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
               <input type="text" placeholder="输入名称" />
-            </div>
+</div>
             <button class="icon-btn icon-btn--sm" title="导出"><svg viewBox="0 0 24 24" class="ic"><path d="M12 15V4M8 7l4-4 4 4"/><path d="M4 15v4h16v-4"/></svg></button>
-          </div>
+</div>
 
           <!-- 汇总行 -->
           <div class="acc-sumline">
@@ -421,16 +550,20 @@
             <b class="num" id="cashSumVal">--</b>
             <span class="sum-label">持仓收益</span>
             <b class="num" id="cashSumProfit">0.00</b>
-          </div>
+</div>
 
           <!-- 持仓表（当前为空） -->
           <div class="acc-table-wrap">
-            <table class="acc-table">
+            <table class="acc-table" data-sort-table="cash">
               <thead>
                 <tr>
-                  <th>操作</th><th>名称</th><th>ISIN代码</th><th>市值</th><th>持有面值</th>
-                  <th>参考中间价</th><th>持仓成本</th><th>应计利息</th><th>已获利息</th>
-                  <th>持仓收益</th><th>持仓占比</th><th>币种</th>
+                  <th>操作</th>
+                  <th data-sort="note">名称<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                  <th>ISIN代码</th>
+                  <th data-sort="cny">市值<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                  <th data-sort="bal">持有面值<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                  <th>参考中间价</th><th>持仓成本</th><th>应计利息</th><th>已获利息</th><th>持仓收益</th><th>持仓占比</th>
+                  <th data-sort="cur">币种<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
                 </tr>
               </thead>
               <tbody id="cashTbody"></tbody>
@@ -438,13 +571,73 @@
             <div class="acc-empty" id="cashEmpty" hidden>
               <svg viewBox="0 0 48 48" class="acc-empty__ic"><path d="M6 14a4 4 0 0 1 4-4h10l4 5h14a4 4 0 0 1 4 4v17a4 4 0 0 1-4 4H10a4 4 0 0 1-4-4z" fill="#e3e7ee"/></svg>
               <p>暂无数据</p>
+</div>
+</div>
+
+          <!-- 历史：成交订单（现金存入/取出 + 换汇） -->
+          <div class="acc-history" data-hist="cash" hidden>
+            <div class="acc-hist__head">
+              <b>成交订单</b>
+</div>
+            <div class="acc-table-wrap">
+              <table class="acc-table" data-sort-table="cashH">
+                <thead>
+                <tr>
+                  <th data-sort="name">名称<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                  <th data-sort="side">方向<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                  <th data-sort="date">成交时间<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                  <th data-sort="face">成交面值<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                  <th data-sort="price">成交净价<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                  <th>应计利息</th>
+                  <th data-sort="amount">成交金额<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                  <th data-sort="cur">币种<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                </tr>
+                </thead>
+                <tbody id="cashHistBody"></tbody>
+              </table>
+</div>
+</div>
+        </div><!-- /现金页 -->
+      </div>
+
+      <!-- ============ 资金明细弹窗（证券 / 基金 / 现金 的每日净值列表） ============ -->
+      <div class="dlg" id="detailDlg" hidden>
+        <div class="dlg__mask" data-dlg-close></div>
+        <div class="dlg__box" role="dialog" aria-modal="true">
+          <div class="dlg__head">
+            <b id="dlgTitle">资金明细</b>
+            <button class="icon-btn icon-btn--sm" title="关闭" data-dlg-close>
+              <svg viewBox="0 0 24 24" class="ic"><path d="M6 6l12 12M18 6L6 18"/></svg>
+            </button>
+          </div>
+          <div class="dlg__sum" id="dlgSum"></div>
+          <div class="dlg__body">
+            <table class="acc-table dlg__table">
+              <thead>
+                <tr id="dlgHeadRow">
+                  <th>日期</th><th>净值 · CNY</th><th>日变动</th><th>日涨跌</th><th>累计涨跌</th>
+                </tr>
+              </thead>
+              <tbody id="dlgBody"></tbody>
+            </table>
+            <div class="acc-empty" id="dlgEmpty" hidden>
+              <svg viewBox="0 0 48 48" class="acc-empty__ic"><path d="M6 14a4 4 0 0 1 4-4h10l4 5h14a4 4 0 0 1 4 4v17a4 4 0 0 1-4 4H10a4 4 0 0 1-4-4z" fill="#e3e7ee"/></svg>
+              <p>暂无数据</p>
             </div>
           </div>
-        </div><!-- /现金页 -->
+          <div class="dlg__foot">
+            <span id="dlgCount">0 条</span>
+            <div class="dlg__pages">
+              <button id="dlgPrev">上一页</button>
+              <span id="dlgPage">1 / 1</span>
+              <button id="dlgNext">下一页</button>
+            </div>
+          </div>
+        </div>
       </div>
     </section>
 
-  </div>
+</div>
 
 </div>
 

@@ -802,6 +802,97 @@
     }
   });
 
+  /* ===================================================================
+     资讯面板：「最新」是社区评论（占位 mock），「推荐」接**华尔街见闻实时快讯**
+     （用户 2026-10-04 定稿）。数据源实测浏览器可直连：
+       https://api-one.wallstcn.com/apiv1/content/lives?channel=global-channel&client=pc&limit=30
+     CORS 反射 Origin；字段 title / content_text(纯文本) / display_time(Unix) / channels。
+     ⚠️ 约 15% 的快讯**没有 title**，只有正文 → 标题为空时直接只渲染正文，别显示空的加粗行。
+     ⚠️ content_text 里有多处空行（段落间），要压平成一行，否则时间轴会被撑开。 */
+  const NEWS_CHANNEL_CN = {
+    'global-channel': '全球', 'a-stock-channel': 'A股', 'us-stock-channel': '美股',
+    'hk-stock-channel': '港股', 'oil-channel': '原油', 'forex-channel': '外汇',
+    'xgb-channel': '港股', 'commodity-channel': '商品',
+  };
+  const NEWS_STATE = { items: [], ids: new Set(), cursor: null, loaded: false, loading: false };
+  const NEWS_API = 'https://api-one.wallstcn.com/apiv1/content/lives';
+  let cpTab = 'latest';                                  // 资讯面板当前 tab
+
+  /* 拉快讯：首次 30 条，之后每 30s 增量 10 条，新条目插到最前面（按 id 去重）。 */
+  async function fetchWallStcn(limit) {
+    if (NEWS_STATE.loading) return;
+    NEWS_STATE.loading = true;
+    try {
+      const url = `${NEWS_API}?channel=global-channel&client=pc&limit=${limit || 30}`
+        + (NEWS_STATE.cursor ? `&cursor=${NEWS_STATE.cursor}` : '');
+      const r = await Promise.race([fetch(url), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000))]);
+      if (!r.ok) return;
+      const j = await r.json();
+      const items = (j.data && j.data.items) || [];
+      if (j.data && j.data.next_cursor) NEWS_STATE.cursor = j.data.next_cursor;
+      const fresh = [];
+      items.forEach((x) => {
+        const id = String(x.id);
+        if (NEWS_STATE.ids.has(id)) return;
+        NEWS_STATE.ids.add(id);
+        const title = String(x.title || '').trim();
+        let body = String(x.content_text || x.content || '')
+          .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        /* ⚠️ content_text 通常**以标题开头**（"标题 正文"连写），直接 `${title} ${body}` 会重复一遍。
+           这里削掉正文里与标题重复的前缀，只在标题非空时显示加粗行。 */
+        if (title && body.startsWith(title)) body = body.slice(title.length).trim();
+        else if (title && !body) body = '';               // 只有标题没有正文时也别重复
+        fresh.push({
+          id,
+          time: new Date(x.display_time * 1000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+          ts: x.display_time,
+          title,
+          body,
+          ch: (x.channels || []).map((c) => NEWS_CHANNEL_CN[c] || '').filter(Boolean)[0] || '',
+        });
+      });
+      if (fresh.length) {
+        // 接口按时间倒序返回，fresh 已是新→旧；整体保持倒序拼接
+        NEWS_STATE.items = NEWS_STATE.loaded ? fresh.concat(NEWS_STATE.items) : fresh.concat(NEWS_STATE.items);
+        if (NEWS_STATE.items.length > 300) {
+          const cut = NEWS_STATE.items.splice(300);
+          cut.forEach((x) => NEWS_STATE.ids.delete(x.id));
+        }
+        NEWS_STATE.loaded = true;
+        if (cpTab === 'news') renderCpTab();
+      }
+    } catch (e) { /* 源不可达时保留上一批数据，面板不空 */ }
+    finally { NEWS_STATE.loading = false; }
+  }
+  /* 「更多」：按 cursor 往前翻一页 */
+  async function loadMoreNews() {
+    if (NEWS_STATE.loading || !NEWS_STATE.cursor) return;
+    await fetchWallStcn(20);
+  }
+
+  function renderCpTab() {
+    /* 快讯 tab 隐藏社区的「分享心情」输入框（那是发帖用的，快讯流里没有意义） */
+    const compose = document.querySelector('.cp__compose');
+    if (compose) compose.hidden = cpTab === 'news';
+    if (cpTab === 'news') renderNews();
+    else renderComments(APP_DATA.comments);
+  }
+
+  /* 快讯流：仿富途时间轴 —— 左侧圆点 + 时间，其下正文，右侧分享箭头 */
+  function renderNews() {
+    const ul = $('#commentList');
+    if (!ul) return;
+    if (!NEWS_STATE.items.length) {
+      ul.innerHTML = '<li class="cp__item cp__item--empty"><p class="cp__text">快讯加载中…</p></li>';
+      return;
+    }
+    ul.innerHTML = NEWS_STATE.items.map((n) => `
+      <li class="cp__item cp__news" data-id="${n.id}" title="${n.ch ? n.ch + ' · ' + n.time : n.time}">
+        <div class="cp__news-time"><i class="cp__dot"></i>${n.time}</div>
+        <p class="cp__text">${n.title ? `<b>${n.title}</b> ` : ''}${n.body}</p>
+      </li>`).join('');
+  }
+
   function renderComments(list) {
     const ul = $('#commentList');
     const q = APP_DATA.quote || {};
@@ -1028,7 +1119,7 @@
     renderQuote(APP_DATA.quote);
     renderWatchlist(APP_DATA.watchlist, APP_DATA.quote.code);
     renderTradeList();      // 交易页持仓列表（数据未就绪时显示「加载中…」）
-    renderComments(APP_DATA.comments);
+    renderCpTab();          // 资讯面板：按当前 tab 渲染（社区 / 华尔街见闻快讯）
     drawChart();          // 无 series 时显示空态，等待 OKX 拉取
   }
 
@@ -1070,6 +1161,13 @@
         wlTradeCat = tcat;
         renderWatchlist(APP_DATA.watchlist || [], (APP_DATA.quote || {}).code);
         renderTradeList();
+      }
+      // 资讯面板 tab：最新（社区 mock）/ 推荐（华尔街见闻快讯）
+      const cpc = btn.dataset.cpTab;
+      if (cpc && cpc !== cpTab) {
+        cpTab = cpc;
+        renderCpTab();
+        if (cpTab === 'news' && !NEWS_STATE.loaded) fetchWallStcn(30);   // 首次进快讯 tab 才拉
       }
     });
   });
@@ -1421,14 +1519,17 @@
     let homeParent = chartWrap, homeNext = null;
     let statsHome = statsEl ? statsEl.parentNode : null, statsNext = null;
 
-    // 全屏顶部标题 + 时间范围高亮，跟随 aoState 同步（定义在 openFs 之前，避免 TDZ 隐患）
+    // 全屏顶部：走势图 tab 高亮 + 时间范围高亮，跟随 aoState 同步（定义在 openFs 之前，避免 TDZ 隐患）
     const RANGE_LABEL = { '1w': '近1周', '1m': '近1月', 'ytd': '年初至今' };
     const syncFsUi = () => {
-      if (!fsTitle) return;
-      fsTitle.textContent = (aoState.mode === 'asset' ? '资产走势' : '收益率走势') + ' · ' + (RANGE_LABEL[aoState.range] || '');
       document.querySelectorAll('#aoFsRanges [data-ao-range]').forEach((x) => {
         x.classList.toggle('is-active', x.dataset.aoRange === aoState.range);
       });
+      document.querySelectorAll('#aoFsTabs [data-ao-fs-tab]').forEach((x) => {
+        x.classList.toggle('is-active', (x.dataset.aoFsTab === 'asset') === (aoState.mode === 'asset'));
+      });
+      /* 日历不是 canvas：主页面切到「收益日历」时全屏留着只会显示上一张过期图，直接退出 */
+      if (aoState.mode === 'cal' && !fs.hidden) closeFs();
     };
 
     const openFs = () => {
@@ -1454,9 +1555,18 @@
       requestAnimationFrame(drawAoChart);
     };
     if (fsBtn) fsBtn.addEventListener('click', (e) => { e.stopPropagation(); openFs(); });
-    // 点图表空白处也能进全屏（按钮区域已在上面 stopPropagation）
-    chartWrap.addEventListener('click', (e) => { if (e.target === canvas) openFs(); });
+    /* ⚠️ 不要再给图表加「点击进全屏」：那是移动端放大用的早期做法，桌面上点一下图表
+       （想看某个点的数值、拖动查看）就整屏弹出来，非常误触（用户 2026-10-04 反馈）。
+       现在**只有时间范围行左侧的全屏按钮**能进全屏，移动端同样有那个按钮。 */
     if (fsClose) fsClose.addEventListener('click', closeFs);
+    // 全屏里的走势图 tab：点击走主页面的 peer，再回写高亮（与时间范围同一套做法）
+    document.querySelectorAll('#aoFsTabs [data-ao-fs-tab]').forEach((b) => {
+      b.addEventListener('click', () => {
+        const peer = document.querySelector(`#aoTabs [data-ao-tab="${b.dataset.aoFsTab}"]`);
+        if (peer) peer.click();                      // 复用主页面的切换逻辑（含 drawAoChart）
+        syncFsUi();
+      });
+    });
     // 全屏里的时间范围按钮与主页面的保持同步（点击走主页面的 peer，再回写高亮与标题）
     document.querySelectorAll('#aoFsRanges [data-ao-range]').forEach((b) => {
       b.addEventListener('click', () => {
@@ -1493,6 +1603,12 @@
   setInterval(() => {
     if (typeof TRADE_POS.refresh === 'function') TRADE_POS.refresh();
   }, 18000);
+
+  /* 华尔街见闻快讯：启动即预拉一份（这样切到「推荐」tab 不用等），
+     之后每 30s 增量拉 10 条，新条目插到列表顶部。
+     页面不可见时跳过；重复 id 已在 fetchWallStcn 内按 Set 去重。 */
+  fetchWallStcn(30);
+  setInterval(() => { if (!document.hidden) fetchWallStcn(10); }, 30000);
 
   /* 顶栏「刷新」按钮（移动端左侧唯一保留的按钮）：
      手动重拉一轮数据 = 自选行情 + 外汇行 + 当前标的图表/分时。
@@ -1944,9 +2060,11 @@
     return { byDate, days, months };
   }
 
+  /* 日历金额**只显示整数**（用户 2026-10-04 定稿）：格子里原本是 +3,208.15 这种两位小数，
+     移动端每格只有约 58px 宽，小数位把数字挤到几乎贴边；取整后清爽很多，精度损失对读数无影响。 */
   function calFmt(n) {
     if (n == null) return '--';
-    return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return n.toLocaleString('en-US', { maximumFractionDigits: 0 });
   }
   function calPctText(v) { return v == null ? '--' : (v > 0 ? '+' : '') + v.toFixed(2) + '%'; }
   function calCls(v) { return v == null ? 'ao-cal__none' : v > 0 ? 'ao-cal__up' : v < 0 ? 'ao-cal__down' : 'ao-cal__flat'; }

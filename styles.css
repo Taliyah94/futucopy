@@ -271,7 +271,7 @@ html, body {
 .wl__row.is-active { background: #fff6ec; border-left-color: var(--accent); }
 
 .wl-name { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.wl-name b { font-size: 12px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wl-name b { font-size: 13px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wl-name span { font-size: 10px; color: var(--text-3); }
 /* 数据时间备注（只有无 K 线的静态行才有）：跟在副行末尾，浅灰更淡、带方括号区分 */
 .wl-asof { font-style: normal; opacity: .75; margin-left: 5px; }
@@ -485,9 +485,25 @@ html, body {
   color: var(--text); font-size: 12px;
 }
 .cp__compose input::placeholder { color: var(--text-3); }
+/* 快讯 tab 下隐藏分享框。⚠️ 必须显式写 display:none —— 基础规则是 `display:flex`，
+   与同特异度的 [hidden] 默认样式冲突（`hidden` 只加 UA 层的 display:none，优先级更低）。 */
+.cp__compose[hidden] { display: none !important; }
 
 .cp__list { flex: 1; overflow-y: auto; list-style: none; padding-bottom: 12px; }
 .cp__item { padding: 12px 14px; border-bottom: 1px solid var(--border); }
+/* ---- 快讯流（华尔街见闻）：仿富途时间轴 = 左侧圆点+时间，下方正文 ---- */
+.cp__news { padding: 10px 14px 12px 14px; }
+.cp__news-time {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px; color: var(--text-3); margin-bottom: 4px;
+}
+.cp__dot {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: var(--border-2); flex: 0 0 auto;
+}
+.cp__news .cp__text { font-size: 13px; line-height: 1.55; color: var(--text); }
+.cp__news .cp__text b { font-weight: 700; }
+.cp__item--empty .cp__text { color: var(--text-3); }
 .cp__user { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .cp__avatar {
   width: 28px; height: 28px; border-radius: 50%;
@@ -574,17 +590,19 @@ html, body {
   .rail__spacer, .rail__avatar { display: none; }
   .rail__item {
     flex: 1 1 0;
-    height: 40px;
+    height: 50px;                    /* 40 → 50：图标+文字都放大，触控目标更从容 */
     flex-direction: column;          /* 图标在上、文字在下 */
-    gap: 2px;
-    font-size: 10px;
+    gap: 3px;
+    font-size: 12px;
   }
   /* 移动端用文字标签，因为底部空间更易辨识 */
   .rail__item::after {
     content: attr(data-label);
-    font-size: 10px;
+    font-size: 12px;                 /* 10 → 12，和名称列 13px 同一档 */
     line-height: 1;
   }
+  /* 图标 16px（基础 .ic）在 50px 高的按钮里显得过小，单独放大到 22px */
+  .rail__item .ic { width: 22px; height: 22px; stroke-width: 1.7; }
   .rail__item.is-active { background: transparent; }
 
   /* 自选抽屉 */

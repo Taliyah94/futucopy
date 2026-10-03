@@ -15,7 +15,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="资产看板" />
-<link rel="stylesheet" href="styles.css?v=20261003z" />
+<link rel="stylesheet" href="styles.css?v=20261004h" />
 </head>
 <body>
 <div class="app">
@@ -172,8 +172,8 @@
 
     <aside class="comment-panel">
       <div class="cp__head" data-tabs="feed">
-        <button class="cp-tab is-active">最新</button>
-        <button class="cp-tab">推荐</button>
+        <button class="cp-tab is-active" data-cp-tab="latest">最新</button>
+        <button class="cp-tab" data-cp-tab="news" title="华尔街见闻实时快讯">推荐</button>
         <button class="icon-btn icon-btn--sm cp__close" title="收起"><svg viewBox="0 0 24 24" class="ic"><path d="M9 5l7 7-7 7"/></svg></button>
 </div>
       <div class="cp__compose">
@@ -716,7 +716,11 @@
 
 <div class="ao-fs" id="aoFs" hidden>
   <div class="ao-fs__bar">
-    <b class="ao-fs__title" id="aoFsTitle">收益率走势</b>
+    <!-- 全屏内自带走势图 tab：否则全屏后只能看当前这张，收益率/资产之间切不了（用户 2026-10-04 反馈） -->
+    <div class="ao-tabs" id="aoFsTabs">
+      <button class="is-active" data-ao-fs-tab="return">收益率走势</button>
+      <button data-ao-fs-tab="asset">资产走势</button>
+    </div>
     <div class="ao-fs__ranges" id="aoFsRanges">
       <button data-ao-range="1w" class="is-active">近1周</button>
       <button data-ao-range="1m">近1月</button>
@@ -729,6 +733,6 @@
 </div>
 </div>
 </div>
-<script src="app.js?v=20261003z"></script>
+<script src="app.js?v=20261004h"></script>
 </body>
 </html>

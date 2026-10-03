@@ -74,6 +74,13 @@ html, body {
 }
 .icon-btn:hover { background: var(--panel-3); color: var(--text); }
 .icon-btn.is-active { background: var(--panel-3); color: var(--accent); }
+/* 刷新按钮：点击后旋转反馈（>680px 时才有这个按钮） */
+.icon-btn.is-loading .ic { animation: icon-spin .8s linear infinite; }
+@keyframes icon-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .icon-btn.is-loading .ic { animation: none; }   /* 尊重系统减弱动效设置 */
+}
+
 .icon-btn--sm { width: 24px; height: 24px; }
 .icon-btn--sm .ic { width: 14px; height: 14px; }
 
@@ -265,10 +272,18 @@ html, body {
 .panel-expand:hover { color: var(--text); background: var(--panel-2); }
 .panel-expand .ic { width: 14px; height: 14px; }
 .panel-expand--l { left: 8px; }
-.panel-expand--r { right: 8px; }
+/* 右侧展开按钮：贴在**屏幕**最右，纵向位置用变量算出（避免写死像素）：
+   顶栏 --topbar-h + 报价头(≈45) + 工具栏(37) + 8px 间距。
+   用 fixed 而非 absolute：评论面板收起时宽度为 0，
+   若跟随 .chart-area 定位会落在图表最后一列上遮住 K 线并拦截该区域点击。 */
+.panel-expand--r {
+  position: fixed;
+  right: 8px;
+  top: calc(var(--topbar-h) + 82px);
+}
 /* 面板收起时报价头给浮动按钮让位，文字不被遮挡 */
 .chart-area.wl-collapsed .quote-head { padding-left: 42px; }
-.chart-area.cp-collapsed .quote-head { padding-right: 46px; }
+.chart-area.cp-collapsed .quote-head { padding-right: 8px; }   /* 按钮已移出图表区，无需再让位 */
 
 .quote-head {
   display: flex; align-items: center;
@@ -304,6 +319,16 @@ html, body {
   border-left: 3.5px solid transparent; border-right: 3.5px solid transparent;
   border-top: 4.5px solid currentColor; vertical-align: 1.5px;
 }
+/* 分时按钮：图标代替「分时」二字（仿富途）。
+   图标内容随当前时段变化（盘前/盘中/盘后/夜盘/全天），由 JS 写入 #periodTabIcon。
+   用 currentColor 跟随按钮文字色：未选中=灰、选中(橙底)=白，自动适配。 */
+.ct-tab--icon { display: inline-flex; align-items: center; }
+.ct-tab--icon .pdi { display: inline-flex; align-items: center; }
+.ct-tab--icon .pdi svg { width: 19px; height: 19px; display: block; }
+.ct-tab--icon.has-caret::after { margin-left: 3px; }
+/* 选中态（橙底）下按钮文字是深棕 #1a1206，图标跟随之在橙底上对比度不足。
+   强制转白，与富途一致（未选中=灰、选中=白）。 */
+.ct-tab--icon.is-active .pdi svg { color: #fff; }
 
 /* 美股分时时段下拉（仿富途） */
 .session-menu {
@@ -444,9 +469,185 @@ html, body {
   .topbar__search { flex-basis: 150px; }
 }
 @media (max-width: 680px) {
-  .rail { display: none; }
-  .watchlist { display: none; }
-  .topbar__search, .topbar__left { display: none; }
+  /* 移动端布局（iPhone 15 Pro Max 等）：
+     - 左侧 rail 变成**底部 tab bar**（.rail 由竖排 flex 改为底部横排固定条）
+     - 自选列表变成**可切换的抽屉**：默认显示列表，点行后收起列表、显示该标的图表
+     - 顶栏精简：隐藏返回/前进/刷新/搜索，只留品牌 + 美东时钟
+     ⚠️ 不要再 display:none 掉 .watchlist —— 那样移动端就没有自选入口了。 */
+  .topbar__left { display: flex !important; }   /* 保留容器，里面只放行「刷新」 */
+  .topbar__left .icon-btn:nth-child(1),
+  .topbar__left .icon-btn:nth-child(2) { display: none; }   /* 返回/前进：移动端用不到 */
+  .topbar__search { display: none; }
+  .topbar { padding: 6px 12px; height: auto; min-height: 34px; }
+  .app { height: 100dvh; }          /* dvh 处理 iOS 地址栏收缩，避免底部被裁 */
+
+  /* 顶栏品牌区：桌面是 position:absolute + translate(-50%,-50%) 绝对居中，
+     移动端隐藏了左侧返回/搜索后没有占位元素，绝对定位的百分比基准就成了整条顶栏，
+     内容一多就折行（「资产看板」被拆成两行、日期也占两行）。
+     改为正常 flex 居中，并强制不换行、不缩放。 */
+  .topbar__brand {
+    position: static;
+    transform: none;
+    flex: 1 1 auto;
+    justify-content: center;
+    flex-wrap: nowrap;
+    min-width: 0;
+    gap: 6px;
+  }
+  .brand__name { font-size: 14px; white-space: nowrap; }
+  .brand__et { font-size: 11px; white-space: nowrap; }
+  .session-tag { white-space: nowrap; flex: 0 0 auto; }
+  .brand__logo { flex: 0 0 auto; width: 18px; height: 18px; }
+
+  /* rail → 底部 tab bar */
+  .rail {
+    order: 3;                        /* 排在主区之后 */
+    flex: 0 0 auto;
+    flex-direction: row;
+    justify-content: space-around;
+    align-items: center;
+    gap: 0;
+    padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
+    border-right: none;
+    border-top: 1px solid var(--border);
+    background: var(--panel);
+  }
+  .rail__spacer, .rail__avatar { display: none; }
+  .rail__item {
+    flex: 1 1 0;
+    height: 40px;
+    flex-direction: column;          /* 图标在上、文字在下 */
+    gap: 2px;
+    font-size: 10px;
+  }
+  /* 移动端用文字标签，因为底部空间更易辨识 */
+  .rail__item::after {
+    content: attr(data-label);
+    font-size: 10px;
+    line-height: 1;
+  }
+  .rail__item.is-active { background: transparent; }
+
+  /* 自选抽屉 */
+  .watchlist {
+    flex: 0 0 auto;
+    width: 100% !important;          /* 压过 `.watchlist{flex:0 0 var(--wl-w)}` 与
+                                        `.watchlist>*{width:var(--wl-w)}`（后者会把子元素也钉在 302px） */
+    flex: 1 1 auto !important;        /* 列表态占满整屏（主页只有自选，无图表） */
+    max-height: none;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+  .watchlist > * { width: 100% !important; }   /* 同上，解除 302px 固定宽 */
+  .watchlist.is-collapsed { display: none; }   /* 图表态：藏列表 */
+
+  /* 图表区：移动端默认隐藏（主页只显示自选），加 .is-chart-mode 才显示 */
+  .chart-area { display: none !important; }
+  body.is-chart-mode .chart-area { display: flex !important; }
+
+  .wl__title { font-size: 13px; }
+  .wl-name b { font-size: 13px; }              /* 触屏字号放大 */
+  /* 行更紧凑：触屏行高不必像鼠标那样留太多空间，13 行能多露出几行 */
+  .wl__row { padding: 5px 12px; }
+  .wl__columns { padding: 5px 12px; }
+  .wl-name { gap: 0; }
+
+  /* 图表保底高度：抽屉展开时也别把 canvas 压到画不出东西 */
+  .chart-stage { min-height: 200px; }
+
+  /* 主区自适应剩余高度 */
+  .workspace { flex-direction: column; min-height: 0; }
+  .main-pane, .market-view { min-height: 0; }
+
+  /* 报价头：窄屏会被工具按钮挤到竖排，强制单行 + 隐藏次要工具 */
+  .quote-head { padding: 8px 12px; gap: 10px; flex-wrap: nowrap; }
+  .quote-head__id { min-width: 0; flex: 0 1 auto; }
+  .q-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .quote-head__price { flex: 0 0 auto; gap: 8px; }
+  .q-last { font-size: 17px; }
+  .quote-head__tools .icon-btn:nth-child(n+3) { display: none; }  /* 只留前两个 */
+
+  /* 图表工具栏：7 个周期按钮 + 右侧工具在 430px 宽放不下（实测 scrollW 458 > 430，
+     右侧工具被裁掉点不到），所以整栏横向可滚动。
+     ⚠️ 但 `overflow-y: hidden` / `visible` 的取舍很关键：
+     「分时」的下拉菜单（.session-menu）是 .chart-toolbar 的绝对定位子元素，
+     往下溢出约 150px。CSS 规定 overflow-x/overflow-y 不能一个 auto 一个 visible
+     （visible 会被算成 auto），**只要工具栏设了任何非 visible 的 overflow，
+     下拉菜单就会被裁掉**（实测菜单在 y=115~265，工具栏仅 37px 高 → 整个被裁）。
+     解决：把横向滚动挪到内层 .ct-left 包装，工具栏本身保持 overflow:visible，
+     菜单就能正常浮出。scrollbar-width:none 是不让滚动条占移动端宝贵高度。 */
+  .chart-toolbar { position: relative; }   /* 作为下拉菜单的定位参照 */
+  .ct-left {
+    flex: 1 1 auto; min-width: 0;
+    overflow-x: auto; overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .ct-left::-webkit-scrollbar { display: none; }
+  .ct-periods { min-width: max-content; flex: 0 0 auto; }
+  .ct-tab { padding: 0 9px; }            /* 移动端收窄间距，给右侧工具留位置 */
+  .ct-tab--icon { padding: 0 10px; }      /* 图标按钮本身更窄才放得下 */
+  .ct-tab--icon .pdi svg { width: 21px; height: 21px; }   /* 触屏放大更醒目 */
+  .ct-right { flex: 0 0 auto; padding-left: 6px; }  /* 工具区固定在右侧，不参与滚动 */
+  .ct-types { display: none; }            /* 时间线/蜡烛 切换在窄屏无用 */
+  /* 下拉菜单：移动端贴左展开即可，宽度给足 */
+  .session-menu { min-width: 150px; }
+
+  /* 指标卡换行显示，不再横向溢出 */
+  .ci-tabs, .chart-indicators { flex-wrap: wrap; row-gap: 4px; }
+  /* 触屏没有 hover，禁用 hover 底色避免点完「粘住」高亮（选中态用 .is-active 单独表示） */
+  .wl__row:hover { background: transparent; }
+  .wl__row:active { background: var(--panel-2); }
+
+  /* 移动端不需要资讯面板的展开按钮：面板在 <1200px 是「全屏页」，
+     由底部 tab bar 的「资讯」直接切换，不需要浮动展开/收起按钮。 */
+  .panel-expand { display: none !important; }
+
+  /* 评论面板：<1200px 时基础规则是 display:none，这里改成
+     「由 body.is-comment-mode 控制的全屏页」，与自选/图表/账户互斥切换。
+     ⚠️ 不要设 order —— workspace 的子元素默认 order:0，
+     给了 order:1 反而排到 chart-area 之后被盖住（实测 elementFromPoint 返回 .workspace）。 */
+  .comment-panel {
+    display: none;
+    flex: 1 1 auto !important;   /* ⚠️ 必须压过基础规则 flex:0 0 var(--cp-w)（302px），
+                                    否则面板被压成 0 宽、内容被 workspace 盖住 */
+    width: 100% !important;       /* 压过 .comment-panel>*{width:var(--cp-w)} */
+    border-left: none;
+  }
+  .comment-panel > * { width: 100% !important; }
+  /* 启动时 JS 会给评论面板加 .is-collapsed（桌面「默认收起」逻辑），
+     移动端由 JS 主动移除该 class（见 showMobileComment），
+     这里只需保证 is-comment-mode 下一定显示。 */
+  body.is-comment-mode .comment-panel { display: flex !important; }
+  /* 资讯页打开时，自选列表与图表区都让位 */
+  body.is-comment-mode .watchlist,
+  body.is-comment-mode .chart-area { display: none !important; }
+
+  /* 自选列表的「收起/展开」箭头在移动端不需要：
+     桌面端是左中右三栏并排，靠箭头腾出图表宽度；
+     移动端列表与图表本来就是两页互斥（body.is-chart-mode），
+     由底部 tab bar 切换，箭头只会让人困惑。 */
+  #wlCollapse, #wlExpand { display: none !important; }
+
+  /* 账户视图：桌面是「左摘要 + 右主区」左右并排，窄屏改成上下堆叠，
+     否则 430px 宽会被各占一半、两边都看不清。 */
+  .account-view { flex-direction: column; overflow-y: auto; }
+  .acc-side {
+    /* ⚠️ 必须比第 552 行的 `.acc-side{width:var(--wl-w)}` 更靠后或更具体，
+       否则同优先级下后者胜出，窄屏会被压成 302px、右边留白。
+       `--wl-w:302px` 定义在 :root，这里用 `!important` 明确覆盖移动端意图。 */
+    width: 100% !important; flex: 0 0 auto !important;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    padding: 12px;
+    overflow-y: visible;
+  }
+  .acc-main { width: 100%; min-width: 0; flex: 1 1 auto; }
+  .acc-side__spark { height: 26px; }        /* 触屏矮一点，整体更紧凑 */
+  .acc-metrics { gap: 8px 14px; padding: 12px; }   /* 指标卡本来就是 flex，只调间距 */
+  .acc-actions { flex-wrap: wrap; }
+  .acc-actions button { flex: 1 1 calc(33% - 8px); }
 }
 
 /* ===================== 账户视图（仿富途账户页） ===================== */
@@ -469,7 +670,13 @@ html, body {
 }
 .acc-side__label { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text-2); }
 .acc-side__total { font-size: 22px; font-weight: 700; color: var(--text); margin: 2px 0 4px; }
-.acc-side__spark { width: 100%; height: 26px; display: block; }
+/* 总资产下方一行：左边走势曲线，右边今日/累计盈亏上下排（仿富途） */
+.acc-side__row { display: flex; align-items: flex-end; gap: 12px; }
+.acc-side__pnl { display: flex; flex-direction: column; gap: 2px; flex: 0 0 auto; }
+.asp-col { display: flex; flex-direction: column; gap: 1px; }
+.asp-col span { font-size: 11px; color: var(--text-2); }
+.asp-col i { font-size: 12px; font-style: normal; font-weight: 600; }
+.acc-side__spark { flex: 1 1 auto; min-width: 0; height: 30px; display: block; }
 .acc-side__list { list-style: none; margin: 12px 0 0; padding: 0; }
 .acc-side__list > li { padding: 10px; border-radius: 8px; }
 .acc-side__list > li.is-active { background: var(--panel-2); }

@@ -43,9 +43,12 @@
        us=美股  cn=A股/沪深  fut=期货  ccy=加密货币  fx=外汇(归入期货)  bond=债券(归入期货)
        market 字段仍保留原始交易所标识（沪深/外汇/NYMEX/CME/US/USDT 等）用于副行显示，两套不要混。 */
     watchlist: [
-      { code: '000001',  name: '上证指数',           market: '沪深',  cat: 'cn',  price: 3842.19,  pct: 0.31,  extPrice: null,     extPct: null },
-      { code: 'USDCNH',  name: '美元/离岸人民币',     market: '外汇',  cat: 'fx',  price: 6.70626,  pct: -0.02, extPrice: null,     extPct: null },
-      { code: '10Ymain', name: '10年国债收益率期货',  market: '债',    cat: 'bond', price: 5.223,   pct: -0.44, extPrice: null,     extPct: null },
+      // ⚠️ 前三行是**静态行**：OKX 没有对应品种（无 instId），点进去也没有 K 线。
+      //   asOf = 数据时间备注，会显示在副行末尾；拉到日频数据后由 fetchFxWatch / fetchTreasuryWatch
+      //   覆盖成真实日期，拉不到就保持「快照」（值是硬编码的截图快照，日期无从考证）。
+      { code: '000001',  name: '上证指数',           market: '沪深',  cat: 'cn',  price: 3842.19,  pct: 0.31,  extPrice: null,     extPct: null, asOf: '快照' },
+      { code: 'USDCNH',  name: '美元/离岸人民币',     market: '外汇',  cat: 'fx',  price: 6.70626,  pct: -0.02, extPrice: null,     extPct: null, asOf: '快照' },
+      { code: '10Ymain', name: '10年国债收益率期货',  market: '债',    cat: 'bond', price: 5.223,   pct: -0.44, extPrice: null,     extPct: null, asOf: '快照' },
       { code: 'CLmain',  name: 'WTI原油期货主连',     market: 'NYMEX', cat: 'fut', price: 90.30,    pct: 1.03,  extPrice: null,     extPct: null, instId: 'CL-USDT-SWAP',   live: true },
       { code: 'TQQQ',    name: '三倍做多纳指ETF',     market: 'US',    cat: 'us',  price: 77.460,   pct: 0.55,  extPrice: 78.300,   extPct: 1.08, instId: 'TQQQ-USDT-SWAP', live: true },
       { code: 'NQmain',  name: '纳斯达克100指数期货', market: 'CME',   cat: 'fut', price: 30723.25, pct: 0.36,  extPrice: null,     extPct: null, instId: 'US100-USDT-SWAP', live: true },
@@ -505,6 +508,163 @@
      外汇(USDCNH)与债券(10Y)归入「期货」——那组本来就是大类行情位。 */
   const WL_CAT_OF = { fx: 'fut', bond: 'fut' };
   let wlCat = 'all';
+  let wlTradeCat = 'all';      // 交易页自选分类（与行情页独立）
+
+  /* ---- 交易页持仓数据（由 initAccountData 数据就绪时填充，见 aoState.series 赋值处） ---- */
+  const TRADE_POS = { stock: [], fund: [], fx: 1, totalCny: null, cashCny: 0, ibkrCashCny: 0, ready: false };
+
+  /* 交易页持仓汇总。**推算总资产 = 上面那 8 行的市值之和 + 现金**（用户 2026-10-04 要求：
+     「推算总资产不应该是交易里市值加起来吗」）—— 所以这里的两项构成必须与**行内所见**完全同口径：
+       持仓市值合计 = Σ证券 valueCny + Σ基金 estAmount（基金用估算市值，即行里那个数）
+       现金         = 盈透账户内现金 + 各银行账户现金（都不在持仓列表里，单独列一行）
+     与账户总资产差额 = 推算总资产 − 账户页 totalCny（账户页是**账面口径**：基金按官方净值 navL、
+       证券按同一时刻实时价），所以它现在 ≈ 基金的实时估值增量（正常几厘到 1 个点），
+       不再是恒 0；恒 0 会被「基金估值 vs 官方净值」的差吃掉，反而看不清。 */
+  function renderTradeSum() {
+    const box = document.getElementById('tradeSum');
+    if (!box) return;
+    if (!TRADE_POS.ready || TRADE_POS.totalCny == null) { box.hidden = true; return; }
+    box.hidden = false;
+    const f2 = (v, sign) => {
+      if (v == null || !isFinite(v)) return '--';
+      const s = Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      return (sign ? (v > 0 ? '+' : v < 0 ? '-' : '') : (v < 0 ? '-' : '')) + s;
+    };
+    const fx = TRADE_POS.fx || 1;
+    /* 推算总资产 = **上面 8 行的市值求和 + 现金**（用户 2026-10-04 定稿）。
+       市值取值必须与行内所见完全一致，否则「加起来」对不上：
+         证券 = tradeValueCny（OKX 价 × 数量），兜底 valueCny → 快照 posVal0
+         基金 = estAmount（无估值时回退官方净值市值 amount） */
+    let stockNow = 0;
+    TRADE_POS.stock.forEach((r) => {
+      const v = r.tradeValueCny != null ? r.tradeValueCny
+        : (r.valueCny != null ? r.valueCny
+          : (r.h && r.h.posVal0 != null ? r.h.posVal0 * fx : null));
+      if (v != null) stockNow += v;
+    });
+    let fundNow = 0;
+    TRADE_POS.fund.forEach((f) => { fundNow += (f.estAmount != null ? f.estAmount : f.amount) || 0; });
+    const posSum = stockNow + fundNow;                    // 持仓市值合计（= 8 行求和）
+    const cashSum = TRADE_POS.ibkrCashCny + TRADE_POS.cashCny;
+    const estCny = posSum + cashSum;                      // 推算总资产
+    const total = TRADE_POS.totalCny;
+    // 抹掉浮点残差：几十万量级的浮点求和易差 0.0001 → 会显示「+0.00」还挂涨色，0.005 元以下归零
+    const diffRaw = estCny - total;
+    const diff = Math.abs(diffRaw) < 0.005 ? 0 : diffRaw;
+    const pct = total ? diff / total * 100 : null;
+    const setTxt = (id, txt, cls) => { const e = document.getElementById(id); if (!e) return; e.textContent = txt;
+      e.className = 'num' + (cls ? ' ' + cls : ''); };
+    setTxt('tradeSumAcct', f2(total));          // 账户资产（账户页账面口径，作为差额基准）
+    // 推算总资产带色：与「账户资产」的差额同向同色（up 红 / down 绿），一眼看出是高了还是低了
+    setTxt('tradeSumVal', f2(estCny), diff > 0 ? 'up' : diff < 0 ? 'down' : '');
+    setTxt('tradeSumDiff', f2(diff, true), diff > 0 ? 'up' : diff < 0 ? 'down' : '');
+    setTxt('tradeSumPct', pct == null ? '--' : (pct > 0 ? '+' : '') + pct.toFixed(2) + '%',
+      pct > 0 ? 'up' : pct < 0 ? 'down' : '');
+  }
+
+  /* 交易页持仓名称缩写：去掉「(QDII)」「ETF」「发起联接」三类**品类/产品形态后缀**。
+     这些词不携带个股信息（QDII 说明投资地域、ETF 与联接说明产品形态，副行的代码已能定位），
+     在 430px 侧栏里却各占 20~50px，导致「嘉实纳斯达克100ETF发起联接(QDII)A人民币」
+     这类长名必须省略。实测依次去掉这三类后最宽名 150px < 可视 183px，8 行全部完整显示。
+     完整名仍保留在行的 title 里，悬停可见。 */
+  const tradeShortName = (name) => String(name || '')
+    .replace(/\s*[(（]QDII[)）]\s*/gi, '')   // 去掉 (QDII) / （QDII）及其前后空格
+    .replace(/\s*ETF\s*/g, '')             // 去掉 ETF
+    .replace(/\s*发起联接\s*/g, '')         // 去掉「发起联接」
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  /* 交易页列表：只列**持仓**（证券 + 基金），不列自选。
+     最后一列「市值/盈亏」上下两行 —— 上为市值（CNY，= 现价 × 份额），下为**盈亏**：
+       证券：现价取 OKX 永续、盈亏 = (OKX 现价 − 账户页现价) × 数量 × FX
+       基金：现价 = 官方净值 ×(1+估算涨跌)、盈亏 = estAmount − amount
+     ⚠️ 表头文案是「市值/盈亏」，但**不是**相对买入成本的累计盈亏（那个在账户页表格里），
+     这里的盈亏是「现价相对基准的浮动」，别改回 pnlCny。
+     单位统一为 CNY，颜色按绿涨红跌（.up 红 / .down 绿）。 */
+  function renderTradeList() {
+    const ul = $('#watchlistTrade');
+    if (!ul) return;
+    // f2 / clsCls 与账户页同口径（f2 在 initAccountData 内部，不在此作用域）
+    const f2 = (v, sign) => {
+      if (v == null || !isFinite(v)) return '--';
+      const s = v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      return sign && v > 0 ? '+' + s : s;
+    };
+    const clsCls = (v) => (v == null ? '' : v > 0 ? 'up' : v < 0 ? 'down' : '');
+    const fx = TRADE_POS.fx || 1;
+    const stock = TRADE_POS.stock.map((r) => ({
+      kind: '证券', code: r.code, name: r.name,
+      /* 现价 = **OKX 永续**（7×24 连续报价，用户 2026-10-04 定稿）；取不到才回落账户价。
+         涨跌幅 = (OKX 现价 − **账户页那个现价**) ÷ 账户现价（tradePct 是小数，fmtPct 要百分数）。 */
+      price: r.pTrade != null ? r.pTrade : r.price, cur: 'USD',
+      pct: r.tradePct != null ? r.tradePct * 100 : null,
+      // 市值按交易页的 OKX 价算（= 现价 × 份额），与「现价」列自洽
+      value: r.tradeValueCny != null ? r.tradeValueCny
+          : (r.valueCny != null ? r.valueCny
+            : (r.h && r.h.posVal0 != null ? r.h.posVal0 * fx : null)),
+      // 「较基准」盈亏 = (OKX 现价 − 账户现价) × 数量 × 汇率
+      pnl: r.tradeChgCny != null ? r.tradeChgCny : null,
+      decimals: (r.mult === 100 ? 3 : 2),
+    }));
+    const fund = TRADE_POS.fund.map((f) => ({
+      kind: '基金', code: f.code, name: f.name,
+      // 现价/涨跌用**估值**（官方净值停更到 9-29，估值反映到今天）；无估值时回退官方净值
+      price: f.estNav != null ? f.estNav : f.navL,
+      pct: f.estChg != null ? f.estChg * 100
+          : (f.navL != null && f.navP ? (f.navL - f.navP) / f.navP * 100 : null),
+      cur: 'CNY',
+      // 市值/盈亏也用估值口径（推算总资产随之变成估值口径，与差额校验一致）
+      value: f.estAmount != null ? f.estAmount : f.amount,
+      // 较基准（官方净值 navL）的盈亏；无估值时退回「最新净值 − 前一日净值」
+      pnl: f.estAmount != null ? (f.estAmount - f.amount) : f.yest,
+      decimals: 4,
+      isEst: f.estNav != null,
+      estChg: f.estChg,
+      // 悬停提示里拆出汇率那一层：估值是「本币涨跌 × 汇率变动」的合成结果，
+      // 报表上看整体涨跌看不出汇率贡献了多少，这里给个数字方便核对。
+      fxNote: f.estFxChg != null && f.estChg != null
+        ? `估值 ${(f.estChg * 100).toFixed(2)}%（其中汇率 ${f.estFxChg >= 0 ? '+' : ''}${(f.estFxChg * 100).toFixed(3)}%）`
+        : '',
+    }));
+    /* 默认按**市值从大到小**排（用户 2026-10-04 定稿）：一眼看出仓位重心，也和「市值/盈亏」列一致。
+       排序用行内那个 value（= 现价 × 份额，证券用 OKX 价、基金用估算市值），
+       缺失（null）当 0 沉到末尾。切分类 tab 后仍按同一规则排。 */
+    const byValueDesc = (a, b) => (b.value || 0) - (a.value || 0);
+    let list = stock.concat(fund).sort(byValueDesc);
+    if (wlTradeCat !== 'all') {
+      // 交易页分类复用自选分类的取值：us → 证券，ccy/其它 → 全部（基金归到「全部」）
+      if (wlTradeCat === 'us') list = stock.slice().sort(byValueDesc);
+      else if (wlTradeCat === 'fut' || wlTradeCat === 'ccy') list = [];
+    }
+    if (!TRADE_POS.ready) {
+      ul.innerHTML = '<li class="wl__row wl__row--empty"><span class="wl-name"><b>加载中…</b></span></li>';
+      const s0 = document.getElementById('tradeSum'); if (s0) s0.hidden = true;
+      return;
+    }
+    // 汇总按「全部」口径算，不随分类 tab 变（切到「证券」时仍显示整体推算总资产）
+    renderTradeSum();
+    if (!list.length) {
+      ul.innerHTML = '<li class="wl__row wl__row--empty"><span class="wl-name"><b>该分类下无持仓</b></span></li>';
+      return;
+    }
+    ul.innerHTML = list.map((it) => {
+      const c = cls(it.pct);
+      const pc = clsCls(it.pnl);
+      // 汇率明细只在悬停提示里给（副行已有「代码 · 类别」，再加就挤了）
+      return `<li class="wl__row" data-code="${it.code}" title="${it.name}（${it.code}）· ${it.kind}${it.fxNote ? '｜' + it.fxNote : ''}">
+          <span class="wl-name">
+            <b>${tradeShortName(it.name)}</b>
+            <span>${it.code} · ${it.kind}</span>
+          </span>
+          <span class="wl-price num ${c}">${fmt(it.price, it.decimals)}</span>
+          <span class="wl-pct num ${c}">${fmtPct(it.pct)}</span>
+          <span class="wl-vp">
+            <b class="num">${f2(it.value)}</b>
+            <i class="num ${pc}">${f2(it.pnl, true)}</i>
+          </span>
+        </li>`;
+    }).join('');
+  }
 
   /* 分类归属：先取行上的 cat（us/cn/fut/ccy），再用 WL_CAT_OF 把
      fx/bond 折进 fut；两者都缺时按 market 兜底，最后默认 us。
@@ -515,11 +675,17 @@
     return WL_CAT_OF[c] || c;
   }
 
+  /* 数据时间备注用的短日期：'2026-10-02' → '10-02'，其它原样返回。 */
+  const asOfMd = (s) => (/^\d{4}-\d{2}-\d{2}$/.test(String(s || '')) ? String(s).slice(5) : String(s || ''));
+
   function renderWatchlist(list, activeCode) {
-    const ul = $('#watchlist');
     const session = usSession();                    // 美股延长时段标签（盘中为 null）
-    const shown = wlCat === 'all' ? list : list.filter((x) => catOf(x) === wlCat);
-    ul.innerHTML = shown.map((it) => {
+    // 行情页与交易页各有一份自选列表，共享同一数据源；
+    // 交易页的分类切换独立（wlTradeCat），默认为「全部」。
+    const paint = (ul, cat) => {
+      if (!ul) return;
+      const shown = cat === 'all' ? list : list.filter((x) => catOf(x) === cat);
+      ul.innerHTML = shown.map((it) => {
       const active = it.code === activeCode ? ' is-active' : '';
       const isUS = it.market === 'US';
       // 美股延长时段（盘前/盘后/夜盘）：主行显示「昨日收盘快照」= 昨收价 + 昨收相对前收的涨跌幅，
@@ -532,31 +698,39 @@
       const showExt = ext && it.extPrice != null;
       const extRow = showExt ? `<i class="wl-sub num">${fmt(it.extPrice, 3)}</i>` : '';
       const extPctCell = showExt ? `<i class="wl-sub num">${fmtPct(it.extPct)}</i>` : '';
+      /* 数据时间备注：只给**无 K 线**的静态行加（USDCNH / 10Y 国债 / 上证指数 —— OKX 没有对应品种，
+         点进去也没有分时图）。有 instId 的实时行不显示，避免看着像过期数据。
+         asOf 由各自的日频数据源写入（fetchFxWatch / fetchTreasuryWatch），拉不到时保持初始的「快照」。 */
+      const asOf = it.asOf ? `<i class="wl-asof">${asOfMd(it.asOf)}</i>` : '';
 
       return `
         <li class="wl__row${active}" data-code="${it.code}">
           <span class="wl-name">
             <b>${it.name}</b>
-            <span>${it.code}${it.market ? ' · ' + it.market : ''}</span>
+            <span>${it.code}${it.market ? ' · ' + it.market : ''}${asOf}</span>
           </span>
           <span class="wl-price num ${c}">${fmt(mainPrice, mainPrice < 10 ? 5 : 3)}${extRow}</span>
           <span class="wl-pct num ${c}">${fmtPct(mainPct)}${extPctCell}</span>
         </li>`;
-    }).join('');
+      }).join('');
 
-    ul.querySelectorAll('.wl__row').forEach((row) => {
-      row.addEventListener('click', () => {
-        ul.querySelectorAll('.wl__row').forEach((r) => r.classList.remove('is-active'));
-        row.classList.add('is-active');
-        const picked = list.find((x) => x.code === row.dataset.code);
-        if (picked) {
-          loadInstrument(picked.code);
-          // 移动端：点行后切到图表页（列表隐藏，只剩该标的 K 线）
-          // （桌面端保持列表常驻，不受影响）
-          if (isMobile()) showMobileChart();
-        }
+      ul.querySelectorAll('.wl__row').forEach((row) => {
+        row.addEventListener('click', () => {
+          ul.querySelectorAll('.wl__row').forEach((r) => r.classList.remove('is-active'));
+          row.classList.add('is-active');
+          const picked = list.find((x) => x.code === row.dataset.code);
+          if (picked) {
+            loadInstrument(picked.code);
+            // 移动端：点行后切到图表页（列表隐藏，只剩该标的 K 线）
+            // （桌面端保持列表常驻，不受影响）
+            // 交易页例外：点行只选中，不切图表（交易页自己的交互后续再补）
+            if (isMobile()) showMobileChart();
+          }
+        });
       });
-    });
+    };
+    paint($('#watchlist'), wlCat);
+    // 交易页那份列表列的是**持仓**而非自选，由 renderTradeList 单独渲染
   }
 
   /* ---------- 移动端（<680px）：列表页 ↔ 图表页 互斥切换 ----------
@@ -853,6 +1027,7 @@
   function renderAll() {
     renderQuote(APP_DATA.quote);
     renderWatchlist(APP_DATA.watchlist, APP_DATA.quote.code);
+    renderTradeList();      // 交易页持仓列表（数据未就绪时显示「加载中…」）
     renderComments(APP_DATA.comments);
     drawChart();          // 无 series 时显示空态，等待 OKX 拉取
   }
@@ -888,6 +1063,13 @@
       if (wcat && wcat !== wlCat) {
         wlCat = wcat;
         renderWatchlist(APP_DATA.watchlist || [], (APP_DATA.quote || {}).code);
+      }
+      // 交易页自选分类（独立状态，不影响行情页）
+      const tcat = btn.dataset.wlTradeCat;
+      if (tcat && tcat !== wlTradeCat) {
+        wlTradeCat = tcat;
+        renderWatchlist(APP_DATA.watchlist || [], (APP_DATA.quote || {}).code);
+        renderTradeList();
       }
     });
   });
@@ -975,22 +1157,58 @@
     }, true);
   })();
 
-  /* 左侧 rail 视图切换：自选(行情终端) / 账户 */
+  /* 侧栏总资产迷你走势图。
+     ⚠️ 为什么不用固定 viewBox + preserveAspectRatio="none"：
+        旧写法把 100×24 的路径硬拉到实际 ~153×38（桌面）/ ~306×38（移动），
+        横向被拉伸 50%~200%，纵向只用 18/24 → 视觉上是一条「扁」线。
+        现在按**实际像素**画（1 值 = 1 px），纵横比自然、纵向占满、线宽不缩放。
+     ⚠️ 为什么必须定义在 initViewSwitch 之前：`#account` 直达时 switchView 会同步执行，
+        晚定义会撞 TDZ（const 未初始化）。 */
+  const ACC_SPARK = { series: [] };
+  function drawAccSpark() {
+    // ⚠️ 不能用 initAccountData 内部的 $id —— 那个是函数作用域的局部变量，这里取不到。
+    // ⚠️ `accSpark` 这个 id 挂在 **<path>** 上，不是 <svg>！要改 viewBox 必须拿到 svg，
+    //    而尺寸也要用 svg 的（path 空 d 时自身 box 是 0×0，会让 `w<8` 判断误跳过）。
+    const path = document.getElementById('accSpark');
+    const svg = path && path.ownerSVGElement;
+    const vs = ACC_SPARK.series;
+    if (!svg || !path || vs.length < 2) return;
+    const box = svg.getBoundingClientRect();
+    const w = Math.round(box.width), h = Math.round(box.height);
+    if (w < 8 || h < 8) return;                       // 还没布局好（视图仍隐藏），跳过
+    const mn = Math.min(...vs), mx = Math.max(...vs), rg = mx - mn || 1;
+    const pad = 3;
+    // viewBox 与像素 1:1 —— 路径坐标直接用像素，横向纵向缩放一致，线不会被拉扁
+    svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+    svg.removeAttribute('preserveAspectRatio');        // 1:1 时无需 none 拉伸
+    path.setAttribute('d', vs.map((v, i) =>
+      `${i ? 'L' : 'M'}${(i / (vs.length - 1) * (w - 1)).toFixed(2)} ` +
+      `${(h - pad - (v - mn) / rg * (h - pad * 2)).toFixed(2)}`
+    ).join(' '));
+  }
+
+  /* 左侧 rail 视图切换：自选(行情终端) / 账户 / 交易 */
   (function initViewSwitch() {
     const items = document.querySelectorAll('.rail__item[data-view]');
     const accountView = $('#accountView');
+    const tradeView = $('#tradeView');
     if (!items.length || !accountView) return;
 
     function switchView(view) {
       const isMarket = view === 'market';
+      const isTrade = view === 'trade';
       items.forEach((b) => b.classList.toggle('is-active', b.dataset.view === view));
-      accountView.hidden = isMarket;
+      accountView.hidden = isMarket || isTrade;
+      if (tradeView) tradeView.hidden = !isTrade;
+      // 侧栏迷你走势图：账户视图由 hidden 变可见后 clientWidth 才有值，必须重画一次
+      // （账户数据是页面加载时拉的，那时视图还隐藏着，只能画到兜底尺寸）
+      if (!isMarket && !isTrade) requestAnimationFrame(drawAccSpark);
       if (isMobile()) {
-        // 移动端：账户视图也要把自选/图表让出去，否则两者同屏叠在一起（残影）。
-        // 退出账户时撤掉 is-comment-mode，回到「列表/图表」那一组互斥状态。
+        // 移动端：账户/交易视图也要把自选/图表让出去，否则两者同屏叠在一起（残影）。
+        // 退出时撤掉 is-comment-mode，回到「列表/图表」那一组互斥状态。
         document.body.classList.remove('is-comment-mode');
         if (!isMarket) {
-          document.body.classList.remove('is-chart-mode');   // 账户页不显示图表
+          document.body.classList.remove('is-chart-mode');   // 账户/交易页不显示图表
           const wl = document.querySelector('.watchlist');
           if (wl) wl.classList.add('is-collapsed');          // 也不显示自选列表
         } else if (drawChart) {
@@ -1012,8 +1230,10 @@
       switchView(btn.dataset.view);
     }));
 
-    // 支持 #account 直达账户视图
-    if (location.hash === '#account') switchView('account');
+    // 支持 #account / #trade 直达（用正则取 hash，避免带上后面的查询串）
+    const hash = (location.hash || '').replace(/^#/, '').split('?')[0];
+    if (hash === 'account') switchView('account');
+    else if (hash === 'trade') switchView('trade');
   })();
 
   /* 顶栏刷新按钮：行情视图重拉自选+当前标的；账户视图重跑账户数据加载 */
@@ -1095,13 +1315,11 @@
     const lines = document.querySelectorAll('.as-line[data-cat]');
     const pages = document.querySelectorAll('.acc-page');
     if (!lines.length || !pages.length) return;
-    const title = document.getElementById('accHeadTitle');
     const topCard = document.querySelector('.acc-side__card');
 
     function activate(cat) {
       lines.forEach((x) => x.classList.toggle('is-active', x.dataset.cat === cat));
       pages.forEach((p) => { p.hidden = p.dataset.catPage !== cat; });
-      if (title) title.textContent = cat === 'total' ? '全部账户' : '盈透证券账户(U18576039)';
       if (topCard) topCard.classList.toggle('is-active', cat === 'total');
       // 总览页的 canvas 在 hidden 期间尺寸为 0，切进来时（重）画
       if (cat === 'total') drawAoChart();
@@ -1119,11 +1337,23 @@
     // 走势 tab（收益率 / 资产）与时间范围切换
     const tabs = document.querySelectorAll('#aoTabs [data-ao-tab]');
     const ranges = document.querySelectorAll('#aoRanges [data-ao-range]');
+    // 收益日历：切到该 tab 时显示日历、隐藏走势图 + 统计行 + 时间范围按钮（它们对日历无意义）
+    const showCal = (on) => {
+      const cal = document.getElementById('aoCal');
+      const chart = document.getElementById('aoChartWrap');
+      const stats = document.getElementById('aoStats');
+      const ranges = document.getElementById('aoRanges');
+      if (cal) cal.hidden = !on;
+      if (chart) chart.style.display = on ? 'none' : '';
+      if (stats) stats.style.display = on ? 'none' : '';
+      if (ranges) ranges.style.display = on ? 'none' : '';
+      if (on) drawAoCal(); else drawAoChart();
+    };
     tabs.forEach((b) => b.addEventListener('click', () => {
       tabs.forEach((x) => x.classList.toggle('is-active', x === b));
       aoState.mode = b.dataset.aoTab;
       aoState.hover = null;                           // 切换视图时清掉十字光标
-      drawAoChart();
+      showCal(b.dataset.aoTab === 'cal');
     }));
     ranges.forEach((b) => b.addEventListener('click', () => {
       if (b.disabled) return;
@@ -1134,7 +1364,115 @@
     }));
   })();
 
-  window.addEventListener('resize', () => { drawChart(); drawAoChart(); });
+  /* ============ 移动端：侧栏折叠（A） + 走势图全屏（D） ============
+     A：窄屏下侧栏「总资产卡 + 分类列表」占 313px，把总览页走势图挤到只露 45px。
+        折叠成一条（总资产 + 箭头，约 44px），走势图拿到约 354px。
+        折叠状态存 localStorage —— 看过明细的人不愿每次展开，不看的人一直清爽。
+     D：点走势图（或右上角按钮）铺满全屏，关闭后把 canvas 归位并重绘。 */
+  (function initMobileFoldAndFullscreen() {
+    const side = document.getElementById('accSide');
+    const foldBtn = document.getElementById('accSideFold');
+    const sumEl = document.getElementById('accSideSum');
+    const KEY = 'futu_acc_side_folded';
+    if (side && foldBtn) {
+      const apply = (folded) => {
+        side.classList.toggle('is-folded', folded);
+        foldBtn.setAttribute('aria-expanded', folded ? 'false' : 'true');
+        // 高度变了，侧栏迷你走势图和总览页图表都要按新尺寸重画
+        requestAnimationFrame(() => { drawAccSpark(); drawAoChart(); });
+      };
+      // 默认展开（未存过）；只有显式存了 '1' 才折叠
+      apply(localStorage.getItem(KEY) === '1');
+      foldBtn.addEventListener('click', () => {
+        const folded = !side.classList.contains('is-folded');
+        apply(folded);
+        try { localStorage.setItem(KEY, folded ? '1' : '0'); } catch (e) { /* 隐私模式忽略 */ }
+      });
+    }
+
+    // 折叠条上要显示总资产 —— 与 .acc-side__total 同步同一个数
+    const total = document.getElementById('accTotalVal');
+    // 折叠后总资产卡被收起，折叠条左侧的「总资产」就是进总览页的入口（替代它）
+    const toTotal = document.getElementById('accSideToTotal');
+    if (toTotal) toTotal.addEventListener('click', () => {
+      // 复现 initAccCats 里 activate('total') 的行为（那边是独立 IIFE，变量取不到）
+      document.querySelectorAll('.as-line[data-cat]').forEach((x) => x.classList.remove('is-active'));
+      document.querySelectorAll('.acc-page').forEach((p) => { p.hidden = p.dataset.catPage !== 'total'; });
+      const tc = document.querySelector('.acc-side__card');
+      if (tc) tc.classList.add('is-active');
+      requestAnimationFrame(drawAoChart);
+    });
+    if (total && sumEl && window.MutationObserver) {
+      const sync = () => { sumEl.textContent = total.textContent; };
+      new MutationObserver(sync).observe(total, { childList: true, characterData: true, subtree: true });
+    }
+
+    /* ---- D：走势图全屏 ---- */
+    const fs = document.getElementById('aoFs');
+    const fsChartWrap = document.getElementById('aoFsChartWrap');
+    const fsStats = document.getElementById('aoFsStats');
+    const fsTitle = document.getElementById('aoFsTitle');
+    const fsClose = document.getElementById('aoFsClose');
+    const fsBtn = document.getElementById('aoFsBtn');
+    const chartWrap = document.getElementById('aoChartWrap');
+    const statsEl = document.getElementById('aoStats');
+    const canvas = document.getElementById('aoChart');
+    if (!fs || !fsChartWrap || !fsStats || !chartWrap || !canvas) return;
+    let homeParent = chartWrap, homeNext = null;
+    let statsHome = statsEl ? statsEl.parentNode : null, statsNext = null;
+
+    // 全屏顶部标题 + 时间范围高亮，跟随 aoState 同步（定义在 openFs 之前，避免 TDZ 隐患）
+    const RANGE_LABEL = { '1w': '近1周', '1m': '近1月', 'ytd': '年初至今' };
+    const syncFsUi = () => {
+      if (!fsTitle) return;
+      fsTitle.textContent = (aoState.mode === 'asset' ? '资产走势' : '收益率走势') + ' · ' + (RANGE_LABEL[aoState.range] || '');
+      document.querySelectorAll('#aoFsRanges [data-ao-range]').forEach((x) => {
+        x.classList.toggle('is-active', x.dataset.aoRange === aoState.range);
+      });
+    };
+
+    const openFs = () => {
+      if (!fs.hidden) return;
+      // 记录两处原位置，关闭时精确归位
+      homeParent = canvas.parentNode;
+      homeNext = canvas.nextSibling;
+      statsHome = statsEl.parentNode;
+      statsNext = statsEl.nextSibling;
+      fsStats.appendChild(statsEl);                   // 统计行搬进全屏，复用悬停逻辑
+      fsChartWrap.appendChild(canvas);               // canvas 搬进全屏
+      syncFsUi();
+      fs.hidden = false;
+      document.body.style.overflow = 'hidden';       // 锁背景滚动
+      requestAnimationFrame(drawAoChart);            // 尺寸变了要重画
+    };
+    const closeFs = () => {
+      if (fs.hidden) return;
+      homeParent.insertBefore(canvas, homeNext);     // canvas 归位
+      statsHome.insertBefore(statsEl, statsNext);    // 统计行也归位（不能塞回 fsStats，那是全屏容器）
+      fs.hidden = true;
+      document.body.style.overflow = '';
+      requestAnimationFrame(drawAoChart);
+    };
+    if (fsBtn) fsBtn.addEventListener('click', (e) => { e.stopPropagation(); openFs(); });
+    // 点图表空白处也能进全屏（按钮区域已在上面 stopPropagation）
+    chartWrap.addEventListener('click', (e) => { if (e.target === canvas) openFs(); });
+    if (fsClose) fsClose.addEventListener('click', closeFs);
+    // 全屏里的时间范围按钮与主页面的保持同步（点击走主页面的 peer，再回写高亮与标题）
+    document.querySelectorAll('#aoFsRanges [data-ao-range]').forEach((b) => {
+      b.addEventListener('click', () => {
+        const peer = document.querySelector(`#aoRanges [data-ao-range="${b.dataset.aoRange}"]`);
+        if (peer) peer.click();                      // 复用主页面的切换逻辑（含 drawAoChart）
+        syncFsUi();
+      });
+    });
+    // 主页面切范围/切模式时，全屏开着的话同步标题
+    document.querySelectorAll('#aoRanges [data-ao-range], #aoTabs [data-ao-tab]').forEach((b) => {
+      b.addEventListener('click', () => { if (!fs.hidden) syncFsUi(); });
+    });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeFs(); });
+  })();
+
+  window.addEventListener('resize', () => { drawChart(); drawAoChart(); drawAccSpark(); });
   document.addEventListener('DOMContentLoaded', renderAll);
 
   // 打开页面默认选中 ORCL，立即拉其报价与分时（不等自选行情返回）
@@ -1148,6 +1486,13 @@
   // 自选列表接入 OKX 实时行情（启动即拉，每 15s 刷新）
   fetchWatchlist();
   setInterval(fetchWatchlist, 15000);
+
+  /* 持仓行情（交易页 + 账户页证券表）同样 15s 刷新一次。
+     入口由 initAccountData 就绪后挂上（TRADE_POS.refresh），这里只负责按点调用；
+     两者错开 3s，免得同一秒打两批请求。 */
+  setInterval(() => {
+    if (typeof TRADE_POS.refresh === 'function') TRADE_POS.refresh();
+  }, 18000);
 
   /* 顶栏「刷新」按钮（移动端左侧唯一保留的按钮）：
      手动重拉一轮数据 = 自选行情 + 外汇行 + 当前标的图表/分时。
@@ -1200,6 +1545,7 @@
       if (!row) return;
       row.price = rate;
       row.pct = prev ? +((rate - prev) / prev * 100).toFixed(2) : null;
+      row.asOf = days[days.length - 1];      // ECB 参考价的最新可得日期（副行显示用）
       renderWatchlist(APP_DATA.watchlist, APP_DATA.quote.code);
     } catch (e) { console.warn('[汇率] frankfurter 拉取失败：', e); }
   }
@@ -1333,7 +1679,9 @@
     const fillC = isPct ? (upTrend ? 'rgba(0,168,107,0.12)' : 'rgba(234,59,59,0.12)')
                         : 'rgba(255,143,31,0.10)';
 
-    const padL = 12, padR = 84, padT = 14, padB = 26;   // 纵轴刻度在右侧；padR 兼顾刻度与悬停胶囊
+    // padR = 右侧「刻度 / 悬停胶囊」列宽。两者都用 9px、整数千分位，并让胶囊与刻度
+    // 共享同一条左边界和同一个列宽 AO_TICK_COL_W，视觉上是一列，不会像胶囊那样向右突出。
+    const padL = 12, padR = 58, padT = 14, padB = 26;
     const plotW = W - padL - padR, plotH = H - padT - padB;
     let lo = Math.min(...vals, isPct ? 0 : first);
     let hi = Math.max(...vals, isPct ? 0 : first);
@@ -1342,15 +1690,17 @@
     const yMin = lo - span * 0.08, yMax = hi + span * 0.08;
     const X = (i) => padL + (i / (data.length - 1)) * plotW;
     const Y = (v) => padT + (1 - (v - yMin) / (yMax - yMin)) * plotH;
-    const FONT = '10px "PingFang SC","Microsoft YaHei",sans-serif';
+    const FONT = '10px "PingFang SC","Microsoft YaHei",sans-serif';       // 起止日期
+    const TICK_FONT = '9px "PingFang SC","Microsoft YaHei",sans-serif';    // 纵轴刻度：数字较长，单独用小一号
 
     // 缓存几何参数，供 mousemove 画光标复用（避免每次重算）
     aoGeo.data = data; aoGeo.vals = vals; aoGeo.isPct = isPct; aoGeo.first = first;
     aoGeo.X = X; aoGeo.Y = Y; aoGeo.lineC = lineC;
     aoGeo.padL = padL; aoGeo.padR = padR; aoGeo.padT = padT; aoGeo.padB = padB;
     aoGeo.plotW = plotW; aoGeo.plotH = plotH; aoGeo.W = W; aoGeo.H = H;
+    aoGeo.tickFont = TICK_FONT; aoGeo.tickColW = padR - 7;   // 供悬停胶囊对齐复用
 
-    ctx.font = FONT;
+    ctx.font = TICK_FONT;
     ctx.textBaseline = 'middle';
     for (let i = 0; i <= 4; i++) {                    // 网格 + 右侧纵轴
       const y = padT + (i / 4) * plotH;
@@ -1364,7 +1714,7 @@
       ctx.fillText(isPct
         ? ((v > 0 ? '+' : '') + v.toFixed(2) + '%')
         : v.toLocaleString('en-US', { maximumFractionDigits: 0 }),
-        padL + plotW + 6, y);
+        padL + plotW + 4, y);
     }
 
     ctx.beginPath();                                  // 主曲线 + 渐变填充
@@ -1464,20 +1814,22 @@
     ctx.textAlign = 'center';
     ctx.fillText(label, bx + tw / 2, H - padB + 13);
 
-    // 右侧数值胶囊（黑底白字）：右对齐到画布右缘，避免 padR 不够宽时文字被裁切
+    // 右侧数值胶囊（黑底白字）：与纵轴刻度**同宽同左边界**，视觉上就是同一列的「高亮态」。
+    // 数字用整数千分位（和刻度一致），精确到分的数值由顶部统计行承担。
     const vtxt = isPct
       ? (vals[idx] > 0 ? '+' : '') + vals[idx].toFixed(2) + '%'
-      : d[idx].cny.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    ctx.font = 'bold 11px "PingFang SC","Microsoft YaHei",sans-serif';
-    const vw = Math.min(ctx.measureText(vtxt).width + 14, W - 4);
-    const vy = Math.min(Math.max(y - 9, padT), padT + plotH - 18);
-    const vx = W - vw - 2;
+      : d[idx].cny.toLocaleString('en-US', { maximumFractionDigits: 0 });
+    ctx.font = aoGeo.tickFont || '9px "PingFang SC","Microsoft YaHei",sans-serif';
+    const colW = aoGeo.tickColW || (padR - 8);
+    const vw = Math.min(ctx.measureText(vtxt).width + 6, colW);
+    const vy = Math.min(Math.max(y - 7.5, padT), padT + plotH - 15);
+    const vx = padL + plotW + 4;
     ctx.fillStyle = 'rgba(20,23,31,0.92)';
-    ctx.fillRect(vx, vy, vw, 18);
+    ctx.fillRect(vx, vy, vw, 15);
     ctx.fillStyle = '#fff';
     ctx.textAlign = 'center';
     // 文字过长时按可用宽度压缩绘制，保证完整可见
-    ctx.fillText(vtxt, vx + vw / 2, vy + 9, vw - 8);
+    ctx.fillText(vtxt, vx + vw / 2, vy + 7.5, vw - 4);
     ctx.restore();
 
     // 顶部统计行同步（悬停时显示该日净值/当日收益，未悬停显示区间累计）
@@ -1525,6 +1877,174 @@
       if (!inside) clear();
     });
     window.addEventListener('blur', clear);
+  })();
+
+  /* ===================== 收益日历 =====================
+     数据源与走势图完全一致：aoState.series = [{ date:'YYYY-MM-DD', cny }]（每日总资产）。
+
+     ⚠️ 口径必须剔除外部现金流，否则会和侧栏「累计收益」差 17 万（实测 33.9 万 vs 16.1 万）：
+       ① **入金**：IBKR 净值本身含入金，入金当天净值跳升 → 那笔钱是本金不是收益；
+       ② **基金申购 / TQQQ 买入**：同理，申购当天总资产增加也不是收益；
+       ③ **废值段**：totalNetValueDaily 前 28 天（2026-02-06 ~ 03-17）净值恒为 1.42，
+          真实值从 03-18 的 1450.52 起。拿 1.42 当基线会让 03-18 的跳升全被算成收益。
+     剔除后日收益 = 当日净值 − 前日净值 − 当日净入金；
+     收益率分母用「前一日净值 + 当日净入金/2」（Modified Dietz，与资金明细页 TWR 同口径）。 */
+  const calState = { mode: 'month', y: 0, m: 0 };      // m: 0-11
+
+  // TQQQ 买入等 detailState 之外的现金流，由 initAccountData 填进来
+  const calExtraFlows = {};
+
+  // 每日外部现金流（CNY 正数=投入）。**惰性求值**：detailState 在本文件更下方才声明
+  // （const 有 TDZ），模块加载时立即读取会 ReferenceError。
+  let calFlowCache = null;
+  function calFlows() {
+    if (calFlowCache) return calFlowCache;
+    const map = {};
+    const add = (d, cny) => { if (d && cny) map[d] = (map[d] || 0) + cny; };
+    const fx = (detailState && detailState.fx) || 1;
+    Object.keys((detailState && detailState.flows) || {}).forEach((d) => add(d, detailState.flows[d] * fx));
+    Object.keys((detailState && detailState.fundFlows) || {}).forEach((d) => add(d, detailState.fundFlows[d]));
+    Object.keys(calExtraFlows).forEach((d) => add(d, calExtraFlows[d]));
+    calFlowCache = map;
+    return map;
+  }
+
+  function calIndex() {
+    const flows = calFlows();
+    // 跳过废值段：totalNetValueDaily 前 28 天净值恒为 1.42（真实值从 03-18 起）
+    const all = aoState.series || [];
+    const s = all.filter((d, i) => i === 0 || d.cny > 100 || all[i - 1].cny <= 100);
+    const byDate = {}, days = [], months = [];
+    let mKey = null, cur = null;
+    for (let i = 0; i < s.length; i++) {
+      const d = s[i];
+      const prev = i > 0 ? s[i - 1] : null;
+      const fl = prev ? (flows[d.date] || 0) : 0;   // 首日的投入已在基线里，不重复扣
+      const gain = prev ? d.cny - prev.cny - fl : null;
+      const den = prev ? prev.cny + fl / 2 : null;    // Modified Dietz：分母加当日投入的一半
+      const pct = den ? gain / den * 100 : null;
+      const rec = { date: d.date, cny: d.cny, gain, pct, flow: fl };
+      byDate[d.date] = rec;
+      days.push(rec);
+      const ym = d.date.slice(0, 7);
+      if (ym !== mKey) { mKey = ym; cur = { ym, y: +d.date.slice(0, 4), m: +d.date.slice(5, 7) - 1, first: d.cny, last: d.cny }; months.push(cur); }
+      cur.last = d.cny;
+    }
+    // own = 本月自己的净收益；gain = 截至本月的累计净收益；
+    // pct = **本月**收益率（own ÷ 上月末净值），不是累计 —— 否则亏损月会显示正的累计收益率
+    let run = 0;
+    for (let i = 0; i < months.length; i++) {
+      const prevBase = i > 0 ? months[i - 1].last : months[i].first;
+      months[i].days = days.filter((d) => d.date.slice(0, 7) === months[i].ym);
+      months[i].own = months[i].days.reduce((s2, d) => s2 + (d.gain || 0), 0);
+      run += months[i].own;
+      months[i].gain = run;
+      months[i].pct = prevBase ? months[i].own / prevBase * 100 : null;
+    }
+    return { byDate, days, months };
+  }
+
+  function calFmt(n) {
+    if (n == null) return '--';
+    return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  function calPctText(v) { return v == null ? '--' : (v > 0 ? '+' : '') + v.toFixed(2) + '%'; }
+  function calCls(v) { return v == null ? 'ao-cal__none' : v > 0 ? 'ao-cal__up' : v < 0 ? 'ao-cal__down' : 'ao-cal__flat'; }
+
+  function drawAoCal() {
+    const body = document.getElementById('aoCalBody');
+    if (!body || !aoState.series || !aoState.series.length) return;
+    const idx = calIndex();
+    if (!calState.y) {                                  // 首次进入：定位到最新有数据的那天
+      const last = idx.days[idx.days.length - 1].date;
+      calState.y = +last.slice(0, 4); calState.m = +last.slice(5, 7) - 1;
+    }
+    const today = new Date().toLocaleDateString('sv-SE');
+    const label = document.getElementById('aoCalLabel');
+    const sumLbl = document.getElementById('aoCalSumLabel');
+    const sumEl = document.getElementById('aoCalSum');
+    const pctEl = document.getElementById('aoCalPct');
+    const prevBtn = document.getElementById('aoCalPrev');
+    const nextBtn = document.getElementById('aoCalNext');
+
+    const first = idx.days[0].date, lastDate = idx.days[idx.days.length - 1].date;
+    const isYear = calState.mode === 'year';
+    label.textContent = isYear ? String(calState.y) : calState.y + '/' + String(calState.m + 1).padStart(2, '0');
+    // 区间合计：年视图 = 该年各月 own 之和；月视图 = 该月 own
+    const months = idx.months.filter((x) => x.y === calState.y && (isYear || x.m === calState.m));
+    const gain = months.reduce((s, x) => s + (x.own || 0), 0);
+    const base = (() => {
+      if (!months.length) return null;
+      const i0 = idx.months.indexOf(months[0]);
+      return i0 > 0 ? idx.months[i0 - 1].last : months[0].first;
+    })();
+    sumLbl.textContent = (isYear ? calState.y + '年收益 · CNY' : (calState.m + 1) + '月收益 · CNY');
+    sumEl.textContent = (gain > 0 ? '+' : '') + calFmt(gain);
+    sumEl.className = 'num ' + calCls(gain);
+    pctEl.textContent = calPctText(base ? gain / base * 100 : null);
+    pctEl.className = 'num ' + calCls(base ? gain / base * 100 : null);
+    // 首尾边界：年视图不跨年跳（数据只有 2026），月视图到最新月为止
+    const minY = +first.slice(0, 4), maxY = +lastDate.slice(0, 4);
+    prevBtn.disabled = isYear ? calState.y <= minY : (calState.y < minY || (calState.y === minY && calState.m <= +first.slice(5, 7) - 1));
+    nextBtn.disabled = isYear ? calState.y >= maxY : (calState.y > maxY || (calState.y === maxY && calState.m >= +lastDate.slice(5, 7) - 1));
+
+    if (isYear) {
+      body.innerHTML = '<div class="ao-cal__grid--year">' + Array.from({ length: 12 }, (_, m) => {
+        const rec = idx.months.find((x) => x.y === calState.y && x.m === m);
+        const isCur = calState.y === +today.slice(0, 4) && m === +today.slice(5, 7) - 1;
+        return '<div class="ao-cal__cell' + (rec ? '' : ' is-empty') + (isCur ? ' is-today' : '') + '">' +
+          '<h5>' + (m + 1) + '月</h5>' +
+          (rec
+            ? '<b class="n num ' + calCls(rec.own) + '">' + (rec.own > 0 ? '+' : '') + calFmt(rec.own) + '</b>' +
+              '<span class="p ' + calCls(rec.pct) + '">' + calPctText(rec.pct) + '</span>'
+            : '<span class="n ao-cal__none">--</span>') +
+        '</div>';
+      }).join('') + '</div>';
+    } else {
+      const firstDow = new Date(calState.y, calState.m, 1).getDay();     // 0=周日
+      const daysInM = new Date(calState.y, calState.m + 1, 0).getDate();
+      let html = '<div class="ao-cal__dow">' + ['日', '一', '二', '三', '四', '五', '六']
+        .map((d) => '<span>' + d + '</span>').join('') + '</div><div class="ao-cal__grid--month">';
+      for (let i = 0; i < firstDow; i++) html += '<div class="ao-cal__day is-pad"></div>';
+      for (let d = 1; d <= daysInM; d++) {
+        const key = calState.y + '-' + String(calState.m + 1).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+        const rec = idx.byDate[key];
+        const future = key > today;
+        html += '<div class="ao-cal__day' + (key === today ? ' is-today' : '') + (future ? ' is-future' : '') + '">' +
+          '<span class="d">' + d + '</span>' +
+          (rec && rec.gain != null
+            ? '<b class="n num ' + calCls(rec.gain) + '">' + (rec.gain > 0 ? '+' : '') + calFmt(rec.gain) + '</b>' +
+              '<span class="p ' + calCls(rec.pct) + '">' + calPctText(rec.pct) + '</span>'
+            : '<span class="n ao-cal__none">--</span>') +
+        '</div>';
+      }
+      body.innerHTML = html + '</div>';
+    }
+  }
+
+  /* 日历交互：月/年切换、上一期、下一期 */
+  (function initAoCal() {
+    const root = document.getElementById('aoCal');
+    if (!root) return;
+    const sw = document.getElementById('aoCalSwitch');
+    const step = (delta) => {
+      if (calState.mode === 'year') calState.y += delta;
+      else {
+        calState.m += delta;
+        if (calState.m < 0) { calState.m = 11; calState.y--; }
+        if (calState.m > 11) { calState.m = 0; calState.y++; }
+      }
+      drawAoCal();
+    };
+    sw.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-ao-cal]');
+      if (!b) return;
+      sw.querySelectorAll('button').forEach((x) => x.classList.toggle('is-active', x === b));
+      calState.mode = b.dataset.aoCal;
+      drawAoCal();
+    });
+    document.getElementById('aoCalPrev').addEventListener('click', () => step(-1));
+    document.getElementById('aoCalNext').addEventListener('click', () => step(1));
   })();
 
   /* ===================== 账户表头排序（双三角图标，点击升/降切换） ===================== */
@@ -1592,17 +2112,47 @@
       if (!tabs) return;
       const kind = page.dataset.catPage;
       const hist = page.querySelector('.acc-history');
-      // 持仓区的块级元素（排除历史面板内部的表格容器）
-      const posBlocks = () => [...page.querySelectorAll('.acc-metrics, .acc-actions, .acc-filter, .acc-sumline, .acc-table-wrap')]
-        .filter((el) => !hist || !hist.contains(el));
+      const panel = page.querySelector('[data-detail]');   // 资金明细面板（页面内展开）
+      const assetPanel = page.querySelector('[data-asset]'); // 资产面板（指标卡已常驻其中，只切显隐）
+      const metrics = page.querySelector('.acc-metrics');    // 旧顶部指标区（已删除，保留兜底分支）
+      // 若顶部指标卡仍存在（证券页 = 资产 + 现金明细；基金/现金 = 资产 1 张），随 tab 进/出面板
+      const assetCards = metrics ? [...metrics.querySelectorAll('.acc-metric')] : [];
+      // 持仓区的块级元素（排除历史/资金明细/资产面板内部的表格容器）
+      // 注：.acc-filter（筛选行）已按用户要求整行删除，这里同步移除选择器
+      const posBlocks = () => [...page.querySelectorAll('.acc-metrics, .acc-actions, .acc-sumline, .acc-table-wrap')]
+        .filter((el) => (!hist || !hist.contains(el)) && (!panel || !panel.contains(el)) && (!assetPanel || !assetPanel.contains(el)));
+      // 「资产」tab：显示资产面板（卡片常驻其中）；切走时隐藏。若顶部还有指标卡则一并搬走/搬回
+      function syncAssetCard(isAsset) {
+        if (!assetPanel) return;
+        assetPanel.hidden = !isAsset;
+        if (!metrics || !assetCards.length) return;
+        if (isAsset) {
+          assetCards.forEach((card) => {
+            if (card.parentNode === metrics) metrics.removeChild(card);
+            assetPanel.appendChild(card);
+          });
+          metrics.hidden = true;
+        } else {
+          assetCards.forEach((card) => {
+            if (card.parentNode === assetPanel) assetPanel.removeChild(card);
+            metrics.appendChild(card);
+          });
+          metrics.hidden = false;
+        }
+      }
       tabs.querySelectorAll('button').forEach((btn) => {
         btn.addEventListener('click', () => {
-          // 按 tab 文案判断（证券页有 4 个 tab：持仓/订单/历史/今日统计，历史不是最后一个）
+          // 按 tab 文案/属性判断（4 个 tab：持仓/资产/历史/资金明细）
           const isHist = /历史/.test(btn.textContent || '');
+          const isDetail = btn.hasAttribute('data-detail-tab');
+          const isAsset = btn.hasAttribute('data-asset-tab');
           if (hist) hist.hidden = !isHist;
-          posBlocks().forEach((el) => { el.hidden = isHist; });
+          posBlocks().forEach((el) => { el.hidden = isHist || isDetail || isAsset; });
+          if (panel) panel.hidden = !isDetail;
+          syncAssetCard(isAsset);
           tabs.querySelectorAll('button').forEach((b) => b.classList.toggle('is-active', b === btn));
-          if (!isHist) accRender(kind);
+          if (isDetail) openDetail(btn.dataset.detailTab, panel);
+          else if (!isHist) accRender(kind);
         });
       });
       // 页面首次显示在「持仓」时，确保历史面板为隐藏
@@ -1611,7 +2161,7 @@
   })();
 
   /* ===================== 资金明细弹窗（每日净值列表） ===================== */
-  const detailState = { stock: [], fund: [], cash: [], cat: null, page: 0, per: 30, fx: 7, flows: {}, fundFlows: {} };
+  const detailState = { stock: [], fund: [], cash: [], cat: null, panel: null, page: 0, per: 30, fx: 7, flows: {}, fundFlows: {} };
   const DETAIL_TITLE = { stock: '证券资金明细', fund: '基金资金明细', cash: '现金资金明细' };
   // 证券账户以 USD 计价，弹窗直接显示美元（不再折 CNY + 括注）；
   // 基金/现金是人民币口径，保持 CNY。
@@ -1621,10 +2171,17 @@
     cash:  ['日期', '净值 · CNY', '当日盈亏', '当日涨跌', '累计涨跌 · TWR'],
   };
 
-  /* 每日一行（**现金流调整后的 TWR**，Modified Dietz 简化式）：
+  /* 每日一行（**现金流调整后的 TWR**，Modified Dietz 日链式）：
        组合日收益  P_t = V_t − V_{t−1} − CF_t        （剔除当日外部净投入的影响）
-       日收益率    r_t = P_t / V_{t−1}
+       日收益率    r_t = P_t / (V_{t−1} + CF_t/2)     ← 分母含「当日入金折半」，这是 Dietz 的关键
        TWR 累计    cum = Π(1 + r_i) − 1             （几何链接，剔除中途投入/赎回的规模效应）
+     ⚠️ 分母为什么必须带 CF_t/2（曾算错，用户 2026-10-03 指出 TWR 只有 14.76%、明显偏低）：
+       用 V_{t−1} 做分母时，大额入金当天会被当成「巨亏」——
+       2026-03-20 前日净值仅 1,454.82，当入金 13,032 后净值 14,085.69，
+       真实盈亏 = 14,085.69 − 13,032 − 1,454.82 = −401.13，
+       但除以 1,454.82 得 **−27.57%**，一天吞掉近 28 个百分点。
+       加上 CF/2（假设资金当日均半日投入）后当日为 −5.03%，全期 TWR 从 14.76% 修正为 **52.07%**，
+       与「累计收益 +82,699 / 本金 167,600 ≈ +49%」量级一致。
      CF_t（外部现金流）按类别取：
        证券 = electronicFundTransfers（IBKR 的 Electronic Fund Transfer，credit=入金/debit=出金）
        基金 = seed.pa_funds[].trades 的申购金额（shares × price，按日汇总，type=buy/redempt 视作流出）
@@ -1640,7 +2197,12 @@
       const flow = cfMap[r.date] || 0;       // 当日外部净投入（CNY）
       return {
         ...r,
-        r1: prev ? (r.value - prev - flow) / prev : null,      // 当日收益率（已剔除投入）
+        // 日收益率 = (V_t − V_{t−1} − CF_t) / (V_{t−1} + CF_t/2)
+        // 分母含当日入金折半，否则大额入金当天会被误算成巨亏（详见 detailState 上方注释）
+        r1: (() => {
+          const den = prev == null ? 0 : prev + flow * 0.5;
+          return den > 0 ? (r.value - prev - flow) / den : null;
+        })(),
         flow,                                                    // 当日外部现金流
         chg: prev == null ? null : r.value - prev,             // 净值差额（含投入）
         gain: prev == null ? null : r.value - prev - flow,     // 组合收益（剔除投入）
@@ -1668,8 +2230,9 @@
     if (!cat) return;
     const rows = detailRows(cat, cat === 'fund' ? detailState.fundFlows : detailState.flows)
       .slice().reverse();   // 最新的排最前
-    const body = document.getElementById('dlgBody');
-    const empty = document.getElementById('dlgEmpty');
+    const panel = detailState.panel;
+    if (!panel) return;
+    const body = panel.querySelector('[data-dbody]');
     const pageCount = Math.max(1, Math.ceil(rows.length / detailState.per));
     if (detailState.page >= pageCount) detailState.page = pageCount - 1;
     const start = detailState.page * detailState.per;
@@ -1680,13 +2243,12 @@
     const cls = (v) => (v == null ? '' : v > 0 ? 'up' : v < 0 ? 'down' : '');
 
     // 表头按类别
-    const headRow = document.getElementById('dlgHeadRow');
+    const headRow = panel.querySelector('[data-dhead]');
     if (headRow) {
       const cols = DETAIL_COLS[cat] || DETAIL_COLS.stock;
       headRow.innerHTML = cols.map((c) => '<th>' + c + '</th>').join('');
     }
 
-    if (empty) empty.hidden = rows.length > 0;
     if (body) {
       body.innerHTML = slice.map((r) => {
         // 当日盈亏显示「组合收益」（已剔除当日入金）；有入金时附小字说明
@@ -1699,66 +2261,34 @@
           `<td class="num ${cls(r.cum)}">${pctS(r.cum)}</td></tr>`;
       }).join('');
     }
-    // 顶部汇总（TWR 累计）
-    const sumEl = document.getElementById('dlgSum');
-    const last = rows[0];                                   // rows 已 reverse，最新在前
-    const baseDate = last && last.base ? last.base : (rows[rows.length - 1] || {}).date;
-    const baseRow = rows.find((r) => r.date === baseDate) || rows[rows.length - 1] || null;   // TWR 基准日
-    const curLabel = cat === 'stock' ? 'USD' : 'CNY';
-    if (sumEl) {
-      if (!rows.length) {
-        sumEl.innerHTML = '<div><span>暂无每日数据</span><b>--</b></div>';
-      } else {
-        // 累计组合收益 = 最新净值 − 基准日净值 − 期间所有投入（与 TWR 口径一致的金额版）
-        // 累计组合收益 = 最新净值 − 基准日净值 − 期间新增投入
-        // 基准日当天的投入已体现在基准日净值里（那就是建仓成本），不再重复扣除
-        const baseRows = rows.filter((r) => r.inBase && r.date !== baseDate);
-        const totalFlow = baseRows.reduce((s, r) => s + (r.flow || 0), 0);
-        const totalGain = baseRow && last ? last.value - baseRow.value - totalFlow : 0;
-        const totalPct = last ? last.cum : 0;                     // TWR 累计涨跌
-        sumEl.innerHTML =
-          `<div><span>最新净值 · ${curLabel}（${last ? last.date : '--'}）</span><b>${f2(last && last.value)}</b></div>` +
-          `<div><span>最新当日盈亏</span><b class="${cls(last && last.gain)}">${sgn(last && last.gain)}</b></div>` +
-          `<div><span>累计组合收益（自 ${baseDate}）</span><b class="${cls(totalGain)}">${sgn(totalGain)}</b></div>` +
-          `<div><span>累计涨跌 · TWR</span><b class="${cls(totalPct)}">${pctS(totalPct)}</b></div>`;
-      }
-    }
-    const cnt = document.getElementById('dlgCount');
-    const pg = document.getElementById('dlgPage');
-    const prev = document.getElementById('dlgPrev');
-    const next = document.getElementById('dlgNext');
+    if (!rows.length && body) body.innerHTML = '<tr><td class="acc-empty__txt" colspan="5">暂无数据</td></tr>';
+    // ⚠️ 顶部汇总（最新净值/最新当日盈亏/累计组合收益/累计涨跌·TWR）已按用户要求删除：
+    //    这四项在下面每日表格里都有对应列（净值/当日盈亏/日涨跌/累计涨跌），完全重复。
+    const cnt = panel.querySelector('[data-dcount]');
+    const pg = panel.querySelector('[data-dpage]');
+    const prev = panel.querySelector('[data-dprev]');
+    const next = panel.querySelector('[data-dnext]');
     if (cnt) cnt.textContent = rows.length + ' 条记录';
     if (pg) pg.textContent = (detailState.page + 1) + ' / ' + pageCount;
     if (prev) prev.disabled = detailState.page <= 0;
     if (next) next.disabled = detailState.page >= pageCount - 1;
   }
 
-  function openDetail(cat) {
+  /* 资金明细改成「页面内 tab 就地展开」（不再走弹窗）：
+     openDetail(cat, panel) —— panel = 当前页内的 .acc-detail 容器 */
+  function openDetail(cat, panel) {
     detailState.cat = cat;
+    detailState.panel = panel || null;
     detailState.page = 0;
-    const dlg = document.getElementById('detailDlg');
-    const title = document.getElementById('dlgTitle');
-    if (title) title.textContent = DETAIL_TITLE[cat] || '资金明细';
-    if (dlg) dlg.hidden = false;
     renderDetail();
   }
 
-  function closeDetail() {
-    const dlg = document.getElementById('detailDlg');
-    if (dlg) dlg.hidden = true;
-  }
-
-  (function initDetailDlg() {
-    document.querySelectorAll('[data-detail]').forEach((btn) => {
-      btn.addEventListener('click', () => openDetail(btn.dataset.detail));
-    });
-    document.querySelectorAll('[data-dlg-close]').forEach((el) => el.addEventListener('click', closeDetail));
-    const prev = document.getElementById('dlgPrev');
-    const next = document.getElementById('dlgNext');
+  document.querySelectorAll('.acc-detail').forEach((panel) => {
+    const prev = panel.querySelector('[data-dprev]');
+    const next = panel.querySelector('[data-dnext]');
     if (prev) prev.addEventListener('click', () => { detailState.page--; renderDetail(); });
     if (next) next.addEventListener('click', () => { detailState.page++; renderDetail(); });
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDetail(); });
-  })();
+  });
 
   async function initAccountData() {
     const ACC_API = 'https://data.alpaca.markets';
@@ -1860,22 +2390,25 @@
       return res;
     }
 
-    /* ---- 东方财富 pingzhongdata（script 标签引入，免 CORS）取最新两日净值 ---- */
+    /* ---- 东方财富 pingzhongdata（script 标签引入，免 CORS）取最新两日净值 ----
+       返回 [最新净值, 前一日净值, 净值日期文本]。
+       ⚠️ QDII 基金净值有 1~3 天滞后，必须把日期带出来让用户看到数据到几号。 */
     function accFundNav(code) {
       return new Promise((resolve) => {
         const s = document.createElement('script');
         s.src = 'https://fund.eastmoney.com/pingzhongdata/' + code + '.js';
         let settled = false;
-        const finish = (l, p) => {
+        const finish = (l, p, d) => {
           if (settled) return;
           settled = true;
           s.remove();
           try { delete window.Data_netWorthTrend; } catch (e) { window.Data_netWorthTrend = undefined; }
-          resolve([l, p]);
+          resolve([l, p, d || null]);
         };
         s.onload = () => {
           const arr = window.Data_netWorthTrend;
-          if (arr && arr.length >= 2) finish(arr[arr.length - 1].y, arr[arr.length - 2].y);
+          // Data_netWorthTrend 每项是 { x: 时间戳(ms), y: 净值 }
+          if (arr && arr.length >= 2) finish(arr[arr.length - 1].y, arr[arr.length - 2].y, navDate(arr[arr.length - 1].x));
           else finish(null, null);
         };
         s.onerror = () => finish(null, null);
@@ -1883,6 +2416,21 @@
         document.head.appendChild(s);
       });
     }
+
+    /* 净值时间戳 → 'MM-DD' 或 'YYYY-MM-DD'（按东财口径，x 是当日 0 点） */
+    function navDate(ts) {
+      const n = Number(ts);
+      if (!isFinite(n) || n <= 0) return null;
+      const d = new Date(n);
+      if (isNaN(d.getTime())) return null;
+      return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
+
+    /* 日期归一化：'2026-10-01'（带横线）与 '20261001'（8 位）两种写法在项目里都存在
+       —— qqq_daily 是前者，_daily_quotes / navDate 是后者。比较前必须统一成 8 位字符串。
+       ⚠️ 不归一化会全错：'2026-10-01' <= '20260929' 为 true（因为 '1' < '9'），
+          会把 10-01 误当成基准日，导致 QQQ 系基金涨跌恒为 0。 */
+    const ymd = (s) => String(s || '').replace(/-/g, '');
 
     /* ---- 本地数据 ---- */
     const asset = await accJson('Asset_parsed.json');
@@ -1901,55 +2449,455 @@
       if (fxr && fxr.rates && fxr.rates.CNY) FX = fxr.rates.CNY;
     } catch (e) {}
 
+    /* ---- 汇率序列（QDII 基金的外汇敞口）—— 基金是人民币计价，资产是外币，
+         人民币净值 = Σ(外币资产 × 该货币兑人民币)，所以估值必须叠加一层汇率变动。
+         一次请求拿全币种：`?base=USD&symbols=CNY,JPY,KRW,HKD`，其余币种用交叉汇率：
+             XXX/CNY = (USD/CNY) ÷ (USD/XXX)
+         ⚠️ 不要直接请求 `?base=KRW&symbols=CNY`：KRW/CNY ≈ 0.005 只给到 3 位有效数字，
+            日间 0.4% 的波动会被四舍五入吃掉一大半；走 USD 交叉（USD/KRW ≈ 1353，5 位有效）
+            精度高一个量级。同理 JPY/CNY ≈ 0.0426 也只有 3 位。
+         数据是欧洲央行日频参考价（北京时间约 16:00 出当日，周末/欧洲假期不更新）。 */
+    const FX_SERIES = {};                 // { USD: [{ d:'20260929', v:6.7034 }, …], JPY: […], KRW: […], HKD: […] }
+    /* ---- 估值是否叠加「期间汇率变动」—— 2026-10-03 用户定稿：**叠加** ----
+       基金是人民币计价、资产是外币，人民币净值 = Σ(外币资产 × 该货币兑人民币)，
+       所以每个成分都要在本币涨跌上再乘一层该货币兑人民币的涨跌（详见 estimateFund / fxChgOn）。
+       实测 frankfurter 是可达的（curl 与浏览器都能取到 9-25~10-02 的序列），
+       但偶发超时 —— 所以加了 localStorage 缓存：拉到就存，拉不到就用上一份（日频数据，隔天不失真）。
+       要临时退回「不含汇率」的口径，把这里改成 false 即可（下面 3 处调用会跟着走）。 */
+    const FX_IN_VAL = true;
+    const FX_CACHE_KEY = 'futu_fx_series_v1';
+    async function loadFxSeries(startDate) {
+      const parse = (j) => {
+        const out = {};
+        Object.keys((j && j.rates) || {}).forEach((d) => {
+          const r = j.rates[d];
+          if (!(r && r.CNY > 0)) return;
+          (out.USD = out.USD || []).push({ d: ymd(d), v: r.CNY });
+          ['JPY', 'KRW', 'HKD'].forEach((c) => {
+            if (r[c] > 0) (out[c] = out[c] || []).push({ d: ymd(d), v: r.CNY / r[c] });
+          });
+        });
+        Object.keys(out).forEach((k) => out[k].sort((a, b) => (a.d < b.d ? -1 : 1)));
+        return out;
+      };
+      const url = `https://api.frankfurter.dev/v1/${startDate}..?base=USD&symbols=CNY,JPY,KRW,HKD`;
+      // ⚠️ 必须**合并进** FX_SERIES 而不是整体替换：VAL.fx 持有的是同一个对象引用，
+      //    重新赋值会让估值模块继续读到空对象（汇率层静默失效，表现为「汇率 +0.000%」）。
+      const merge = (out) => { Object.keys(out).forEach((k) => { FX_SERIES[k] = out[k]; }); };
+      /* ① 优先读随仓库更新的本地快照 fx_rates.json（由 fetch_fx.py / 每日 workflow 生成）。
+            浏览器直连 frankfurter 会被本机 HTTPS 拦截随机掐断，本地文件最稳。 */
+      try {
+        const snap = await accJson('fx_rates.json');
+        const out = parse(snap);
+        if (Object.keys(out).length) { merge(out); return; }
+      } catch (e) { /* 文件缺失/损坏 → 退回在线接口 */ }
+      try {
+        // 偶发超时，失败再试一次（换用不带 startDate 的 30 天窗口，排除是参数问题）
+        let j = await Promise.race([accJson(url), new Promise((r) => setTimeout(r, 6000))]);
+        if (!j || !j.rates) j = await Promise.race([accJson(url), new Promise((r) => setTimeout(r, 6000))]);
+        const out = parse(j);
+        if (Object.keys(out).length) {
+          merge(out);
+          try { localStorage.setItem(FX_CACHE_KEY, JSON.stringify({ at: Date.now(), data: out })); } catch (e) {}
+          return;
+        }
+      } catch (e) { console.warn('[汇率序列] 拉取失败：', e); }
+      // 兜底：读上次缓存（欧洲央行日频参考价，隔天用不失真）
+      try {
+        const c = JSON.parse(localStorage.getItem(FX_CACHE_KEY) || 'null');
+        if (c && c.data && Object.keys(c.data).length) {
+          merge(c.data);
+          VAL_FX_FROM_CACHE = new Date(c.at);
+          console.warn('[汇率序列] 用本地缓存（抓于 ' + VAL_FX_FROM_CACHE.toLocaleString() + '）');
+        }
+      } catch (e) {}
+    }
+    let VAL_FX_FROM_CACHE = null;      // 非 null 表示本次汇率用的缓存（调试/排查用）
+
+    /* ================= 基金实时估值（季报持仓加权） =================
+       2026-01 监管要求全行业下架「基金实时估值」，公开接口已不可用，这里**自己算**：
+         基金估算涨跌 = Σ(重仓权重 × 该股人民币口径涨跌) + 残余股票×QQQ + 闲置仓位的汇兑损益
+       —— 注意公式里的涨跌是**人民币口径**：基金以人民币计价、资产是外币，
+         所以每个成分都要在自己本币涨跌上再叠一层「该货币兑人民币」的涨跌（详见 fxChgOn）。
+       区间口径：基准日 = 该基金最新净值日（QDII 按**美东**交易日计），终点 = 各市场最新可得价。
+       行情来源（按市场分）：
+         美股     → OKX 永续（`OKX_API_BASE`，instId = `<code>-USDT-SWAP`），复用现有 fetchers；
+         日/韩/港/A → `fund_holdings.json` 的 `_daily_quotes`（东方财富日线，已抓好）；
+         QQQ      → `qqq_daily`（438 根日线，含 9-29 基准与 10-01 最新）；
+         汇率      → frankfurter 日频参考价（USD/JPY/KRW/HKD → CNY，见 loadFxSeries）；
+         取不到   → 回落 QQQ 涨跌（用户规则：未知的股票都按 QQQ 推算）。
+       ⚠️ 已知脏数据：jp285A 在 `_daily_quotes` 里 9-28=53340 → 9-29=17880 断层（单位/复权口径不一致），
+          由此算出的涨幅无意义 —— 检测到这种断层就标记不可用并走 QQQ 兜底。
+
+       ⚠️ OKX 并非所有代码都有永续合约，个别标的要用同一公司的另一类股份顶替（比 QQQ 兜底准得多）：
+          GOOG（谷歌-C）没有 `GOOG-USDT-SWAP`，用 GOOGL（谷歌-A）的行情 —— A/C 两类股同股不同权，
+          同属 Alphabet，价格长期贴合，基金季报里两者也常混用。 */
+    const VAL = { qqq: [], dq: {}, splits: {}, dqDirty: new Set(), okx: {} };
+    {
+      const FH = fundH || {};
+      // 日期格式必须归一化后再比较（ymd 已在上面定义，详见那里注释）
+      VAL.fx = FX_SERIES;                 // 各货币兑人民币日频序列（见 loadFxSeries）
+      // QQQ 日线（升序，日期归一化为 8 位）：基准日按每只基金的 navDate 现查，终点恒为最后一条
+      VAL.qqq = (FH.qqq_daily || []).map((r) => ({ d: ymd(r.d), c: r.c }))
+        .sort((a, b) => (a.d < b.d ? -1 : 1));
+      // 非美标的：逐条存 {date, close, prevClose}（同样归一化）
+      Object.keys(FH._daily_quotes || {}).forEach((k) => {
+        VAL.dq[k] = (FH._daily_quotes[k] || []).map((r) => ({
+          d: ymd(r.date), c: r.close, pc: r.prevClose,
+        })).sort((a, b) => (a.d < b.d ? -1 : 1));
+      });
+      /* ---- 拆股自动识别与前复权 ----
+         原理：拆股当日的 `prevClose` 会被数据源**按新股本口径**给出，而前一日 `close` 仍是旧口径，
+           两者比值就是拆股比例。实测 jp285A（铠侠 1:3 拆股）：
+             20260928 close=53340  →  20260929 prevClose=17780，且 53340 / 3 = 17780 ✓
+         做法：从后往前扫，遇到「前一日 close ÷ 当日 prevClose ≈ 整数倍（1.5~10）」就判定为拆股，
+           把**该日之前**所有 close 与 prevClose 同除以该比例（向前复权，保证历史可比）。 */
+      const SPLIT_RATIOS = [2, 3, 4, 5, 6, 7, 8, 9, 10, 1.5, 2.5, 3.5];
+      const findSplits = (arr) => {
+        const hits = [];
+        for (let i = 1; i < arr.length; i++) {
+          const prev = arr[i - 1], cur = arr[i];
+          if (!(prev.c > 0) || !(cur.pc > 0)) continue;
+          const ratio = prev.c / cur.pc;
+          for (const k of SPLIT_RATIOS) {
+            // 容差 2%：数据源四舍五入到 0.5~1 个价位单位时会带小误差
+            if (Math.abs(ratio / k - 1) < 0.02) {
+              // 排除「真的暴涨/暴跌」：要求当日 prevClose 与前一日 close 同量级时才可能是拆股
+              hits.push({ at: cur.d, k });
+              break;
+            }
+          }
+        }
+        return hits;
+      };
+      const applySplits = (arr, hits) => {
+        if (!hits.length) return arr;
+        // 从最新一次拆股往前回溯累计因子：拆股日**之前**的记录要除以所有后续拆股比例
+        const out = arr.map((r) => ({ ...r }));
+        for (const h of hits) {
+          const idx = out.findIndex((r) => r.d === h.at);
+          if (idx <= 0) continue;
+          for (let i = 0; i < idx; i++) {           // 拆股日之前（含当日 prevClose 对应的前一日）全部按新口径折算
+            out[i].c /= h.k;
+            if (out[i].pc) out[i].pc /= h.k;
+          }
+        }
+        return out;
+      };
+      Object.keys(VAL.dq).forEach((k) => {
+        const hits = findSplits(VAL.dq[k]);
+        if (hits.length) {
+          VAL.dq[k] = applySplits(VAL.dq[k], hits);
+          VAL.splits[k] = hits;
+        }
+      });
+      // 复权后仍存在 >50% 的断层才判定为脏数据（拆股已处理，剩下的才是真异常）
+      Object.keys(VAL.dq).forEach((k) => {
+        const arr = VAL.dq[k];
+        for (let i = 1; i < arr.length; i++) {
+          if (arr[i - 1].c > 0 && Math.abs(arr[i].c / arr[i - 1].c - 1) > 0.5) { VAL.dqDirty.add(k); break; }
+        }
+      });
+    }
+    /* QQQ 区间涨幅：基准 = 基准日**之前最近的一条**（该市场基准日未必有交易），
+       终点 = 最后一条。⚠️ 基准日必须由调用方按各基金 navDate 传入 ——
+       早前写成模块级常量（基准恒等于最后一条）会导致所有 QQQ 系基金涨跌恒为 0。 */
+    function qqqChgOn(baseDate) {
+      if (!VAL.qqq.length) return null;
+      const bd = String(baseDate || '').replace(/-/g, '');
+      let bi = -1;
+      for (let i = 0; i < VAL.qqq.length; i++) if (VAL.qqq[i].d <= bd) bi = i;
+      if (bi < 0) bi = 0;
+      const last = VAL.qqq[VAL.qqq.length - 1];
+      if (last.d <= VAL.qqq[bi].d) return 0;
+      return last.c / VAL.qqq[bi].c - 1;
+    }
+
+    /* ---- 汇率（QDII 的人民币折算层）----
+       基金用人民币计价，但资产是外币：客户经理不做汇率对冲时（QDII 股票基金基本不对冲），
+         人民币净值 = Σ(某只股票的外币市值 × 该货币兑人民币)
+       所以单个成分对基金净值的贡献是**两个涨幅相乘**，不是相加：
+         人民币口径涨跌 = (1 + 股票本币涨跌) × (1 + 该货币兑人民币涨跌) − 1
+       例如 SK 海力士本币 +4.31%、韩元兑人民币 +0.39%，对基金就是 (1.0431×1.0039 − 1) = +4.72%。 */
+    const CUR_OF = { us: 'USD', jp: 'JPY', kr: 'KRW', hk: 'HKD', sz: 'CNY', sh: 'CNY', cn: 'CNY' };
+    /* 某货币兑人民币在区间内的涨跌（小数）；CNY 恒 0；序列缺失返回 null（调用方退回美元）。 */
+    function fxChgOn(cur, baseDate) {
+      if (!cur || cur === 'CNY') return 0;
+      const arr = VAL.fx[cur];
+      if (!arr || !arr.length) return null;
+      const bd = ymd(baseDate);
+      let bi = -1;
+      for (let i = 0; i < arr.length; i++) if (arr[i].d <= bd) bi = i;
+      if (bi < 0) bi = 0;
+      const last = arr[arr.length - 1];
+      if (last.d <= arr[bi].d) return 0;                    // 基准日之后汇率没再更新
+      return last.v / arr[bi].v - 1;
+    }
+
+    /* 单个标的的区间涨跌（小数，如 0.0056）；
+       baseDate = 基金净值日（'YYYY-MM-DD'）；取不到返回 null → 走 QQQ 兜底。
+       非美标的用复权后的序列（拆股已前复权，见上）；美股 OKX 永续自带连续合约处理。
+       ⚠️ 返回的是**本币**涨跌，人民币口径要再乘汇率（见 estimateFund 里的 toCny）。 */
+    /* OKX 股票永续只挂**一个**上市代码：谷歌只有 GOOGL，没有 GOOG-USDT-SWAP。
+       而部分基金的季报持仓写的是 GOOG（谷歌-C），直接查会 404 → 该股被判为「未知」走 QQQ 兜底。
+       两者同为 Alphabet 普通股，价格长期贴合约 0.1%，所以 GOOG 直接复用 GOOGL 的行情。 */
+    const OKX_ALIAS = { GOOG: 'GOOGL' };
+    const okxInst = (code) => `${OKX_ALIAS[code] || code}-USDT-SWAP`;
+
+    function symbolChg(code, mkt, baseDate) {
+      const bd = String(baseDate || '').replace(/-/g, '');
+      const pick = (arr) => {
+        if (!arr || !arr.length || VAL.dqDirty.has(mkt + code)) return null;
+        // 基准日必须存在（该市场那天有交易）；取不到就退到基准日之前最近的一条
+        let bi = -1;
+        for (let i = 0; i < arr.length; i++) if (arr[i].d <= bd) bi = i;
+        if (bi < 0) bi = 0;
+        const last = arr[arr.length - 1];
+        if (last.d <= arr[bi].d) return 0;                  // 基准日之后没更新
+        return last.c / arr[bi].c - 1;
+      };
+      if (mkt === 'us') {
+        if (/^QQQ$/i.test(code)) return qqqChgOn(baseDate);    // QQQ 走专用日线
+        const k = code.toUpperCase();
+        // 读行情时也要过别名：拉的是 GOOGL 的合约，持仓/重仓里写的却是 GOOG
+        const ok = VAL.okx[k] || (OKX_ALIAS[k] ? VAL.okx[OKX_ALIAS[k]] : null);
+        if (ok && ok.base != null && ok.now != null && ok.base > 0) return ok.now / ok.base - 1;
+        return null;                                        // → QQQ 兜底
+      }
+      return pick(VAL.dq[mkt + code]);                      // jp285A / kr000660 / hk02513 / sz300408
+    }
+
+    /* 拉美股行情（两个用途）：
+       ① 基金估值：基准 = 基金净值日的美东收盘（OKX 1H 线 15:00-16:00 那根），最新 = ticker 现价；
+       ② 证券现价：Alpaca 不可达时用 OKX 现价补上（TQQQ 也要，它不在 funds.items 里）。
+       `baseDate` 为空时只取现价（不找基准），供 ② 使用。
+       ⚠️ 必须**限流**：一次 Promise.all 打 20+ 个并发会被 OKX 返 429（实测持仓股 ORCL/TQQQ
+       恰好排在最后被限流掉，现价变 `--`）。这里分批 4 个 + 429 退避重试。 */
+    const okxGet = async (url, tries) => {
+      for (let i = 0; i <= (tries || 2); i++) {
+        const r = await fetch(url);
+        if (r.status === 429) { await new Promise((s) => setTimeout(s, 350 * (i + 1))); continue; }
+        return r.json();
+      }
+      return null;
+    };
+    const chunk = (arr, n) => { const o = []; for (let i = 0; i < arr.length; i += n) o.push(arr.slice(i, i + n)); return o; };
+
+    async function loadUsQuotes(baseDate, extraCodes) {
+      const codes = new Set();
+      funds.forEach((f) => (f.items || []).forEach((it) => { if (it.m === 'us' && !/^QQQ$/i.test(it.c)) codes.add(it.c.toUpperCase()); }));
+      (extraCodes || []).forEach((c) => codes.add(String(c).toUpperCase()));
+      if (!codes.size) return;
+      /* 按**实际合约**去重：GOOG 与 GOOGL 都指向 GOOGL-USDT-SWAP，
+         不合并会白打一次请求（还多占一次 429 额度）。 */
+      const instMap = new Map();                          // instId -> 需要这个合约的原始代码[]
+      [...codes].forEach((c) => {
+        const inst = okxInst(c);
+        if (!instMap.has(inst)) instMap.set(inst, []);
+        instMap.get(inst).push(c);
+      });
+      const batches = chunk([...instMap.keys()], 4);      // 4 个一批，避免 429
+      for (const batch of batches) {
+        await Promise.all(batch.map(async (inst) => {
+          try {
+            let base = null;
+            if (baseDate) {
+              const j = await okxGet(`${OKX_API_BASE}/market/candles?instId=${inst}&bar=1H&limit=120`);
+              const rows = ((j && j.data) || []).map((x) => ({ ts: +x[0], close: +x[4] }));
+              for (const it of rows) {
+                const d = new Date(it.ts);
+                const et = d.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+                const etH = Number(d.toLocaleString('en-US', { timeZone: 'America/New_York', hour12: false, hour: '2-digit' }));
+                if (et === baseDate && etH >= 15 && etH < 16) base = it.close;
+              }
+            }
+            const tj = await okxGet(`${OKX_API_BASE}/market/ticker?instId=${inst}`);
+            const now = (tj && tj.data && tj.data[0]) ? +tj.data[0].last : null;
+            if (now != null) {
+              // ⚠️ 合并而非覆盖：loadUsQuotes 会被调用两次（先基金重仓带 baseDate、
+              //    再持仓股 baseDate=null），若直接 `= { now, base }` 会把上一轮拿到的
+              //    基准价清成 null，基金估值就全退回 QQQ 兜底了。
+              (instMap.get(inst) || []).forEach((c) => {
+                VAL.okx[c] = VAL.okx[c] || {};
+                VAL.okx[c].now = now;
+                if (base != null) VAL.okx[c].base = base;
+              });
+            }
+          } catch (e) { /* 单个失败就走 QQQ 兜底 / 快照兜底 */ }
+        }));
+      }
+      // 持仓股再补一次「昨收」：只拉现价(baseDate 为 null)时 prevClose 是空的，
+      // 交易页涨跌列会一直显示 --。取**最近一根已完结**的日线收盘。
+      const held = (extraCodes || []).map((c) => String(c).toUpperCase());
+      if (held.length) {
+        const todayUtc = new Date().toISOString().slice(0, 10);
+        await Promise.all(held.map(async (c) => {
+          if (!VAL.okx[c] || VAL.okx[c].prevClose) return;
+          try {
+            const j = await okxGet(`${OKX_API_BASE}/market/candles?instId=${okxInst(c)}&bar=1Dutc&limit=6`);
+            const rows = ((j && j.data) || []).map((x) => ({
+              d: new Date(+x[0]).toISOString().slice(0, 10), close: +x[4],
+            })).sort((a, b) => (a.d < b.d ? -1 : 1));
+            // ⚠️ 不能用「倒数第二根」：OKX 当天那根日线会随行情实时变动（收 10-02 的盘时
+            // 最老一根就是今天，close 已等于现价），取倒数第二根会得到 ≈0% 的假涨跌。
+            // 正确做法：取**日期早于今天**的最后一根。
+            let prev = null;
+            for (const r of rows) if (r.d < todayUtc) prev = r;
+            if (prev) VAL.okx[c].prevClose = prev.close;
+          } catch (e) {}
+        }));
+      }
+    }
+
+    /* 逐只基金算估值：返回 { navEst, chg, parts }，chg 为小数。 */
+    /* 逐只基金算估值：返回 { chg（人民币口径，小数）, fxChg（纯汇率贡献）, parts }。 */
+    function estimateFund(f, baseDate) {
+      const items = f.items || [];
+      const alloc = f.alloc || {};
+      const stockW = alloc.stock || 0;
+      const bondW = alloc.bond || 0;                       // 债券：无利息 → 原币价值不变
+      const cashW = alloc.cash || 0;                       // 现金：同上
+      const qc = qqqChgOn(baseDate);                       // 本基金基准日下的 QQQ 涨幅（兜底用）
+      // 汇率层：FX_IN_VAL=false（用户定稿）时恒 0 → 人民币口径涨跌 == 本币涨跌
+      const fxUsd = FX_IN_VAL ? fxChgOn('USD', baseDate) : 0;
+      const fxUsdV = fxUsd == null ? 0 : fxUsd;            // 序列缺失 → 汇率层整体作废（=0）
+      /* 本币涨跌 → 人民币口径：两个涨幅相乘（-1 后才可分权重相加）。
+         该货币没有汇率数据时退回美元，宁可用错币种也不要把这一层吞掉。 */
+      const toCny = (chg, cur) => {
+        if (!FX_IN_VAL) return chg;                        // 开关关闭 → 人民币口径 == 本币涨跌
+        const fx = fxChgOn(cur, baseDate);
+        return (1 + chg) * (1 + (fx == null ? fxUsdV : fx)) - 1;
+      };
+      let acc = 0, wsum = 0, fxAcc = 0;
+      const parts = [];
+      items.forEach((it) => {
+        let c = symbolChg(it.c, it.m, baseDate);
+        let viaQqq = false;
+        if (c == null) { c = qc == null ? 0 : qc; viaQqq = true; }   // 未知 → QQQ
+        if (c == null) return;
+        const cur = CUR_OF[it.m] || 'USD';
+        const fx = FX_IN_VAL ? fxChgOn(cur, baseDate) : 0;
+        const fxv = fx == null ? fxUsdV : fx;
+        const cn = toCny(c, cur);
+        const w = (it.p || 0) / 100;
+        acc += w * cn;
+        fxAcc += w * fxv;                                 // 纯汇率贡献（拆开给用户看）
+        wsum += it.p || 0;
+        parts.push({ code: it.c, m: it.m, w: it.p, chg: c, cnyChg: cn, fxChg: fxv, cur, viaQqq });
+      });
+      // 未披露的股票仓位（stockW − 已列权重）同样按 QQQ 推算，并叠加美元汇率
+      const residual = Math.max(0, stockW - wsum);
+      if (residual > 0.01 && qc != null) {
+        acc += residual / 100 * ((1 + qc) * (1 + fxUsdV) - 1);
+        fxAcc += residual / 100 * fxUsdV;
+      }
+      /* 债券 + 现金：不计利息（原币价值不变），但 QDII 持的是外币，汇兑损益照算 ——
+         美元涨 1% 时这部分也有 1% 的人民币收益。**未归类**的仓位（季报 alloc 三项加起来
+         不足 100% 的差额）既不知道币种也不知涨跌，保守记为 0。 */
+      const idleW = Math.max(0, bondW + cashW);
+      if (idleW > 0.01) { acc += idleW / 100 * fxUsdV; fxAcc += idleW / 100 * fxUsdV; }
+      const chg = acc;
+      return { chg, fxChg: fxAcc, parts, bondW, cashW, idleW, residual, qqq: qc, fxUsd: fxUsdV,
+               navEst: f.navL != null ? f.navL * (1 + chg) : null };
+    }
+
     /* ---- 基金：份额 × 最新净值（pingzhongdata，失败回退 fund_holdings.json） ---- */
     const funds = (seed.pa_funds || []).map((f) => {
       const t = (f.trades && f.trades[0]) || {};
       return { code: f.code, name: f.name, shares: t.shares || 0, cost: t.price || 0, navL: null, navP: null,
                trades: f.trades || [],                       // 历史·订单用（可能不止一笔）
-               hist: (fundH && fundH[f.code] && Array.isArray(fundH[f.code].nav)) ? fundH[f.code].nav : null };
+               hist: (fundH && fundH[f.code] && Array.isArray(fundH[f.code].nav)) ? fundH[f.code].nav : null,
+               // 推算用：季报持仓（items）+ 仓位配置（alloc）
+               items: (fundH && fundH[f.code] && fundH[f.code].items) || [],
+               alloc: (fundH && fundH[f.code] && fundH[f.code].alloc) || null };
     });
     /* 6 只基金的 pingzhongdata 并行拉取 —— 原来串行时每只不可达要等 8s 超时，
        6×8=48s，导致「总资产」要半分钟才出数（基金/现金反而是齐的）。
        并行后总耗时 = 最慢的那一只。 */
     await Promise.all(funds.map(async (f) => {
-      const [l, p] = await accFundNav(f.code);
-      if (l != null) { f.navL = l; f.navP = p; }
+      const [l, p, d] = await accFundNav(f.code);
+      if (l != null) { f.navL = l; f.navP = p; f.navDate = d; }
       else if (fundH && fundH[f.code] && Array.isArray(fundH[f.code].nav) && fundH[f.code].nav.length >= 2) {
         const nav = fundH[f.code].nav;
         f.navL = nav[nav.length - 1][1];
         f.navP = nav[nav.length - 2][1];
+        f.navDate = navDate(nav[nav.length - 1][0]);      // 回退数据源同样带日期
       }
     }));
+    /* 拉美股行情后逐只算估值（基准日 = 各基金自己的 navDate，即最新净值日）。
+       账户持仓的股票现价也靠这批数据补（Alpaca 不可达时），但 holdings 在下方才声明，
+       所以这里只拉基金重仓的代码，持仓代码在 holdings 建好后再补拉一次。
+       汇率序列跟行情**并行**拉 —— 两条链路互不依赖，串着跑会白白多等一个 RTT。
+       区间起点往前多留 10 天缓冲：基金净值日可能比今天早好几天（QDII 滞后 1~3 天）。 */
+    {
+      const usBase = funds.find((f) => f.navDate) ? funds.find((f) => f.navDate).navDate : null;
+      const back = new Date(Date.now() - 40 * 86400e3).toISOString().slice(0, 10);
+      // 汇率序列只在开关打开时才拉（frankfurter 本机不可达，关着就省掉一次 6s 空等）
+      await Promise.all([loadUsQuotes(usBase), FX_IN_VAL ? loadFxSeries(back) : Promise.resolve()]);
+    }
     let fundAmount = 0, fundYesterday = 0, fundCum = 0;
     funds.forEach((f) => {
       f.amount = f.shares * (f.navL || 0);
       f.yest = f.navP != null ? f.shares * (f.navL - f.navP) : null;
       f.cum = f.cost ? f.shares * (f.navL - f.cost) : null;
+      // 涨跌比例（与「昨日收益」「持仓收益」两列配套）：
+      //   昨日涨跌 = (最新净值 − 前一日净值) ÷ 前一日净值
+      //   持仓涨跌 = (最新净值 − 成本) ÷ 成本
+      f.yestPct = f.navP ? (f.navL - f.navP) / f.navP : null;
+      f.cumPct = f.cost ? (f.navL - f.cost) / f.cost : null;
+      // 实时估值：官方净值停更期间用季报持仓加权推算（详见 VAL 模块注释）
+      if (f.items && f.items.length && f.navDate) {
+        const est = estimateFund(f, f.navDate);
+        f.estChg = est.chg;
+        f.estNav = est.navEst;
+        f.estAmount = est.navEst != null ? f.shares * est.navEst : null;
+        f.estDelta = f.estAmount != null ? f.estAmount - f.amount : null;   // 相对官方净值的增量
+        f.estParts = est.parts;
+        f.estFxChg = est.fxChg;                                      // 其中纯汇率贡献
+        f.estFxUsd = est.fxUsd;                                      // 本基金基准日 → 今天的美元汇率涨跌
+        f.estBondW = est.bondW; f.estCashW = est.cashW; f.estResidual = est.residual;
+      }
       fundAmount += f.amount;
       if (f.yest != null) fundYesterday += f.yest;
       if (f.cum != null) fundCum += f.cum;
     });
     const fundTbody = $id('fundTbody');
     if (fundTbody) {
-      // 排序键挂到行对象上：funds 已带 name/code/amount/shares/yest/cum，权重另算
-      funds.forEach((f) => { f.weight = fundAmount ? (f.amount / fundAmount * 100) : 0; f.cur = 'CNY'; });
+      // 排序键挂到行对象上：funds 已带 name/code/amount/shares/yest/cum
+      funds.forEach((f) => { f.cur = 'CNY'; });
       ACC_RENDERERS.fund = () => {
         fundTbody.innerHTML = accSorted('fund', funds).map((f) =>
-          `<tr><td class="td-link up">交易</td><td>${f.name}</td><td class="num">${f.code}</td>` +
+          `<tr><td>${f.name}</td><td class="num">${f.code}</td>` +
           `<td class="num">${f2(f.amount)}</td><td class="num">${f.shares.toFixed(2)}</td>` +
           `<td class="num ${f.yest > 0 ? 'up' : f.yest < 0 ? 'down' : ''}">${f2(f.yest, true)}</td>` +
+          `<td class="num ${f.yestPct > 0 ? 'up' : f.yestPct < 0 ? 'down' : ''}">${pctS(f.yestPct)}</td>` +
           `<td class="num ${f.cum > 0 ? 'up' : f.cum < 0 ? 'down' : ''}">${f2(f.cum, true)}</td>` +
-          `<td class="num">${f.weight.toFixed(2)}%</td><td>${f.cur}</td></tr>`
+          `<td class="num ${f.cumPct > 0 ? 'up' : f.cumPct < 0 ? 'down' : ''}">${pctS(f.cumPct)}</td>` +
+          `<td>${f.cur}</td></tr>`
         ).join('');
       };
       accRender('fund');
     }
     setTxt('fundSumVal', f2(fundAmount));
+    setTxt('fundSumYesterday', f2(fundYesterday, true), fundYesterday);
     setTxt('fundSumProfit', f2(fundCum, true), fundCum);
     setTxt('fundMYest', f2(fundYesterday, true), fundYesterday);
     setTxt('fundMCum', f2(fundCum, true), fundCum);
+    // 净值更新日期：QDII 各基金滞后天数不同，取**最旧**那个日期（最保守，不会让人误以为数据更新）
+    // ⚠️ 变量名不要用 navDates —— 下面「历史·净值」段已用同名（`new Set()`），const 重名会直接语法报错。
+    const fundNavDates = funds.map((f) => f.navDate).filter(Boolean).sort();
+    setTxt('fundNavDate', fundNavDates.length ? fundNavDates[0] : '--');
     setTxt('accFundVal', f2(fundAmount));
     setTxt('accFundNote', f2(fundYesterday, true), fundYesterday);
+    // 昨日涨跌幅 = 昨日收益 ÷ 昨日市值（今日市值 − 昨日收益）
+    const fundYestBase = fundAmount - fundYesterday;
+    setTxt('accFundNotePct', fundYestBase ? pctS(fundYesterday / fundYestBase) : '--', fundYesterday);
+    setTxt('accFundCum', f2(fundCum, true), fundCum);
+    // 累计涨跌幅 = 累计收益 ÷ 成本（今日市值 − 累计收益）
+    const fundCumBase = fundAmount - fundCum;
+    setTxt('accFundCumPct', fundCumBase > 0 ? pctS(fundCum / fundCumBase) : '--', fundCum);
+    // 注：汇总行不再放比例（用户要求比例只出现在**表格列**里 → 昨日涨跌 / 持仓涨跌），
+    // 侧栏那两处 accFundNotePct / accFundCumPct 保留。
 
     /* ---- 历史·订单（仅 seed.pa_funds 申购记录）
        注：TQQQ 属于证券持仓，已在证券页「历史·成交」中列示，这里不再重复。 */
@@ -1991,7 +2939,7 @@
     if (cashTbody) {
       ACC_RENDERERS.cash = () => {
         cashTbody.innerHTML = accSorted('cash', cashRows).map((r) =>
-          `<tr><td class="td-link up">交易</td><td>${r.note}</td><td class="num">--</td>` +
+          `<tr><td>${r.note}</td><td class="num">--</td>` +
           `<td class="num">${f2(r.cny)}</td><td class="num">${f2(r.bal)}</td>` +
           `<td class="num">--</td><td class="num">--</td><td class="num">--</td><td class="num">--</td>` +
           `<td class="num">--</td><td class="num">--</td><td>${r.cur}</td></tr>`
@@ -2075,85 +3023,141 @@
     let rtPosVal = 0, todayPnlUsd = 0;
     const stockTbody = $id('stockTbody');
     const rows = [];
-    holdings.forEach((h) => {
-      let price = null, prevClose = null, qty = 0, cost = 0, mult = 1;
+    /* 单只持仓 → 行数据。抽成函数是为了**定时刷新**：交易页原先只在 initAccountData
+       跑一次，自选列表 15s 一刷、交易页却停在打开那一刻，同一只 ORCL 两个页面两个价
+       （用户 2026-10-04 报「现价还是 142.41」）。刷新时用 Object.assign 原地更新，
+       rows 的元素引用不变，ACC_RENDERERS.stock / TRADE_POS.stock 都能看到新值。 */
+    const computeRow = (h, qq) => {
+      let pAcct = null, prevClose = null, qty = 0, cost = 0, mult = 1, src = '';
       if (h.opt) {
-        const o = q.opt[h.occ] || {};
-        price = o.price; prevClose = o.prevClose;
+        const o = (qq && qq.opt && qq.opt[h.occ]) || {};
+        pAcct = o.price; prevClose = o.prevClose;
         qty = h.pos; cost = h.cost; mult = 100;
       } else if (h.tqqqShares != null) {
-        const s = q.stock[h.code] || {};
-        price = s.price || tqqq.price; prevClose = s.prevClose;
+        const s = (qq && qq.stock && qq.stock[h.code]) || {};
+        // ⚠️ 不用 tqqq.price（种子文件里的**快照价**，会长期陈旧）当现价：
+        //    Alpaca → OKX → 快照，三级兜底由下方统一处理。
+        pAcct = s.price; prevClose = s.prevClose;
         qty = h.tqqqShares; cost = h.tqqqCost;
       } else {
-        const s = q.stock[h.code] || {};
-        price = s.price; prevClose = s.prevClose;
+        const s = (qq && qq.stock && qq.stock[h.code]) || {};
+        pAcct = s.price; prevClose = s.prevClose;
         qty = h.pos; cost = h.cost;
       }
-      const value = price != null ? qty * price * mult : null;
-      const pnl = price != null ? (price - cost) * qty * mult : null;
-      const pnlRatio = price != null && cost ? (price - cost) / cost : null;
-      const todayPnl = price != null && prevClose != null ? (price - prevClose) * qty * mult : null;
-      if (value != null) rtPosVal += value;
+      /* ① 账户页现价 pAcct：Alpaca → OKX → 快照（IBKR markPrice）。
+         ⚠️ Alpaca 已有价时**不覆盖**：它是真实正股报价，休市日就停在上一个收盘（正确的行为）。 */
+      const k = String(h.code || '').toUpperCase();
+      const ok = VAL.okx[k] || (OKX_ALIAS[k] ? VAL.okx[OKX_ALIAS[k]] : null);
+      if (pAcct == null || !(pAcct > 0)) {
+        if (ok && ok.now) { pAcct = ok.now; src = 'okx'; if (!(prevClose > 0)) prevClose = ok.prevClose != null ? ok.prevClose : prevClose; }
+        else if (h.tqqqShares != null && tqqq.price) { pAcct = tqqq.price; src = '快照'; }
+      }
+      /* ② 交易页现价 pTrade：**OKX 优先**（用户 2026-10-04 定稿）。
+         OKX 股票永续 7×24 连续报价，盘中/周末都在动，能反映当下真实价格；
+         账户页那个是 IBKR/Alpaca 的休市快照价。两者之差就是交易页的「较基准涨跌」。
+         OKX 取不到时才回落账户价，保证不出现空行。 */
+      const pTrade = (ok && ok.now) ? ok.now : pAcct;
+      const value = pAcct != null ? qty * pAcct * mult : null;          // 账户页市值（账面口径）
+      const tradeValue = pTrade != null ? qty * pTrade * mult : null;   // 交易页市值（OKX 口径）
+      const pnl = pAcct != null ? (pAcct - cost) * qty * mult : null;
+      const pnlRatio = pAcct != null && cost ? (pAcct - cost) / cost : null;
+      const todayPnl = pAcct != null && prevClose != null ? (pAcct - prevClose) * qty * mult : null;
+      // 账户页「今日涨跌」= (账户现价 − 昨收) ÷ 昨收（与「今日盈亏」列配套）
+      const todayPct = pAcct != null && prevClose ? (pAcct - prevClose) / prevClose : null;
+      /* 交易页「较基准」：基准 = **账户页那个现价**（用户 2026-10-04：「涨跌幅就是和账户里的现价对比」）。
+         即 (OKX 现价 − 账户现价) ÷ 账户现价，而不是对昨收。 */
+      const tradeChgUsd = (pTrade != null && pAcct != null) ? (pTrade - pAcct) * qty * mult : null;
+      const tradePct = (pTrade != null && pAcct) ? (pTrade - pAcct) / pAcct : null;
+      const cny = (v) => v == null ? null : v * FX;
+      return {
+        h, price: pAcct, pTrade, pAcct, prevClose, qty, cost, mult, src,
+        value, tradeValue, pnl, pnlRatio, todayPnl, todayPct,
+        tradeChgUsd, tradePct,
+        // 排序键 + 交易页要用：code/name/valueCny(账户市值) / pnlCny(累计) / tradeValueCny / tradeChgCny
+        code: h.code, name: h.name,
+        valueCny: cny(value), pnlCny: cny(pnl), todayCny: cny(todayPnl),
+        tradeValueCny: cny(tradeValue), tradeChgCny: cny(tradeChgUsd),
+      };
+    };
+    /* 持仓股票也拉一遍 OKX 行情（Alpaca 不可达时靠它给现价）。
+       holdings 在这里才声明完，所以补拉放在 forEach 之前。 */
+    await loadUsQuotes(null, holdings.filter((h) => !h.opt).map((h) => h.code).filter(Boolean));
+    holdings.forEach((h) => {
+      const r = computeRow(h, q);
+      if (r.value != null) rtPosVal += r.value;
       else if (h.posVal0 != null) rtPosVal += h.posVal0;   // 取不到实时价 → 用 JSON 快照市值兜底
-      if (todayPnl != null) todayPnlUsd += todayPnl;
-      rows.push({ h, price, prevClose, qty, cost, mult, value, pnl, pnlRatio, todayPnl });
+      if (r.todayPnl != null) todayPnlUsd += r.todayPnl;
+      rows.push(r);
     });
 
     if (stockTbody) {
-      // 排序键：code/name/qty/price/cost/value(CNY)/ratio/pnl(CNY)/today(CNY)
-      rows.forEach((r) => {
-        const cny = (v) => v == null ? null : v * FX;
-        r.code = r.h.code; r.name = r.h.name;
-        r.valueCny = cny(r.value); r.pnlCny = cny(r.pnl); r.todayCny = cny(r.todayPnl);
-      });
+      // 排序键 code/name/valueCny/pnlCny/todayCny 已由 computeRow 一并写入
       ACC_RENDERERS.stock = () => {
         stockTbody.innerHTML = accSorted('stock', rows).map((r) => {
           // 价格列用 USD 原值（期权 3 位小数，便于和市值对账），金额列（市值/盈亏）折 CNY
           const c = (v) => v == null ? '--' : v * FX;
           const pf = (v) => v == null ? '--' : (r.mult === 100 ? v.toFixed(3) : f2(v));
           const cls = (v) => v > 0 ? 'up' : v < 0 ? 'down' : '';
-          return `<tr><td class="td-link up">交易</td><td>${r.code}</td><td>${r.name}</td>` +
-            `<td class="num">${r.qty}</td><td class="num">${r.qty}</td>` +
+          return `<tr><td>${r.code}</td><td>${r.name}</td>` +
+            `<td class="num">${r.qty}</td>` +
             `<td class="num">${pf(r.price)}</td><td class="num">${pf(r.cost)}</td>` +
             `<td class="num">${f2(c(r.value))}</td>` +
             `<td class="num ${cls(r.pnlRatio)}">${pctS(r.pnlRatio)}</td>` +
             `<td class="num ${cls(r.pnl)}">${f2(c(r.pnl), true)}</td>` +
-            `<td class="num ${cls(r.todayPnl)}">${f2(c(r.todayPnl), true)}</td></tr>`;
+            `<td class="num ${cls(r.todayPnl)}">${f2(c(r.todayPnl), true)}</td>` +
+            `<td class="num ${cls(r.todayPct)}">${pctS(r.todayPct)}</td></tr>`;
         }).join('');
         const empty = $id('stockEmpty');
         if (empty) empty.hidden = true;
       };
       accRender('stock');
     }
-    const stockEquityCny = (ibkrCash + rtPosVal) * FX;
+    /* 证券口径的全部汇总 DOM。抽成函数是为了让 15s 定时刷新能重画
+       （原来这些 setTxt 只在初始化跑一次，行情变了数字不动）。 */
+    function renderStockSum() {
+      const posVal = () => rows.reduce((s, r) => s + (r.value != null ? r.value : (r.h.posVal0 || 0)), 0);
+      const longVal = () => rows.filter((r) => r.value != null && r.qty > 0).reduce((s, r) => s + r.value, 0);
+      const shortVal = () => rows.filter((r) => r.value != null && r.qty < 0).reduce((s, r) => s + r.value, 0);
+      const todayUsd = () => rows.reduce((s, r) => s + (r.todayPnl || 0), 0);
+      const rtVal = posVal();
+      const stockEquityCny = (ibkrCash + rtVal) * FX;
+      const stockTodayCny = todayUsd() * FX;
+      const stockPnlCny = rows.reduce((s, r) => s + (r.pnl || 0), 0) * FX;
+      // 证券累计盈亏（CNY）= 证券权益实时折算 − 人民币本金 167,600（forexTrades 四笔 CNH 合计，含 TQQQ 的 17,600）
+      // 口径：实际掏口袋的人民币，换汇手续费/点差自动计入盈亏；usInvest=167600 互证
+      const stockCumCny = stockEquityCny - 167600;
+      setTxt('stockSumVal', f2(rtVal * FX));
+      setTxt('stockSumToday', f2(stockTodayCny, true), stockTodayCny);
+      setTxt('stockSumPnl', f2(stockPnlCny, true), stockPnlCny);
+      setTxt('mStockVal', f2(rtVal * FX));
+      setTxt('mStockLong', f2(longVal() * FX));
+      setTxt('mStockShort', f2(shortVal() * FX));
+      // 累计收益（资产列）= 证券累计盈亏（净值口径，含已实现盈亏/汇兑/利息）
+      setTxt('mPnlTotal', f2(stockCumCny, true), stockCumCny);
+      // 资产卡每行后面备注美元原值（证券账户以 USD 计价，CNY 只是折算视图）
+      const usdNote = (id, v) => setTxt(id, v == null ? '' : f2(v) + ' USD');
+      usdNote('mStockValUsd', rtVal);
+      usdNote('mStockLongUsd', longVal());
+      usdNote('mStockShortUsd', shortVal());
+      usdNote('mPnlTotalUsd', (ibkrCash + rtVal) - 167600 / FX);
+      // 证券净值 = 证券账户权益 = (盈透现金 + 持仓实时市值) 折 CNY，与「总资产」里的证券口径一致
+      setTxt('mStockEquity', f2(stockEquityCny));
+      usdNote('mStockEquityUsd', ibkrCash + rtVal);
+      // 现金总值（已并入「资产」卡，排在证券净值上面）= 盈透账户现金折 CNY，右侧括注美元原值
+      setTxt('mCashCny', f2(ibkrCash * FX));
+      usdNote('mCashUsd', ibkrCash);
+      setTxt('accStockVal', f2(stockEquityCny));
+      setTxt('accStockNote', f2(stockTodayCny, true), stockTodayCny);
+      setTxt('accStockPct', stockEquityCny - stockTodayCny ? pctS(stockTodayCny / (stockEquityCny - stockTodayCny)) : '--', stockTodayCny);
+      setTxt('accStockCum', f2(stockCumCny, true), stockCumCny);
+      // 累计涨跌幅 = 累计盈亏 ÷ 本金 167,600（与上一行同源口径）
+      setTxt('accStockCumPct', pctS(stockCumCny / 167600), stockCumCny);
+    }
+    renderStockSum();
+    const stockEquityCny = (ibkrCash + rtPosVal) * FX;   // ↓ 供下方总资产/曲线沿用
     const stockTodayCny = todayPnlUsd * FX;
     const stockPnlCny = rows.reduce((s, r) => s + (r.pnl || 0), 0) * FX;
-    // 证券累计盈亏（CNY）= 证券权益实时折算 − 人民币本金 167,600（forexTrades 四笔 CNH 合计，含 TQQQ 的 17,600）
-    // 口径：实际掏口袋的人民币，换汇手续费/点差自动计入盈亏；usInvest=167600 互证
     const stockCumCny = (ibkrCash + rtPosVal) * FX - 167600;
-    setTxt('stockSumVal', f2(rtPosVal * FX));
-    setTxt('stockSumToday', f2(stockTodayCny, true), stockTodayCny);
-    setTxt('stockSumPnl', f2(stockPnlCny, true), stockPnlCny);
-    setTxt('mStockVal', f2(rtPosVal * FX));
-    setTxt('mStockLong', f2(rows.filter((r) => r.value != null && r.qty > 0).reduce((s, r) => s + r.value, 0) * FX));
-    setTxt('mStockShort', f2(rows.filter((r) => r.value != null && r.qty < 0).reduce((s, r) => s + r.value, 0) * FX));
-    // 累计收益（资产列）= 证券累计盈亏（净值口径，含已实现盈亏/汇兑/利息）
-    setTxt('mPnlTotal', f2(stockCumCny, true), stockCumCny);
-    // 资产卡每行后面备注美元原值（证券账户以 USD 计价，CNY 只是折算视图）
-    const usdNote = (id, v) => setTxt(id, v == null ? '' : f2(v) + ' USD');
-    usdNote('mStockValUsd', rtPosVal);
-    usdNote('mStockLongUsd', rows.filter((r) => r.value != null && r.qty > 0).reduce((s, r) => s + r.value, 0));
-    usdNote('mStockShortUsd', rows.filter((r) => r.value != null && r.qty < 0).reduce((s, r) => s + r.value, 0));
-    usdNote('mPnlTotalUsd', (ibkrCash + rtPosVal) - 167600 / FX);
-    // 证券净值 = 证券账户权益 = (盈透现金 + 持仓实时市值) 折 CNY，与「总资产」里的证券口径一致
-    setTxt('mStockEquity', f2(stockEquityCny));
-    usdNote('mStockEquityUsd', ibkrCash + rtPosVal);
-    setTxt('mCashCny', f2(ibkrCash * FX));
-    setTxt('mCashUsd', f2(ibkrCash));
-    setTxt('accStockVal', f2(stockEquityCny));
-    setTxt('accStockNote', f2(stockTodayCny, true), stockTodayCny);
-    setTxt('accStockPct', stockEquityCny - stockTodayCny ? pctS(stockTodayCny / (stockEquityCny - stockTodayCny)) : '--', stockTodayCny);
 
     /* ---- 历史·成交（Asset_parsed.trades 88 条 + TQQQ 手动买入） ---- */
     // 证券持仓表已有名称映射，复用它把期权 symbol 拆成「名称 + 代码」
@@ -2212,24 +3216,35 @@
       setTxt('stockHistRealized', f2(realSum, true), realSum);
     }
 
-    /* ---- 侧栏总资产 + 走势 ---- */
-    const totalCny = stockEquityCny + fundAmount + cashCny;
-    setTxt('accTotalVal', f2(totalCny));
-    setTxt('accTotalNote', f2(stockTodayCny + fundYesterday, true), stockTodayCny + fundYesterday);
-    // 累计盈亏 = 证券累计(IBKR净值+TQQQ市值-入金-买入成本) + 基金累计(净值-JSON成本)
-    setTxt('accTotalCum', f2(stockCumCny + fundCum, true), stockCumCny + fundCum);
+    /* ---- 侧栏总资产 + 走势 ----
+       抽成函数：15s 刷新时证券实时价会变，总资产/今日盈亏/累计盈亏都得跟着重算，
+       否则账户页「证券表在跳、总资产不动」。基金按官方净值（fundAmount）不随盘中变。 */
+    function renderAccTotal() {
+      const rtVal = rows.reduce((s, r) => s + (r.value != null ? r.value : (r.h.posVal0 || 0)), 0);
+      const eqCny = (ibkrCash + rtVal) * FX;
+      const todayCny = rows.reduce((s, r) => s + (r.todayPnl || 0), 0) * FX + fundYesterday;
+      const tot = eqCny + fundAmount + cashCny;
+      const yestBase = tot - todayCny;
+      setTxt('accTotalVal', f2(tot));
+      setTxt('accTotalNote', f2(todayCny, true), todayCny);
+      // 今日涨跌幅 = 今日盈亏 ÷ 昨日总资产（今日总资产 − 今日盈亏）
+      setTxt('accTotalNotePct', yestBase > 0 ? pctS(todayCny / yestBase) : '--', todayCny);
+      // 累计盈亏 = 证券累计(IBKR净值+TQQQ市值-入金-买入成本) + 基金累计(净值-JSON成本)
+      const cumCny = (eqCny - 167600) + fundCum;
+      setTxt('accTotalCum', f2(cumCny, true), cumCny);
+      // 累计涨跌幅 = 累计盈亏 ÷ 总投入本金（证券本金 167,600 + 基金成本）
+      const costBase = 167600 + (fundAmount - fundCum);
+      setTxt('accTotalCumPct', costBase > 0 ? pctS(cumCny / costBase) : '--', cumCny);
+      return tot;
+    }
+    const totalCny = renderAccTotal();
     const nv = asset.totalNetValueDaily || [];
     const tail = nv.slice(-80);
-    const spark = $id('accSpark');
-    if (spark && tail.length >= 2) {
-      const vs = tail.map((p) => p.value);
-      const mn = Math.min(...vs), mx = Math.max(...vs), rg = mx - mn || 1;
-      spark.setAttribute('d', vs.map((v, i) =>
-        `${i ? 'L' : 'M'}${(i / (vs.length - 1) * 100).toFixed(2)} ${(20 - (v - mn) / rg * 18 + 2).toFixed(2)}`
-      ).join(' '));
-    }
+    ACC_SPARK.series = tail.map((p) => p.value);
+    drawAccSpark();
 
     /* ---- 全部账户总览页：品类/币种分布 + 每日总资产序列 ---- */
+
     renderAoDist('aoCatBar', 'aoCatLegend', [
       { name: '现金', val: cashCny,        color: '#00a86b' },
       { name: '股票', val: stockEquityCny, color: '#13c2c2' },
@@ -2288,6 +3303,46 @@
       else aoSeries.push({ date: todayBj, cny: projCny });
     }
     aoState.series = aoSeries;
+
+    /* ---- 交易视图用：把证券 / 基金持仓发布出去 ----
+       交易页那份列表要显示「市值 / 盈亏」和持仓汇总，只有持仓才有这些数（自选列表没有仓位概念），
+       所以把 rows / funds / 账户总资产挂到共享对象上，交易页去读。渲染函数随后会重画。 */
+    TRADE_POS.stock = rows.filter((r) => r.qty);          // 剔除已清仓（qty=0）
+    TRADE_POS.fund = funds.filter((f) => f.shares);
+    TRADE_POS.splits = VAL.splits;      // 识别到的拆股（键 = 市场+代码），供调试/展示
+    if (window.__VALDEBUG) window.__VALDEBUG(VAL, funds, symbolChg, qqqChgOn);
+    TRADE_POS.fx = FX;
+    TRADE_POS.totalCny = totalCny;      // 账户页口径：证券权益 + 基金 + 现金
+    TRADE_POS.cashCny = cashCny;        // 各银行账户现金
+    TRADE_POS.ibkrCashCny = ibkrCash * FX;  // 盈透账户内现金（未投出去的部分）
+    TRADE_POS.ready = true;
+    /* 行情定时刷新入口（15s，与自选列表同频，由模块级定时器调用）。
+       为什么要它：交易页原先只在初始化取一次价，页面开着不动就永远停在打开那一刻的数
+       （用户 2026-10-04 报「ORCL 现价还是 142.41」）—— 严格说那次是周末休市、
+       Alpaca 最后成交就是 10-02 收盘的 142.41，价格本就不该动；但盘中开着不动也必须会动。
+       ⚠️ 基金估值只更新现价部分：`loadUsQuotes(baseDate=null)` 会刷 `now` 而**保留** `base`
+          （估值基准仍是各基金自己的 navDate），然后重跑 estimateFund。 */
+    TRADE_POS.refresh = async () => {
+      if (document.hidden) return;                 // 页面不可见时省一次请求
+      try {
+        const q2 = await accAlpacaQuotes(stockSyms, optSyms);
+        await loadUsQuotes(null, holdings.filter((h) => !h.opt).map((h) => h.code).filter(Boolean));
+        rows.forEach((r) => { Object.assign(r, computeRow(r.h, q2)); });   // 原地更新，引用不变
+        funds.forEach((f) => {
+          if (!(f.items && f.items.length && f.navDate)) return;
+          const est = estimateFund(f, f.navDate);
+          f.estChg = est.chg; f.estNav = est.navEst;
+          f.estAmount = est.navEst != null ? f.shares * est.navEst : null;
+          f.estDelta = f.estAmount != null ? f.estAmount - f.amount : null;
+          f.estParts = est.parts;
+        });
+        if (ACC_RENDERERS.stock) accRender('stock');
+        renderStockSum();
+        TRADE_POS.totalCny = renderAccTotal();     // 账户页总资产跟着现价走，别让两边脱节
+        if (typeof renderTradeList === 'function') renderTradeList();
+      } catch (e) { /* 单次失败跳过，下个周期再试；页面仍显示上一轮的数据 */ }
+    };
+    if (typeof renderTradeList === 'function') renderTradeList();
     aoState.ready = true;
     drawAoChart();
 
@@ -2328,6 +3383,15 @@
       });
       return { date: d, value: ok ? v : null, cur: 'CNY', src: 'Σ 份额×净值', accrued: null };
     }).filter((r) => r.value != null);
+
+    /* ---- 收益日历用的 TQQQ 买入现金流 ----
+       TQQQ 在 seed.pa_us 里，既不在 detailState.flows（IBKR 入金）也不在 fundFlows（基金申购），
+       但它的买入当天总资产会跳升、却不是收益，必须单独登记，否则日历会虚高。 */
+    Object.keys(calExtraFlows).forEach((k) => delete calExtraFlows[k]);
+    ((asset.seed && asset.seed.pa_us) || []).forEach((a) => (a.trades || []).forEach((t) => {
+      const cny = (t.amount != null ? t.amount : (t.shares || 0) * (t.price || 0)) * FX;
+      calExtraFlows[t.date] = (calExtraFlows[t.date] || 0) + cny;
+    }));
   }
   initAccountData();
 })();

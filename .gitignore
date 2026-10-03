@@ -1,0 +1,14 @@
+# 调试/临时产物（不进仓库）
+# Playwright 截图与调试脚本
+_icons_out/
+# 本地会话记忆
+.workbuddy/
+__pycache__/
+*.pyc
+_backup_*/
+# 原始 API 响应 dump
+anon.json
+
+# 系统垃圾
+.DS_Store
+Thumbs.db

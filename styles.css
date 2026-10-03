@@ -124,9 +124,10 @@ html, body {
   gap: 8px;
   pointer-events: none;
 }
+/* 品牌图标：Tiger Brokers（与 iOS 桌面图标同一张 brand-logo.png） */
 .brand__logo {
-  width: 20px; height: 20px; border-radius: 6px;
-  background: linear-gradient(135deg, #ff9f2e, #ff6b35);
+  width: 20px; height: 20px; border-radius: 5px;
+  object-fit: cover; display: block; flex: none;
 }
 .brand__name { font-size: 15px; font-weight: 600; letter-spacing: .5px; color: var(--text); }
 
@@ -204,7 +205,58 @@ html, body {
 .wl__columns span:nth-child(2),
 .wl__columns span:nth-child(3) { text-align: right; }
 
-.wl__list { flex: 1; overflow-y: auto; list-style: none; }
+.wl__list { flex: 1; overflow-y: auto; list-style: none; min-height: 0; }   /* min-height:0 别让长列表把下方汇总块挤没 */
+
+/* 交易页持仓列表：4 列（名称 / 现价 / 涨跌幅 / 市值·盈亏），最后一列上下两行。
+   列宽按 430px 侧栏分配：名称 1fr（183px），现价 62、涨跌 54、市值/盈亏 90。
+   名称缩写规则（去 (QDII)/ETF/发起联接）腾出空间后，字号可以放大：
+   最长名「嘉实纳斯达克100A人民币」13px 实测 153px，距 183px 还有 30px 余量。 */
+.wl__columns--4,
+.wl__list--4 .wl__row { grid-template-columns: minmax(0, 1fr) 66px 60px 96px; gap: 5px; }
+.wl__columns--4 span { white-space: nowrap; }
+.wl__columns--4 span:first-child { overflow: hidden; text-overflow: ellipsis; }
+.wl__columns--4 span:nth-child(4),
+.wl__list--4 .wl-vp { text-align: right; }
+.wl__list--4 .wl-vp b,
+.wl__list--4 .wl-vp i { display: block; }
+.wl__list--4 .wl-vp b { font-size: 13px; font-weight: 600; color: var(--text); }
+.wl__list--4 .wl-vp i { font-style: normal; font-size: 11px; margin-top: 2px; }
+.wl__list--4 .wl-vp i.up { color: var(--up); }
+.wl__list--4 .wl-vp i.down { color: var(--down); }
+.wl__list--4 .wl-vp i:not(.up):not(.down) { color: var(--text-3); }
+/* 名称与副行都 ellipsis 禁折行；两端统一 13px / 10px（缩写后 13px 仍有 30px 余量） */
+.wl__list--4 .wl-name b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.wl__list--4 .wl-name span { font-size: 10px; }
+/* 现价 / 涨跌幅两列：数字列也放大到与名称匹配 */
+.wl__list--4 .wl-price,
+.wl__list--4 .wl-pct { font-size: 13px; }
+.wl__row--empty { color: var(--text-3); cursor: default; }
+.wl__row--empty .wl-name b { font-weight: 400; color: var(--text-3); }
+.ta-r { text-align: right; }
+
+/* 持仓汇总（列表底部固定）：推算总资产 + 与账户总资产的差额 */
+.trade-sum {
+  flex: none;
+  border-top: 1px solid var(--border);
+  padding: 8px 12px 10px;
+  background: var(--panel-2);
+}
+.trade-sum[hidden] { display: none; }
+.trade-sum__row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 2px 0; }
+.trade-sum__row span { font-size: 11px; color: var(--text-3); white-space: nowrap; }
+.trade-sum__row b { font-size: 13px; font-weight: 700; }
+/* 主数字是「推算总资产」—— 用 id 精确指定，别用 :first-child，
+   否则在上面插入「账户资产」行后会被抢走 15px。 */
+#tradeSumVal { font-size: 15px; }
+/* 差额行：金额 + 占比并排右对齐（各占固定宽度，数字上下不串位） */
+.trade-sum__pair { display: flex; justify-content: flex-end; gap: 10px; }
+.trade-sum__pair b { font-size: 13px; font-weight: 700; text-align: right; }
+.trade-sum__pair b:first-child { min-width: 96px; }
+.trade-sum__pair b:last-child { min-width: 60px; }
+/* 汇总只留三行（推算总资产 / 与账户总资产差额 / 差额占比）。
+   曾有 `.trade-sum__part`（持仓市值合计、现金）与 `.trade-sum__cat`+`.trade-sum__pair`
+   （证券/基金·较基准）四行，2026-10-04 按用户要求删除，勿再加回来。 */
+
 .wl__row {
   display: grid;
   grid-template-columns: 1fr 72px 62px;
@@ -221,6 +273,12 @@ html, body {
 .wl-name { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .wl-name b { font-size: 12px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wl-name span { font-size: 10px; color: var(--text-3); }
+/* 数据时间备注（只有无 K 线的静态行才有）：跟在副行末尾，浅灰更淡、带方括号区分 */
+.wl-asof { font-style: normal; opacity: .75; margin-left: 5px; }
+.wl-asof::before { content: '['; }
+.wl-asof::after { content: ']'; }
+/* 交易页列表：副行「代码 · 证券/基金」也不折行（4 列布局下名称列只有约 96px） */
+.wl__list--4 .wl-name span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .wl-price { text-align: right; font-size: 12px; font-weight: 700; }
 .wl-pct  { text-align: right; font-size: 12px; font-weight: 700; }
@@ -272,18 +330,15 @@ html, body {
 .panel-expand:hover { color: var(--text); background: var(--panel-2); }
 .panel-expand .ic { width: 14px; height: 14px; }
 .panel-expand--l { left: 8px; }
-/* 右侧展开按钮：贴在**屏幕**最右，纵向位置用变量算出（避免写死像素）：
-   顶栏 --topbar-h + 报价头(≈45) + 工具栏(37) + 8px 间距。
-   用 fixed 而非 absolute：评论面板收起时宽度为 0，
-   若跟随 .chart-area 定位会落在图表最后一列上遮住 K 线并拦截该区域点击。 */
+/* 右侧展开按钮：已移入 .quote-head 那一行的最右端（原来是 fixed 浮在图表右侧中部）。
+   `position: static` + `margin-left:auto` 让它自动贴右，不再需要写死 top 像素。 */
 .panel-expand--r {
-  position: fixed;
-  right: 8px;
-  top: calc(var(--topbar-h) + 82px);
+  position: static;
+  margin-left: auto;
 }
 /* 面板收起时报价头给浮动按钮让位，文字不被遮挡 */
 .chart-area.wl-collapsed .quote-head { padding-left: 42px; }
-.chart-area.cp-collapsed .quote-head { padding-right: 8px; }   /* 按钮已移出图表区，无需再让位 */
+.chart-area.cp-collapsed .quote-head { padding-right: 14px; }   /* 按钮在行内，右侧留出与左侧对称的边距 */
 
 .quote-head {
   display: flex; align-items: center;
@@ -298,7 +353,6 @@ html, body {
 .q-last { font-size: 18px; font-weight: 700; }
 .q-change { font-size: 13px; font-weight: 600; }
 .q-pct { font-size: 13px; font-weight: 600; }
-.quote-head__tools { margin-left: auto; display: flex; gap: 2px; }
 
 .chart-toolbar {
   position: relative;
@@ -364,6 +418,11 @@ html, body {
   flex: 1 1 auto;
   min-height: 0;
   padding: 6px 0 0;
+  /* ⚠️ 必须裁剪：canvas 的 CSS 宽高是 drawChart 写死的固定值（canvas.width = 像素），
+     资讯面板展开时图表区会变窄，但画布不会自动缩放 → 会「溢出」到右侧资讯面板上，
+     视觉上就是 K 线画在新闻列表上面（残影）。
+     左侧自选收起时图表区是变**宽**的，画布比容器窄只是留白、不外溢，所以看不到这个问题。 */
+  overflow: hidden;
 }
 #priceChart { width: 100%; height: 100%; display: block; }
 
@@ -541,6 +600,26 @@ html, body {
   .watchlist > * { width: 100% !important; }   /* 同上，解除 302px 固定宽 */
   .watchlist.is-collapsed { display: none; }   /* 图表态：藏列表 */
 
+  /* 交易页那份持仓列表：移动端是**单栏**（主区已隐藏），所以让它直接占满整屏高度 ——
+     列表可滚动、汇总块钉在底部，中间不再留空白。
+     （原先这里刻意写成 `flex:0 0 auto` + 列表 `max-height:34vh`，是为了给下方的
+       「搭建交易功能」主区留位置；主区隐藏后这套限制只会让底部空一大片。） */
+  .trade-view { flex-direction: column; }
+  .trade-view .watchlist--trade {
+    flex: 1 1 auto !important;
+    width: 100% !important;
+    max-height: none;
+    min-height: 0;
+    border-right: none;
+    border-bottom: none;
+  }
+  .trade-view .watchlist--trade > * { width: 100% !important; }
+  .trade-view .wl__list--4 { flex: 1 1 auto; max-height: none; min-height: 120px; }
+  /* 名称字号已在基础规则统一 11px（两端一致），这里不用再覆盖 */
+  /* 移动端不显示右侧主区，交易页就是「持仓列表 + 汇总」全宽一屏。
+     桌面端保留占位（`.trade-empty`），那里右侧是空的、留个提示不突兀。 */
+  .trade-view .trade-main { display: none !important; }
+
   /* 图表区：移动端默认隐藏（主页只显示自选），加 .is-chart-mode 才显示 */
   .chart-area { display: none !important; }
   body.is-chart-mode .chart-area { display: flex !important; }
@@ -565,7 +644,6 @@ html, body {
   .q-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .quote-head__price { flex: 0 0 auto; gap: 8px; }
   .q-last { font-size: 17px; }
-  .quote-head__tools .icon-btn:nth-child(n+3) { display: none; }  /* 只留前两个 */
 
   /* 图表工具栏：7 个周期按钮 + 右侧工具在 430px 宽放不下（实测 scrollW 458 > 430，
      右侧工具被裁掉点不到），所以整栏横向可滚动。
@@ -644,10 +722,72 @@ html, body {
     overflow-y: visible;
   }
   .acc-main { width: 100%; min-width: 0; flex: 1 1 auto; }
-  .acc-side__spark { height: 26px; }        /* 触屏矮一点，整体更紧凑 */
-  .acc-metrics { gap: 8px 14px; padding: 12px; }   /* 指标卡本来就是 flex，只调间距 */
-  .acc-actions { flex-wrap: wrap; }
-  .acc-actions button { flex: 1 1 calc(33% - 8px); }
+  .acc-side__spark { height: 32px; }        /* 触屏略矮一点，整体更紧凑 */
+  /* 侧栏分类行：盈亏金额与百分比并排（省一行高度），金额加粗
+     ⚠️ 选择器要带 `.asl-col--r` 提高特异度 —— 基础规则 `.asl-vals{display:contents}`
+        写在媒体查询之后，同特异度会覆盖掉这里的 flex。 */
+  .asl-col--r .asl-vals { display: flex; align-items: baseline; gap: 5px; }
+  .asl-col--r .asl-vals i:first-child { font-size: 12px; font-weight: 700; }
+  .asl-col--r .asl-vals i + i { font-size: 10px; font-weight: 500; }
+  /* 账户页 4 个 tab（持仓/资产/历史/资金明细）窄屏不溢出 */
+  .acc-tabs { gap: 14px; }
+  /* 汇总行：段数变多后窄屏放不下，允许横向滚动（标签已 nowrap 不会竖排） */
+  .acc-sumline { overflow-x: auto; scrollbar-width: none; }
+  .acc-sumline::-webkit-scrollbar { display: none; }
+  .acc-sumline > * { flex: none; }
+  /* 资金明细面板（页面内展开）：底部翻页条 */
+  .acc-detail__foot { padding: 8px 4px 2px; }
+
+  /* 资金明细表格：窄屏下压到容器宽（394px），**不要左右滚动**。
+     做法：解除 min-width:520px + 收窄内边距/字号 + 表头允许换行。
+     5 列（日期/净值/当日盈亏/当日涨跌/累计涨跌）在 10px 字号下约 340px，能整屏放下。 */
+  .acc-detail .acc-table { min-width: 0; font-size: 10px; }
+  .acc-detail .acc-table th { padding: 6px 3px; white-space: normal; line-height: 1.3; }
+  .acc-detail .acc-table td { padding: 6px 3px; }
+  /* 「入金 1,234.00」小字改成块级，独占一行，不撑宽「当日盈亏」列 */
+  .acc-detail .dlg-sub { display: block; margin-left: 0; font-size: 9px; }
+
+  /* 收益日历：窄屏下 6 列放不下（数字会被裁），降到 3 列；汇总行移到导航下方独占一行
+     ⚠️ 选择器必须带 `.ao-cal` 前缀提高特异度 —— 基础规则写在媒体查询之后（940 行 vs 本处），
+     同特异度下 `.ao-cal__grid--year` 会被基础规则的 6 列覆盖。 */
+  .ao-cal { padding: 4px 12px 16px; }
+  .ao-cal .ao-cal__grid--year { grid-template-columns: repeat(3, 1fr); }
+  .ao-cal .ao-cal__cell { padding: 10px 4px; }
+  .ao-cal .ao-cal__cell .n { font-size: 12px; }
+  .ao-cal .ao-cal__bar { gap: 10px 12px; padding: 8px 0 12px; }
+  .ao-cal .ao-cal__sum { margin-left: 0; width: 100%; justify-content: space-between; gap: 12px; }
+  .ao-cal .ao-cal__sum b { font-size: 15px; }
+  .ao-cal .ao-cal__day { min-height: 56px; padding: 5px 2px; }
+  .ao-cal .ao-cal__day .n { font-size: 10px; }
+  .ao-cal .ao-cal__day .p { font-size: 10px; }
+
+  /* 侧栏折叠条：折叠态下总资产一行 + 箭头，点一下展开明细。
+     收起后侧栏 313px → 44px，总览页走势图从只露 45px 变成约 354px。 */
+  .acc-side .acc-side__fold {
+    display: flex; align-items: center; gap: 4px; flex: none;
+    border: none; background: none; padding: 2px 0 2px 8px;
+    cursor: pointer; color: var(--text-2);
+  }
+  .acc-side__fold-ic {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 18px; height: 18px; flex: none;
+    transition: transform .2s ease;
+  }
+  .acc-side__fold-ic svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .acc-side__fold-ic { transform: rotate(180deg); }        /* 展开时箭头朝上 */
+  .acc-side.is-folded .acc-side__fold-ic { transform: rotate(0deg); }
+
+  /* 折叠条：左「总资产 + 金额」是总览页入口（替代被收起的总资产卡），右折叠按钮 */
+  .acc-side__foldbar { display: flex; align-items: center; gap: 8px; }
+  .acc-side__toTotal {
+    display: flex; align-items: baseline; gap: 6px; min-width: 0; flex: 1 1 auto;
+    border: none; background: none; padding: 2px 0; cursor: pointer; text-align: left;
+  }
+  .acc-side__toTotal-lbl { font-size: 11px; color: var(--text-2); flex: none; }
+  .acc-side__toTotal-sum { font-size: 15px; font-weight: 700; color: var(--text); white-space: nowrap; }
+  /* 展开态：左侧总览入口与下方总资产卡重复，只留折叠箭头 —— 且居中（下面已经有个总资产大标题，不需要再写文字说明） */
+  .acc-side:not(.is-folded) .acc-side__toTotal { display: none; }
+  .acc-side:not(.is-folded) .acc-side__fold { flex: 1 1 auto; justify-content: center; padding: 2px 0; }
 }
 
 /* ===================== 账户视图（仿富途账户页） ===================== */
@@ -660,6 +800,22 @@ html, body {
 .account-view[hidden] { display: none !important; }
 .is-hidden-by-view { display: none !important; }
 
+/* 交易视图：结构与账户视图一致（左侧自选 + 右侧主区），供后续搭建交易功能 */
+.trade-view {
+  flex: 1 1 auto; min-width: 0;
+  display: flex;
+  background: var(--bg);
+  overflow: hidden;
+}
+.trade-view[hidden] { display: none !important; }
+/* 交易页侧栏宽度：让名称列的可视宽度与移动端（430px 全宽）一致 ——
+   移动端 430 - 24内边距 - 62现价 - 54涨跌 - 90市值 - 4×5间距 = 180px 给名称；
+   桌面若只给 332px，名称只剩 82px，长基金名几乎全是省略号。 */
+.trade-view .watchlist--trade { flex: 0 0 430px; }
+.trade-view .watchlist--trade > * { width: 430px; }
+.trade-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; overflow-y: auto; }
+.trade-empty { margin: auto; color: var(--text-3); font-size: 13px; }
+
 /* 左侧资产摘要 */
 .acc-side {
   width: var(--wl-w); flex: 0 0 auto;
@@ -668,7 +824,19 @@ html, body {
   padding: 14px 12px;
   overflow-y: auto;
 }
+/* 折叠按钮只在移动端出现（桌面侧栏有独立空间，不需要折叠）。
+   ⚠️ 这里用 `min-width: 681px` 而不是基础 `display:none`：
+   基础规则写在 680px 媒体查询**之后**，同选择器会覆盖掉媒体查询里的 `display:flex`（实测按钮 0×0 不可见）。
+   改成反向媒体查询后，两边互不干扰，不需要拼 specificity。 */
+@media (min-width: 681px) {
+  .acc-side__foldbar { display: none; }
+}
+/* 折叠态：侧栏只剩折叠条（省 313px 给图表） */
+.acc-side.is-folded { padding: 6px 12px 8px; overflow: visible; }
+.acc-side.is-folded > .acc-side__body { display: none; }
 .acc-side__label { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text-2); }
+/* 「总资产 · CNY」后面的账户名：靠最右、跟主号区分，稍小一点、灰一档 */
+.acc-side__account { margin-left: auto; color: var(--text-3); font-size: 10px; white-space: nowrap; }
 .acc-side__total { font-size: 22px; font-weight: 700; color: var(--text); margin: 2px 0 4px; }
 /* 总资产下方一行：左边走势曲线，右边今日/累计盈亏上下排（仿富途） */
 .acc-side__row { display: flex; align-items: flex-end; gap: 12px; }
@@ -676,11 +844,17 @@ html, body {
 .asp-col { display: flex; flex-direction: column; gap: 1px; }
 .asp-col span { font-size: 11px; color: var(--text-2); }
 .asp-col i { font-size: 12px; font-style: normal; font-weight: 600; }
-.acc-side__spark { flex: 1 1 auto; min-width: 0; height: 30px; display: block; }
+/* 金额与涨跌幅并排（百分比在金额右边，不是下方） */
+.asp-vals { display: flex; align-items: baseline; gap: 6px; }
+.asp-vals i + i { font-size: 11px; font-weight: 500; }
+/* 走势图：高度给足（30→38），线宽不随 viewBox 缩放 */
+.acc-side__spark { flex: 1 1 auto; min-width: 0; height: 38px; display: block; }
+.acc-side__spark path { vector-effect: non-scaling-stroke; }
 .acc-side__list { list-style: none; margin: 12px 0 0; padding: 0; }
 .acc-side__list > li { padding: 10px; border-radius: 8px; }
 .acc-side__list > li.is-active { background: var(--panel-2); }
-.as-name { display: block; font-size: 12px; font-weight: 600; color: var(--text); }
+/* 账户名已移到「总资产 · CNY」那一行，这里只留三行分类本身 */
+.as-group { margin: 0; }
 .as-line {
   display: flex; align-items: baseline; gap: 6px;
   margin-top: 8px; font-size: 11px; color: var(--text-2);
@@ -688,28 +862,36 @@ html, body {
 .as-line b { font-size: 13px; color: var(--text); font-weight: 700; }
 /* 分类行两行布局：左列 标签+数值，右列 盈亏标签+数值（+占比） */
 .as-line--2r { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+/* 分类行三列布局：左 名称+市值，中 今日盈亏（+占比），右 累计盈亏 */
+.as-line--3c { display: flex; justify-content: space-between; align-items: flex-start; gap: 6px; }
+.as-line--3c > .asl-col:first-child { flex: 0 0 auto; }
 .asl-col { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .asl-col span { font-size: 11px; color: var(--text-2); }
 .asl-col b { font-size: 14px; }
 .asl-col--r { text-align: right; align-items: flex-end; }
 .asl-col--r i { font-style: normal; font-size: 11px; color: var(--text-2); }
+.asl-col--r--empty { min-width: 62px; }
+/* 盈亏金额 + 百分比：桌面用 display:contents 让两个 <i> 仍当 .asl-col 的直接子元素（保持上下排），
+   移动端在媒体查询里改成 flex 横排 —— 省一行高度。 */
+.asl-vals { display: contents; }
 .as-line i { margin-left: auto; font-style: normal; font-size: 10px; color: var(--text-3); text-align: right; }
-.as-group { margin: 4px 0 0 10px; padding-left: 8px; border-left: 1px solid var(--border); }
 .as-group .as-line b { font-size: 12px; }
 
 /* 主区 */
-.acc-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; overflow-y: auto; padding: 0 18px 18px; }
-.acc-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 0 10px; }
-.acc-head h2 { margin: 0; font-size: 15px; font-weight: 700; color: var(--text); }
-
-/* 五列指标 */
-.acc-metrics {
-  display: flex; flex-wrap: wrap; gap: 10px 28px;
+/* overflow-x: hidden —— 移动端窄屏时「历史」汇总行（white-space:nowrap，内容 501px）
+   会把 .acc-main 撑出横向滚动条，和表格容器（.acc-table-wrap）**抢手势**：
+   手指横滑被 acc-main 吃掉，表格反而滚不动，右边几列怎么都滑不到。
+   表格自己的横向滚动交给 .acc-table-wrap，这里必须禁止。 */
+.acc-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; overflow-x: hidden; overflow-y: auto; padding: 0 18px 18px; }
+/* 指标卡（现只存在于「资产」面板内） */
+.acc-metric { min-width: 0; }
+/* 「资产」面板：指标卡常驻其中，点 tab 就地显示 */
+.acc-asset {
   background: var(--panel);
   border: 1px solid var(--border); border-radius: 10px;
-  padding: 14px 18px;
+  padding: 14px 18px; margin-top: 14px;
 }
-.acc-metric { flex: 1 1 140px; min-width: 140px; }
+.acc-asset .acc-metric + .acc-metric { margin-top: 10px; }
 .acc-metric h4 {
   display: flex; align-items: center; gap: 4px;
   margin: 0 0 8px; padding-bottom: 6px;
@@ -727,22 +909,10 @@ html, body {
   flex: none; min-width: 62px; text-align: right;
   font-size: 10px; font-style: normal; color: var(--text-3);
 }
-/* 「资产」卡要多放一行 USD 括注，宽度放宽 */
-.acc-metrics .acc-metric:first-child { flex: 1.5 1 210px; min-width: 210px; }
 /* 指标卡的盈亏数字同样绿涨红跌 */
 .acc-metric .m-row b.up { color: var(--up); }
 .acc-metric .m-row b.down { color: var(--down); }
 
-/* 功能按钮行 */
-.acc-actions { display: flex; flex-wrap: wrap; gap: 2px; margin: 14px 0 6px; }
-.acc-actions button {
-  display: flex; flex-direction: column; align-items: center; gap: 7px;
-  width: 74px; padding: 10px 0 8px;
-  border: none; background: none; border-radius: 8px;
-  font-size: 11px; color: var(--text); cursor: pointer;
-}
-.acc-actions button:hover { background: var(--panel-2); }
-.acc-actions .ic { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 .c-blue   { color: #2e6bff; }
 .c-cyan   { color: #12b0c9; }
 .c-purple { color: #9b6bff; }
@@ -750,7 +920,7 @@ html, body {
 .c-green  { color: #00a86b; }
 
 /* tabs */
-.acc-tabs { display: flex; gap: 20px; border-bottom: 1px solid var(--border); }
+.acc-tabs { display: flex; gap: 20px; border-bottom: 1px solid var(--border); margin-top: 14px; }
 .acc-tabs button {
   border: none; background: none; cursor: pointer;
   padding: 9px 2px; font-size: 13px; color: var(--text-2);
@@ -758,29 +928,8 @@ html, body {
 }
 .acc-tabs button.is-active { color: var(--text); font-weight: 700; border-bottom-color: var(--accent); }
 
-/* 筛选行 */
-.acc-filter { display: flex; align-items: center; gap: 8px; padding: 10px 0; }
-.acc-select {
-  display: inline-flex; align-items: center; gap: 5px;
-  height: 28px; padding: 0 10px;
-  border: 1px solid var(--border); border-radius: 6px;
-  background: var(--panel); color: var(--text);
-  font-size: 12px; cursor: pointer;
-}
-.acc-select .caret {
-  border-left: 3.5px solid transparent; border-right: 3.5px solid transparent;
-  border-top: 4.5px solid var(--text-3);
-}
-.acc-search {
-  display: flex; align-items: center; gap: 6px;
-  height: 28px; padding: 0 8px;
-  border: 1px solid var(--border); border-radius: 6px;
-  background: var(--panel); color: var(--text-3);
-}
-.acc-search input { border: none; background: none; outline: none; font-size: 12px; color: var(--text); width: 110px; }
-.acc-filter__spacer { flex: 1; }
-.acc-batch { border: none; background: none; color: var(--accent); font-size: 12px; cursor: pointer; }
-.acc-batch:hover { text-decoration: underline; }
+/* 筛选行（.acc-filter/.acc-select/.acc-search/.acc-batch）已按用户要求整行删除，
+   样式随之清空。tab 行与汇总行之间的间距现在由 .acc-tabs 的 margin-top + .acc-sumline 的 padding 承担。 */
 
 /* 持仓表 */
 .acc-table-wrap { flex: 1 1 auto; overflow-x: auto; }
@@ -811,7 +960,6 @@ html, body {
 
 /* info 小图标 */
 .ic--info { width: 11px; height: 11px; fill: none; stroke: var(--text-3); stroke-width: 1.6; stroke-linecap: round; }
-.flag { width: 13px; height: 13px; vertical-align: -2px; margin-right: 2px; }
 
 /* ===================== 账户分类切换（证券/基金/现金） ===================== */
 .acc-page[hidden] { display: none !important; }
@@ -822,9 +970,6 @@ html, body {
 }
 .as-group .as-line:hover { background: var(--panel-2); }
 .as-group .as-line.is-active { border-color: var(--text); background: var(--panel); }
-
-/* 单列指标（基金/现金页） */
-.acc-metrics--single .acc-metric { flex: 0 0 auto; min-width: 210px; }
 
 /* 汇总行（市值 / 持仓收益） */
 .acc-sumline { display: flex; align-items: center; gap: 8px; padding: 8px 0 2px; font-size: 12px; color: var(--text-2); }
@@ -842,6 +987,11 @@ html, body {
 /* 汇总行的盈亏数字保持绿涨红跌（需与上面的 .acc-sumline b 同等特异度） */
 .acc-sumline b.up { color: var(--up); }
 .acc-sumline b.down { color: var(--down); }
+/* 标签不折行：否则窄屏下「今日盈亏比例」会竖成一列单字 */
+.acc-sumline .sum-label { white-space: nowrap; }
+/* 「净值更新至」是数据新鲜度提示，刻意做灰、做小，不与盈亏数字抢眼 */
+.acc-sumline .sum-label--date { color: var(--text-3); }
+.acc-sumline b#fundNavDate { font-size: 12px; font-weight: 500; color: var(--text-2); }
 
 /* 持仓表数据行 */
 .acc-table td {
@@ -852,7 +1002,13 @@ html, body {
 .acc-table td.num.up, .acc-table td.up { color: var(--up); }
 .acc-table td.num.down, .acc-table td.down { color: var(--down); }
 .acc-table td:nth-child(-n+3) { text-align: left; }
-.td-link { cursor: pointer; }
+/* 持仓表删掉「操作」列后，文本列只剩 2 列，单独收窄左对齐范围 */
+.acc-table[data-sort-table="stock"] th:nth-child(-n+2),
+.acc-table[data-sort-table="stock"] td:nth-child(-n+2),
+.acc-table[data-sort-table="fund"] th:nth-child(-n+2),
+.acc-table[data-sort-table="fund"] td:nth-child(-n+2),
+.acc-table[data-sort-table="cash"] th:nth-child(-n+2),
+.acc-table[data-sort-table="cash"] td:nth-child(-n+2) { text-align: left; }
 
 /* ===================== 全部账户总览页（模仿富途） ===================== */
 .acc-overview { padding-bottom: 20px; }
@@ -886,8 +1042,97 @@ html, body {
 .ao-stat--hover { display: none; }
 .ao-stats.is-hover .ao-stat--hover { display: block; }
 .ao-stats.is-hover .ao-stat--range { display: none; }
-.ao-chart-wrap { height: 300px; margin: 8px 12px 0; cursor: crosshair; }
+.ao-chart-wrap { height: 300px; margin: 8px 12px 0; cursor: crosshair; position: relative; }
 .ao-chart-wrap canvas { display: block; width: 100%; height: 100%; }
+
+/* ===================== 收益日历（富途「收益日历」） ===================== */
+.ao-cal { padding: 4px 20px 20px; }
+.ao-cal__bar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 10px 0 14px; }
+.ao-cal__switch { display: flex; gap: 2px; background: var(--panel-2); border-radius: 6px; padding: 2px; }
+.ao-cal__switch button {
+  border: 0; background: transparent; font-family: inherit;
+  font-size: 12px; padding: 5px 16px; border-radius: 5px; cursor: pointer; color: var(--text-2);
+}
+.ao-cal__switch button.is-active { background: var(--panel); color: var(--text); font-weight: 700; box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08); }
+.ao-cal__nav { display: flex; align-items: center; gap: 2px; }
+.ao-cal__nav b { font-size: 15px; font-weight: 700; min-width: 74px; text-align: center; }
+.ao-cal__step {
+  width: 26px; height: 26px; padding: 0; border: none; border-radius: 5px;
+  background: none; color: var(--text-2); cursor: pointer; display: flex; align-items: center; justify-content: center;
+}
+.ao-cal__step svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.ao-cal__step:hover:not(:disabled) { background: var(--panel-2); color: var(--text); }
+.ao-cal__step:disabled { color: #c9cfda; cursor: default; }
+.ao-cal__sum { display: flex; gap: 32px; margin-left: auto; }
+.ao-cal__sum span { display: block; font-size: 11px; color: var(--text-3); margin-bottom: 2px; }
+.ao-cal__sum b { font-size: 17px; font-weight: 700; }
+
+/* --- 年视图：12 个月格子 --- */
+.ao-cal__grid--year { display: grid; grid-template-columns: repeat(6, 1fr); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.ao-cal__cell { background: var(--panel); padding: 14px 10px; text-align: center; }
+.ao-cal__cell h5 { margin: 0 0 6px; font-size: 13px; font-weight: 700; color: var(--text); }
+.ao-cal__cell.is-empty h5 { color: #ccd2dd; font-weight: 400; }
+.ao-cal__cell .n { display: block; font-size: 13px; color: var(--text-2); }
+.ao-cal__cell .p { display: block; margin-top: 3px; font-size: 12px; font-weight: 600; }
+.ao-cal__cell.is-today { background: var(--panel-2); }
+.ao-cal__cell.is-future { opacity: .45; }
+
+/* --- 月视图：7 列日历 --- */
+.ao-cal__dow { display: grid; grid-template-columns: repeat(7, 1fr); border-bottom: 1px solid var(--border); }
+.ao-cal__dow span { padding: 8px 0; text-align: center; font-size: 12px; color: var(--text-3); }
+.ao-cal__grid--month { display: grid; grid-template-columns: repeat(7, 1fr); }
+.ao-cal__day { min-height: 62px; padding: 7px 4px 6px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.ao-cal__day:nth-child(7n) { border-right: none; }
+.ao-cal__day.is-pad { background: var(--panel-2); }
+.ao-cal__day.is-future { opacity: .4; }
+.ao-cal__day .d { display: block; font-size: 12px; color: var(--text-2); }
+.ao-cal__day.is-today .d { color: var(--accent); font-weight: 700; }
+.ao-cal__day .n { display: block; font-size: 11px; color: var(--text-2); margin-top: 2px; }
+.ao-cal__day .p { display: block; font-size: 11px; font-weight: 600; margin-top: 1px; }
+/* 涨跌色：必须带 `.ao-cal` 前缀提高特异度。
+   ⚠️ 否则会被 `.ao-cal__cell .n` / `.ao-cal__day .n`（都是 0,2,0，且写在上方）
+   的 `color: var(--text-2)` 压掉 —— 症状是日历里的**涨跌额全是灰的**、只有百分比有色。 */
+.ao-cal .ao-cal__up { color: var(--up); }
+.ao-cal .ao-cal__down { color: var(--down); }
+.ao-cal .ao-cal__flat { color: var(--text-3); }
+.ao-cal .ao-cal__none { color: #ccd2dd; font-weight: 400 !important; }
+/* 全屏按钮：放在「时间范围」那一行的最左侧（移动端专用）。
+   ⚠️ 桌面隐藏用 `@media (min-width: 681px)` 反向查询，而不是在基础规则写 `display:none` ——
+   本文件的基础规则普遍写在 680px 媒体查询之后，同特异度下会覆盖媒体查询里的 `display:flex`。 */
+.ao-ranges .ao-ranges__fs {
+  display: flex; align-items: center; justify-content: center; flex: none;
+  width: 28px; height: 28px; padding: 0;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--panel); color: var(--text-2); cursor: pointer;
+}
+@media (min-width: 681px) {
+  .ao-ranges .ao-ranges__fs { display: none; }
+}
+/* svg 用 viewBox="4 4 16 16" 裁到路径边界（路径只占 0 0 24 24 的中间 16px），
+   所以这里要给到 19px 才显得跟旁边 12px 文字按钮的视觉重量匹配。 */
+.ao-ranges .ao-ranges__fs svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.ao-ranges .ao-ranges__fs:hover { color: var(--text); background: var(--panel-2); }
+
+/* 全屏走势图（点图表放大）：fixed 铺满，canvas 会被 JS 挪进来，重绘后归位 */
+.ao-fs {
+  position: fixed; inset: 0; z-index: 200;
+  display: flex; flex-direction: column;
+  background: var(--bg);
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+}
+.ao-fs[hidden] { display: none !important; }
+.ao-fs__bar { display: flex; align-items: center; gap: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+.ao-fs__title { font-size: 14px; font-weight: 700; color: var(--text); white-space: nowrap; }
+.ao-fs__ranges { display: flex; gap: 6px; margin-left: auto; }
+.ao-fs__ranges button {
+  border: 1px solid var(--border); background: var(--panel); font-size: 12px;
+  padding: 4px 12px; border-radius: 5px; cursor: pointer; color: var(--text-2); font-family: inherit;
+}
+.ao-fs__ranges button.is-active { border-color: var(--accent); color: var(--accent); font-weight: 700; }
+/* 全屏里的统计行：把 .ao-stats 的节点搬进来复用样式，这里只管占位 */
+.ao-fs__stats .ao-stats { padding: 12px 4px 0; }
+.ao-fs__chart { flex: 1 1 auto; min-height: 0; margin-top: 4px; }
+.ao-fs__chart canvas { display: block; width: 100%; height: 100%; }
 
 /* 顶部「总资产」大卡片 = 总览页入口（选中态黑框挂卡片上） */
 /* 顶部「总资产」大卡片 = 总览页入口（选中态黑框套在卡片外，留出内边距避免贴字） */
@@ -908,7 +1153,10 @@ html, body {
   display: flex; align-items: center; gap: 10px;
   padding: 10px 12px; border-bottom: 1px solid var(--border);
   font-size: 12px; color: var(--text-2); white-space: nowrap;
+  /* 窄屏下这行内容比视口宽，自己横向滚动（不外溢去撑大 .acc-main） */
+  overflow-x: auto; scrollbar-width: none;
 }
+.acc-hist__head::-webkit-scrollbar { display: none; }
 .acc-hist__head b { font-size: 13px; font-weight: 700; color: var(--text); }
 .acc-hist__head .num { font-weight: 600; color: var(--text); }
 .acc-hist__head .ic--info { width: 13px; height: 13px; color: var(--text-3); }
@@ -974,6 +1222,24 @@ html, body {
 .dlg__pages button:disabled { color: #c3cad6; cursor: not-allowed; }
 
 /* 资金明细：入金/申购小字说明 */
-.dlg-table .dlg-sub { color: var(--text-3); font-size: 10px; margin-left: 3px; }
+.dlg__table .dlg-sub, .acc-detail .dlg-sub { color: var(--text-3); font-size: 10px; margin-left: 3px; }
 /* 资金明细：TWR 基准日之前的空仓期行（收益率显示 --）淡显 */
-.dlg-table tr.is-prebase td { color: var(--text-3); }
+.dlg__table tr.is-prebase td, .acc-detail tr.is-prebase td { color: var(--text-3); }
+
+/* 资金明细：tab「资金明细」就地展开的页面内面板（取代原弹窗） */
+.acc-detail { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+/* min(520px, 100%)：宽屏给 520px 的呼吸感，窄屏自动收缩到容器宽内 → 不再左右滚动。
+   （写死 520px 会覆盖媒体查询里的 min-width:0，实测移动端容器 394px 仍被撑到 520px） */
+.acc-detail .acc-table { min-width: min(520px, 100%); }
+.acc-detail__foot {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 4px 2px; font-size: 12px; color: var(--text-2);
+}
+.acc-detail__pages { display: flex; align-items: center; gap: 8px; }
+.acc-detail__pages button {
+  border: 1px solid var(--border); background: var(--panel); cursor: pointer;
+  font-size: 12px; padding: 4px 12px; border-radius: 5px; color: var(--text-2); font-family: inherit;
+}
+.acc-detail__pages button:hover:not(:disabled) { color: var(--text); background: var(--panel-2); }
+.acc-detail__pages button:disabled { color: #c3cad6; cursor: not-allowed; }
+.acc-empty__txt { text-align: center; color: var(--text-3); padding: 20px 0; }

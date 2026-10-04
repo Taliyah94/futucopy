@@ -4,7 +4,8 @@
    数据层说明：
      - 自选列表（watchlist）：带 instId 的行来自 OKX 公开行情接口（镜像域名
        cnoyu.org）——加密货币走现货（BTC-USDT），股票/指数/商品走 USDT 永续
-       （如 ORCL-USDT-SWAP）；其余行（上证指数/美元离岸/10Y/花旗/嘉信）无对应品种，静态占位。
+       （如 ORCL-USDT-SWAP）；带 txCode 的行走腾讯行情（A股指数，sh000001）；
+       其余行（美元离岸/10Y 国债）无对应品种，静态占位。
      - 报价头（quote）与分时图（series）已接入 OKX：选中标的时由 loadInstrument()
        拉取 /market/ticker + /market/candles 并刷新，启动自动选中第一个、每 15s 刷新。
      - 评论（comments）仍为占位 mock，接真实数据时调 window.MarketTerminal.setData()。
@@ -37,17 +38,20 @@
 
     // 自选列表（顺序与截图一致）
     //   - 带 instId 的行：实时，OKX 行情（加密=现货，股票/指数/商品=USDT 永续）
-    //   - 不带 instId 的行：静态占位（OKX 无对应品种：上证指数/美元离岸/10Y/花旗/嘉信）
+    //   - 带 txCode 的行：实时，腾讯行情（A股指数，上证=sh000001）
+    //   - 不带 instId/txCode 的行：静态占位（OKX 无对应品种：美元离岸/10Y 国债）
     //   - price/pct 为主显示，extPrice/extPct 为次级「盘前」显示
     /* 自选列表。cat = 分类归属（对应顶部 全部/美股/沪深/期货/加密货币 五个 tab）：
        us=美股  cn=A股/沪深  fut=期货  ccy=加密货币  fx=外汇(归入期货)  bond=债券(归入期货)
        market 字段仍保留原始交易所标识（沪深/外汇/NYMEX/CME/US/USDT 等）用于副行显示，两套不要混。 */
     watchlist: [
-      // ⚠️ 前三行是**静态行**：OKX 没有对应品种（无 instId），点进去也没有 K 线。
+      // ⚠️ 前两行是**静态行**：无数据源（无 instId / txCode / fxCode），点进去也没有 K 线。
+      //    USDCNH 例外：2026-10-04 起读 fund_holdings.json 的 usdcnh_daily（fxCode:'USDCNH'），有日K。
       //   asOf = 数据时间备注，会显示在副行末尾；拉到日频数据后由 fetchFxWatch / fetchTreasuryWatch
       //   覆盖成真实日期，拉不到就保持「快照」（值是硬编码的截图快照，日期无从考证）。
-      { code: '000001',  name: '上证指数',           market: '沪深',  cat: 'cn',  price: 3842.19,  pct: 0.31,  extPrice: null,     extPct: null, asOf: '快照' },
-      { code: 'USDCNH',  name: '美元/离岸人民币',     market: '外汇',  cat: 'fx',  price: 6.70626,  pct: -0.02, extPrice: null,     extPct: null, asOf: '快照' },
+      //   （上证指数原为静态行，2026-10-04 起改走腾讯 txCode: 'sh000001'，已实时。）
+      { code: '000001',  name: '上证指数',           market: '沪深',  cat: 'cn',  price: 3842.19,  pct: 0.31,  extPrice: null,     extPct: null, txCode: 'sh000001', live: true },
+      { code: 'USDCNH',  name: '美元/离岸人民币',     market: '外汇',  cat: 'fx',  price: 6.70626, pct: -0.02, extPrice: null,     extPct: null, fxCode: 'USDCNH', asOf: '快照' },
       { code: '10Ymain', name: '10年国债收益率期货',  market: '债',    cat: 'bond', price: 5.223,   pct: -0.44, extPrice: null,     extPct: null, asOf: '快照' },
       { code: 'CLmain',  name: 'WTI原油期货主连',     market: 'NYMEX', cat: 'fut', price: 90.30,    pct: 1.03,  extPrice: null,     extPct: null, instId: 'CL-USDT-SWAP',   live: true },
       { code: 'TQQQ',    name: '三倍做多纳指ETF',     market: 'US',    cat: 'us',  price: 77.460,   pct: 0.55,  extPrice: 78.300,   extPct: 1.08, instId: 'TQQQ-USDT-SWAP', live: true },
@@ -118,7 +122,11 @@
      ------------------------------------------------------------------- */
   const CHART_MODES = {
     time: { bar: null,   limit: 0,   label: '分时' },   // null = 走时段切分逻辑
-    d5:   { bar: '1m',   limit: 1200, label: '5日', sessions: 5 },   // 1m 切最近 5 个美东交易日
+    /* 「5日」用 **5m** 而不是 1m：OKX 任何 bar 粒度单次都最多给 **1440 根**（实测 1m/3m/5m/15m/30m/1H
+       全是 1440，只是覆盖时长不同：1m=1天、3m=3天、**5m=5天**、15m=15天…）。
+       原来写 1m → 无论翻多少页都只能拿到 1 天，横轴退化成 10-03/10-04 两天。
+       5m × 1440 = 5 天，正好对上「5日」。 */
+    d5:   { bar: '5m',   limit: 1440, label: '5日', sessions: 5 },
     d1:   { bar: '1D',   limit: 220, label: '日K' },
     wk:   { bar: '1W',   limit: 160, label: '周K' },
     mo:   { bar: '1M',   limit: 120, label: '月K' },
@@ -148,12 +156,15 @@
   async function fetchPeriodSeries(instId, mode) {
     const cfg = CHART_MODES[mode] || CHART_MODES.d1;
 
-    // 5日：1m 细粒度按美东日分组，只保留最近 N 个交易日（对齐富途的「5日」分时图）
+    // 5日：按美东日分组，只保留最近 N 个交易日（对齐富途的「5日」分时图）
     if (cfg.sessions) {
-      // OKX 1m 单次上限 300 根；一个美东交易日约 390 根，要 N 天就得 ×N 再留余量。
-      // 之前写 1200（≈1 天）导致「5日」实际只画得出当天，横轴退化成一个刻度。
-      const need = cfg.sessions * 430;
-      const raw = await fetchRawCandles(instId, Math.max(cfg.limit || 0, need));
+      /* ⚠️ OKX 对**任何 bar 粒度**单次都最多返回 **1440 根**（实测 1m/3m/5m/15m/30m/1H 全是 1440），
+         翻页到第 6 页就返回空。所以覆盖时长 = 1440 × bar 粒度：
+           1m → 1 天、3m → 3 天、5m → 5 天、15m → 15 天。
+         「5日」必须用 **5m**（cfg.bar）；用 1m 无论翻多少页都只有 1 天，横轴退化成一个刻度。
+         `need` 只用于决定翻几页，够 1440 即可（bar 粒度已决定实际覆盖范围）。 */
+      const need = Math.min(cfg.limit || 1440, 1440);
+      const raw = await fetchRawCandles(instId, need, cfg.bar);
       const byDay = new Map();
       for (const r of raw) {                     // 最新在前
         const et = new Date(new Date(+r[0]).toLocaleString('en-US', { timeZone: 'America/New_York' }));
@@ -171,6 +182,21 @@
             price: p.price, vol: p.vol,
           });
         });
+      }
+      /* 百分比轴基准 = **首根之前那个交易日的收盘**（即 prevClose）。
+         取不到就退回报价头的 prevClose —— 绝不用 series[0].price（首根收盘）：
+         那会让多日图标签恒为 0.00%（实测 ORCL 首点 142.46、末点也是 142.46）。
+         raw 是「最新在前」，所以从**最旧那根**（raw 末尾）往前找，第一根美东日期与首点不同的即前一日收盘。
+         ⚠️ 不能拿 out[0].t 反解时间戳 —— 那个 `HH:mm` 是**浏览器本地时区**写的，不是 ET。 */
+      if (out.length) {
+        const d0 = days[0];                          // 最早那天的 ET 日期（days 已升序）
+        for (let i = raw.length - 1; i >= 0; i--) {
+          const r = raw[i];
+          if (new Date(+r[0]).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }) !== d0) {
+            out[0].prev = parseFloat(r[4]);
+            break;
+          }
+        }
       }
       return out;
     }
@@ -227,17 +253,17 @@
     return d.getHours() * 60 + d.getMinutes();
   }
 
-  /* 翻页拉取原始 1m K 线（最新在前），拼够 total 根为止（单页上限 300） */
-  async function fetchRawCandles(instId, total) {
+  /* 翻页拉取原始 K 线（最新在前），拼够 total 根或源返回空为止（单页上限 300）。
+     OKX 源最多回溯 1440 根/页链，1m = 24h，对「最近一个美东 20:00 → 现在」这个窗口足够。 */
+  async function fetchRawCandles(instId, total, bar) {
+    const barArg = bar || '1m';
     const pages = [];
     let fetched = 0, after = null;
-    // OKX candles 单次上限 300 根。翻页上限按 total 动态算够，
-    // 保证能覆盖调用方要的区间（5日需要 5×390≈1950 根，8 页才够；
-    // 写死 6 页只有 1800 根 → 5日图只画得出 1 天）。
-    const maxPages = Math.min(12, Math.ceil(total / 300) + 1);
-    for (let p = 0; p < maxPages && fetched < total; p++) {
+    const cap = Math.min(total || 1440, 1440);
+    const maxPages = Math.min(12, Math.ceil(cap / 300) + 1);
+    for (let p = 0; p < maxPages && fetched < cap; p++) {
       const url = OKX_API_BASE + '/market/candles?instId=' + encodeURIComponent(instId) +
-        '&bar=1m&limit=300' + (after ? '&after=' + after : '');
+        '&bar=' + barArg + '&limit=300' + (after ? '&after=' + after : '');
       const json = await fetch(url).then((r) => {
         if (!r.ok) throw new Error('HTTP ' + r.status);
         return r.json();
@@ -255,6 +281,49 @@
     const sess = US_SESSIONS[sessionKey] || US_SESSIONS.regular;
     const raw = await fetchRawCandles(instId, 1800);      // 最新在前
 
+    /* 「全天 / 1D」特殊处理（用户 2026-10-04：「1d应该是从美东20：00（夜盘开始）算，
+       不一定是之前的24小时」）：
+       它不是一个"时段"（US_SESSIONS.all.match 恒为 () => true），而是一个**交易日窗口**：
+       从**最近一个美东 20:00**（夜盘开盘 = 新交易日起点）一直到最新一根。
+       不能用通用算法（head = 第一根 match 的点）—— all 的 match 恒真 → head=0 → 退化成滚动 24h。
+
+       最简且不会错的写法：**「本夜盘段」= 最近一个 ET 20:00 之后的所有 K 线**。
+       raw 最新在下标 0，往下标增大的方向就是时间更早。
+       所以：从 0 开始一直吃「ET 分钟 >= 1200」的（20:00-23:59 段），
+       碰到第一根 m < 1200 时——如果它是凌晨（m < 240），说明同一夜盘还在延续，继续吃；
+       否则（盘后/盘中）说明已越过 20:00 边界，**它的下一根（更早方向的前一根）就是 20:00**，
+       窗口起点 = 该下标 + 1。currentSessionKey() 保证了默认时段就是当前进行中的那个，
+       所以窗口终点恒为 raw 最新那根。
+
+       ⚠️ 两个坑（实测踩过，别再改回去）：
+         1. 不要用「找第一根 m >= 1200」当起点 —— raw 最新在前，那样会命中**上一日 23:59**
+            （1439 也 >= 1200），起点变成 23:59 而不是 20:00。
+         2. 往更早方向吃的时候，**不能一路吃到头**：m < 240 的凌晨段属于**当前**这一夜盘
+            （夜盘跨零点），不是上一夜盘。必须用上面的 m < 240 判定来区分。
+       兜底：数据不足 20:00（刚上市/源刚接上）→ 退回滚动 1440 根。 */
+    if (sessionKey === 'all') {
+      const isNight = (m) => m >= 1200 || m < 240;         // 夜盘 ET [20:00, 次日04:00)
+      /* raw 最新在下标 0，下标越大越早。从 0 连续吃 isNight 的点，停在第一根非夜盘处 —— 
+         实测（ET 10-04 02:02）k=363，且 all[362] = 10-03 20:00 正是窗口起点、all[363] = 19:59 已越界。
+         所以窗口就是 **[0, k)** 这一段（**含** k-1 那根 20:00），反转后即「20:00 → 最新」。 */
+      let k = 0;
+      while (k < raw.length && isNight(etMinutes(+raw[k][0]))) k++;
+      if (k === 0) k = Math.min(raw.length, 1440);           // 兜底：当前不在夜盘（白天）→ 滚动 24h
+      const rows2 = raw.slice(0, k).reverse();               // 旧 -> 新
+      return rows2.map((r) => {
+        const d = new Date(new Date(+r[0]).toLocaleString('en-US', { timeZone: 'America/New_York' }));
+        /* t 带**美东日期**前缀（"YYYY-MM-DD HH:mm"）：这个窗口会跨日界，只给 HH:MM 分不清哪天。
+           drawChart 的横轴在 `usSessionSel==='all'` 时会据此在日界处画竖线 + MM/DD 标注。 */
+        const y = d.getFullYear();
+        const mo = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+        return {
+          t: y + '-' + mo + '-' + dd + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'),
+          price: parseFloat(r[4]), vol: parseFloat(r[5]) || 0,
+        };
+      });
+    }
+
     // 从最新往回找最近的该时段窗口：先跳过更新的非本时段 K 线（head），
     // 再向更早延伸（tail），直到遇到第一个不属于该时段的 K 线
     let head = -1;
@@ -265,7 +334,7 @@
     let tail = head;
     while (tail + 1 < raw.length && sess.match(etMinutes(+raw[tail + 1][0]))) tail++;
 
-    // 全天窗口最多 24h（1440 根）
+    // 单个时段最长不超过 1440 根（一天）
     let lo = head, hi = tail + 1;
     if (hi - lo > 1440) lo = hi - 1440;
     const rows = raw.slice(lo, hi).reverse();             // 旧 -> 新
@@ -298,8 +367,8 @@
     if (pt) pt.classList.toggle('has-caret', showSessionCaret);
     if (menu && !showSessionCaret) menu.hidden = true;
 
-    // 无 instId 的行（上证指数/美元离岸/10Y）没有数据源 -> 分时图显示空白背景
-    if (!item || !item.instId) {
+    // 无数据源的静态行（美元离岸/10Y）没有 K 线 -> 分时图显示空白背景
+    if (!item || (!item.instId && !item.txCode && !item.fxCode)) {
       APP_DATA.series = null;
       drawChart();
       return;
@@ -307,7 +376,22 @@
 
     try {
       let series;
-      if (chartMode === 'time') {
+      if (item.fxCode) {
+        /* 外汇（USDCNH）：frankfurter 只有**日频收盘价**，没有分时 → 「分时」空白；
+           5日 / 日K / 周K / 月K / 季K / 年K 都有（周~年K 由日线本地聚合）。
+           数据 2000-01-13 起（ECB 把 CNY 纳入参考汇率的那天），约 6.8k 个交易日。 */
+        if (chartMode === 'time') {
+          APP_DATA.series = null;
+          drawChart();
+          return;
+        }
+        series = await fetchFxPeriodSeries(chartMode);
+      } else if (item.txCode) {
+        // 腾讯源（上证指数）：分时走 minute/query，其余周期走 fqkline / mkline
+        series = (chartMode === 'time')
+          ? await fetchTxTimeSeries(item.txCode)
+          : await fetchTxPeriodSeries(item.txCode, chartMode);
+      } else if (chartMode === 'time') {
         // 分时：美股按选中时段（盘前/盘中/盘后/夜盘/全天）切分；其余：最近 100 根 1m
         series = (item.market === 'US')
           ? await fetchUsSessionSeries(item.instId, usSessionSel)
@@ -441,6 +525,347 @@
     }
   }
 
+  /* -------------------------------------------------------------------
+     腾讯行情（A股/港股/美股指数与个股）：OKX 拿不到的品种走这里
+     -------------------------------------------------------------------
+     快照：GET https://ifzq.gtimg.cn/appstock/app/fqkline/get?param=<code>,day,,,<n>,qfq
+       → data[code].qt[code] =扁平快照数组（见 TX_QT 字段表）
+       → data[code].day = [[日期,开,收,高,低,量], ...]（**升序**，末根最新）
+     分时：GET .../appstock/app/minute/query?code=<code>
+       → data[code].data = { date:'YYYYMMDD', data:['HHMM 价 量 额', ...] }
+     分钟K：GET .../appstock/app/kline/mkline?param=<code>,m5,,<n>
+       → data[code].m5 = [[YYYYMMDDHHMM,开,收,高,低,量,{},均价], ...]（升序）
+     ⚠️⚠️ **三个端点一律用无 www 的 `ifzq.gtimg.cn`**（2026-10-04 修，勿改回 web.）：
+       `web.ifzq.gtimg.cn` 的 **fqkline 被腾讯 WAF 拦了** —— 返回 501 + 一个
+       `location.href="https://waf.tencent.com/501page.html?u=..."` 的 HTML 跳转页，
+       响应头**没有任何 Access-Control-Allow-Origin** → 浏览器 fetch 直接抛
+       "blocked by CORS policy"，`txGetUsDay()` 拿到 null → `VAL.txUs` 全空→
+       `symbolChg('MU','us')` 恒返回 null → **每只基金的所有美股成分股都退化到
+       「QQQ 兜底」**，于是持仓页基金的估值涨跌全部等于 QQQ 涨幅、看着「一动不动」
+       （且几只不同持仓的基金涨跌幅一模一样，全是 QQQ 的数）。这就是本条修复的起因。
+       `minute/query` 在 web. 上还能用，但为了一致性也统一走 ifzq。
+     三个端点都发 `Access-Control-Allow-Origin: *`，浏览器可直连。
+     ⚠️ 腾讯**没有季K**（season/quarter 均报错），季K 用月K按季度本地聚合；年K 腾讯只给 1 根，也本地聚合。
+     ------------------------------------------------------------------- */
+  const TX_FQ_BASE = 'https://ifzq.gtimg.cn/appstock/app/fqkline/get';
+  const TX_MIN_BASE = 'https://ifzq.gtimg.cn/appstock/app/minute/query';
+  const TX_MK_BASE = 'https://ifzq.gtimg.cn/appstock/app/kline/mkline';
+
+  /* qt 扁平数组下标（实测 88 长度，指数/个股通用） */
+  const TX_QT = {
+    name: 1, code: 2, last: 3, prevClose: 4, open: 5, vol: 6,
+    time: 30, change: 31, pct: 32, high: 33, low: 34,
+  };
+
+  async function txGetJson(url) {
+    const res = await Promise.race([
+      fetch(url),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000)),
+    ]);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const json = await res.json();
+    if (json.code !== 0 || !json.data) throw new Error('bad payload');
+    return json.data;
+  }
+
+  /* 腾讯快照 -> { last, prevClose, change, pct, vol, time } */
+  function parseTxQuote(qt) {
+    if (!Array.isArray(qt) || qt.length < 35) return null;
+    const n = (i) => parseFloat(qt[i]);
+    const last = n(TX_QT.last);
+    if (!(last > 0)) return null;
+    return {
+      name: qt[TX_QT.name],
+      last,
+      prevClose: n(TX_QT.prevClose),
+      change: n(TX_QT.change),
+      pct: n(TX_QT.pct),
+      vol: n(TX_QT.vol) || 0,
+      open: n(TX_QT.open),
+      high: n(TX_QT.high),
+      low: n(TX_QT.low),
+      time: qt[TX_QT.time] || '',
+    };
+  }
+
+  /* 快照 + 日K 一次拿（fqkline 同时返回 qt 和 day，不用额外请求） */
+  async function fetchTxQuote(txCode) {
+    const data = await txGetJson(TX_FQ_BASE + '?param=' + txCode + ',day,,,2,qfq');
+    const node = data[txCode];
+    if (!node) throw new Error('no ' + txCode);
+    const q = parseTxQuote(node.qt && node.qt[txCode]);
+    if (!q) throw new Error('empty qt');
+    return q;
+  }
+
+  /* 腾讯 K 线：period = day | week | month（无季K/年K） */
+  async function fetchTxKline(txCode, period, n) {
+    const data = await txGetJson(
+      TX_FQ_BASE + '?param=' + txCode + ',' + period + ',,' + ',' + (n || 320) + ',qfq'
+    );
+    const node = data[txCode] || {};
+    const rows = node[period] || node.day || node.week || node.month;
+    if (!rows || !rows.length) throw new Error('empty ' + period);
+    return rows;                                   // [日期,开,收,高,低,量]，已升序
+  }
+
+  /* 分时：minute/query -> series（t 为 'HH:MM'） */
+  async function fetchTxTimeSeries(txCode) {
+    const data = await txGetJson(TX_MIN_BASE + '?code=' + txCode);
+    const box = data[txCode] && data[txCode].data;
+    if (!box || !box.data || !box.data.length) throw new Error('empty minute');
+    /* ⚠️ 腾讯 minute/query 每行是 `HHMM 价格 成交量 成交额`，其中后两个字段是
+       **当日累计值**（实测单调递增，末行 = 全天总量 414560247 / 679398992444.8），
+       不是「这一分钟」的量。直接当单根量用会画出一根根递增的阶梯（用户 2026-10-04 截图指正）。
+       → 必须差分成单根量。首行取原值（当日第一分钟 = 累计值 = 单根值）。 */
+    const rows = box.data.map((r) => {
+      const p = String(r).trim().split(/\s+/);
+      return {
+        t: p[0].slice(0, 2) + ':' + p[0].slice(2, 4),
+        price: parseFloat(p[1]),
+        cumVol: parseFloat(p[2]) || 0,       // 累计成交量（手）
+      };
+    });
+    return rows.map((r, i) => ({
+      t: r.t,
+      price: r.price,
+      // 差分求单根量；负数（源侧偶发回退）钳到 0，避免柱子朝下
+      vol: i === 0 ? r.cumVol : Math.max(0, r.cumVol - rows[i - 1].cumVol),
+    }));
+  }
+
+  /* 分钟K（5m）：mkline -> series。t = 'YYYY-MM-DD HH:MM'（5日图按天分组要用完整日期） */
+  async function fetchTxMinuteKline(txCode, m5, n) {
+    const data = await txGetJson(
+      TX_MK_BASE + '?param=' + txCode + ',' + (m5 || 'm5') + ',,' + (n || 640)
+    );
+    const rows = data[txCode] && data[txCode][m5 || 'm5'];
+    if (!rows || !rows.length) throw new Error('empty m5');
+    return rows.map((r) => {
+      const d = String(r[0]);                       // 'YYYYMMDDHHMM'
+      const day = d.slice(0, 4) + '-' + d.slice(4, 6) + '-' + d.slice(6, 8);
+      const hm = d.slice(8, 10) + ':' + d.slice(10, 12);
+      return { ts: d, day, t: day + ' ' + hm, price: parseFloat(r[2]), vol: parseFloat(r[5]) || 0 };
+    });
+  }
+
+  /* 5日图：m5 分钟K按交易日分组，只保留最近 N 天（对齐富途「5日」横轴按天刻度） */
+  async function fetchTxFiveDaySeries(txCode, sessions) {
+    const need = Math.min((sessions || 5) * 130, 640);      // A股一天约 48 根 5m，多取以防分组不足
+    const rows = await fetchTxMinuteKline(txCode, 'm5', need);
+    const byDay = new Map();
+    for (const r of rows) {                                  // rows 已升序
+      if (!byDay.has(r.day)) byDay.set(r.day, []);
+      byDay.get(r.day).push(r);
+    }
+    const days = [...byDay.keys()].sort();
+    const keep = days.slice(-(sessions || 5));
+    const out = [];
+    for (const d of keep) {
+      for (const r of byDay.get(d)) out.push({ t: r.t, price: r.price, vol: r.vol });
+    }
+    /* 百分比轴基准 = 最早一天**之前**那个交易日的收盘（取该日最后一根 5m 的收盘）。
+       没有更早一天就退回报价头 prevClose（drawChart 有兜底）。 */
+    const firstDay = keep[0];
+    const beforeDays = days.filter((d) => d < firstDay);
+    if (out.length && beforeDays.length) {
+      const before = byDay.get(beforeDays[beforeDays.length - 1]);
+      out[0].prev = before[before.length - 1].price;
+    }
+    return out;
+  }
+
+  /* 月K -> 季K / 年K 本地聚合（腾讯无 season 端点，年K 也只给 1 根） */
+  function aggregateTxBy(rows, unit) {
+    const byKey = new Map();
+    for (const r of rows) {                                  // 升序
+      const ds = String(r[0]);
+      const y = ds.slice(0, 4);
+      const m = +ds.slice(5, 7);
+      const key = unit === 'year' ? y : y + '-Q' + Math.ceil(m / 3);
+      const cur = byKey.get(key);
+      if (!cur) byKey.set(key, { key, o: r[1], h: r[3], l: r[4], c: r[2], vol: r[5], y: +y, mm: m });
+      else {
+        cur.h = Math.max(+cur.h, +r[3]);
+        cur.l = Math.min(+cur.l, +r[4]);
+        cur.c = r[2];
+        cur.vol = (+cur.vol || 0) + (+r[5] || 0);
+        cur.mm = m;                                          // 记末月，季K 标签用
+      }
+    }
+    return [...byKey.values()].sort((a, b) => (a.y - b.y) || (a.mm - b.mm));
+  }
+
+  /* 腾讯周期 K 线 -> series（t 格式与 OKX 路径保持一致，drawChart 通用） */
+  async function fetchTxPeriodSeries(txCode, mode) {
+    const cfg = CHART_MODES[mode] || CHART_MODES.d1;
+    // 季K/年K：拉月K再聚合（腾讯无季K）
+    if (mode === 'qr' || mode === 'yr') {
+      const months = await fetchTxKline(txCode, 'month', 120);
+      const agg = aggregateTxBy(months, mode === 'yr' ? 'year' : 'quarter');
+      /* 标签与 OKX 路径同口径：年K = 'YYYY'，季K = 'YYYY-MM'（取该季末月的月份）。
+         drawChart 的月K/季K 标签走 `else` 分支直接画 t，'2026-09' 这种最清楚。 */
+      return agg.map((r) => ({
+        t: mode === 'yr' ? String(r.y) : r.y + '-' + String(r.mm).padStart(2, '0'),
+        price: +r.c, vol: +r.vol || 0,
+      }));
+    }
+    if (mode === 'd5') return fetchTxFiveDaySeries(txCode, cfg.sessions);
+
+    // day / week / month：直接取，行数与 OKX 路径对齐
+    const period = mode === 'd1' ? 'day' : mode === 'wk' ? 'week' : 'month';
+    const n = mode === 'd1' ? 320 : mode === 'wk' ? 320 : 120;
+    const rows = await fetchTxKline(txCode, period, n);
+    return rows.map((r) => {
+      const ds = String(r[0]);
+      return { t: mode === 'mo' ? ds.slice(0, 7) : ds, price: +r[2], vol: +r[5] || 0 };
+    });
+  }
+
+  /* -------------------------------------------------------------------
+     外汇（自选里的「美元/离岸人民币」USDCNH）—— 唯一有 K 线的外汇品种。
+
+     ⚠️ 2026-10-04 定稿：**数据源改成 `fund_holdings.json` 的 `usdcnh_daily`**，
+        前端**不再直连 frankfurter**，与 qqq_daily 完全同构（每天拉一次、只读最新）：
+          - `fund_holdings.py` 里的 `fetch_fx_daily()` 抓 `api.frankfurter.dev`
+            （ECB 每日参考价 base=USD&symbols=CNY），增量合并进 `usdcnh_daily`；
+          - 抓取走 **curl 优先**（本机有 HTTPS 中间人代理，Python 校验证书会失败）；
+          - 起点与 `qqq_daily` 对齐（2025-01-02），旧历史以存盘数据为准。
+        为什么不再浏览器直连：① 浏览器直连 frankfurter 会偶发
+        `ERR_CERT_COMMON_NAME_INVALID`（fetch 静默失败 → 行没价、K 线空白）；
+        ② 每 60s 拉一次 190KB 全量太浪费。
+        ⚠️ frankfurter 本身能回溯到 **2000-01-13**（ECB 纳入 CNY 的那天，约 6.8k 个交易日），
+        想看更长历史把 `fund_holdings.py` 的 `FX_SERIES_START` 改早、重跑一次即可。
+     - ⚠️ 只有**收盘中间价**（O=H=L=C 全等于收盘），没有真 OHLC / 成交量 —— 所以画的是
+        日线**折线**（与腾讯/OKX 路径一致），不是蜡烛图。周/月/季/年同样按收盘聚合。
+     - 口径是 **ECB 在岸 CNY 参考价**，与离岸 CNH 现货有几十个基点价差，日线走势一致；
+        周末与 ECB 假日不更新（停在上一个交易日）。
+     ------------------------------------------------------------------- */
+  const FX_KEY = 'usdcnh_daily';// fund_holdings.json 里的顶层键
+  const FX_JSON = 'fund_holdings.json';
+
+  /* 汇率序列缓存： fund_holdings.json 有 90KB，自选行每 60s 刷一次时不能反复重拉。
+     10 分钟过期即可 —— 源文件本身一天才变一次（workflow 每日提交）。 */
+  let fxCache = { at: 0, rows: null };
+  const FX_CACHE_MS = 10 * 60 * 1000;
+  async function loadFxSeries() {
+    if (fxCache.rows && Date.now() - fxCache.at < FX_CACHE_MS) return fxCache.rows;
+    const r = await Promise.race([
+      fetch(FX_JSON + '?t=' + Date.now()),          // 绕开浏览器对 JSON 的强缓存
+      new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 10000)),
+    ]);
+    if (!r.ok) throw new Error('fund_holdings.json http ' + r.status);
+    const d = await r.json();
+    const src = d && d[FX_KEY];
+    if (!Array.isArray(src) || !src.length) throw new Error('usdcnh_daily 缺失');
+    /* ⚠️ 不能用账户闭包里的 `ymd()` —— 它定义在initAccountData 内部，本模块取不到
+       （踩过一次：整条链静默失败，K 线空白、行价不更新、还每次都重拉 JSON）。 */
+    const rows = src
+      .map((x) => {
+        const s = String((x && x.d) || '');
+        const ts = /^\d{8}$/.test(s) ? s.slice(0, 4) + '-' + s.slice(4, 6) + '-' + s.slice(6, 8) : s;
+        return { ts, c: +(x && x.c) };
+      })
+      .filter((x) => /^\d{4}-\d{2}-\d{2}$/.test(x.ts) && x.c > 0)
+      .sort((a, b) => (a.ts < b.ts ? -1 : 1));
+    if (!rows.length) throw new Error('usdcnh_daily 无有效行');
+    fxCache = { at: Date.now(), rows };
+    return rows;
+  }
+
+  /* 给序列首根补「前一根收盘」—— drawChart 的百分比轴靠 `series[0].prev` 当基准 */
+  function withPrev(rows) {
+    const out = rows.map((r) => Object.assign({}, r, { prev: null }));
+    for (let i = 1; i < out.length; i++) out[i].prev = out[i - 1].c;
+    return out;
+  }
+
+  /* ISO 周的周一（作周K 的分组键与标签，与腾讯路径的周K 标签口径一致） */
+  function isoMonday(ts) {
+    const d = new Date(ts + 'T00:00:00Z');
+    const dow = (d.getUTCDay() + 6) % 7;                 // 周一 = 0
+    return new Date(d.getTime() - dow * 864e5).toISOString().slice(0, 10);
+  }
+
+  /* 日频收盘 → 周/季/月/年聚合（极值取该区间收盘的 max/min，因为源本身没有 OHLC） */
+  function aggregateFxBy(rows, unit) {
+    const byKey = new Map();
+    for (const r of rows) {                                   // 升序
+      const y = r.ts.slice(0, 4);
+      const m = +r.ts.slice(5, 7);
+      /* ⚠️ week 必须单独分支：漏掉它会掉进下面的 `y-MM` 月度桶，「周K」画出来的其实是月K。 */
+      const key = unit === 'year' ? y : unit === 'week' ? isoMonday(r.ts)
+        : unit === 'quarter' ? y + '-Q' + Math.ceil(m / 3)
+          : y + '-' + String(m).padStart(2, '0');
+      const cur = byKey.get(key);
+      if (!cur) byKey.set(key, { key, c: r.c, hi: r.c, lo: r.c, y: +y, mm: m, endTs: r.ts });
+      else {
+        cur.c = r.c;
+        cur.hi = Math.max(cur.hi, r.c);
+        cur.lo = Math.min(cur.lo, r.c);
+        cur.mm = m;                                           // 记末月，季/月标签用
+        cur.endTs = r.ts;                                     // 记末日，周K 标签用
+      }
+    }
+    /* 按 endTs 排最稳：周分组的 y/mm 只是周一所在月，跨月周会错序。 */
+    return [...byKey.values()].sort((a, b) => (a.endTs < b.endTs ? -1 : 1));
+  }
+
+  /* 外汇周期序列 → series。'd5' = 最近 5 个交易日；'d1' 取最近 320 个交易日；其余本地聚合 */
+  async function fetchFxPeriodSeries(mode) {
+    const rows = withPrev(await loadFxSeries());
+    if (mode === 'd5') {
+      return rows.slice(-5).map((r) => ({ t: r.ts, price: r.c, vol: 0, prev: r.prev }));
+    }
+    if (mode === 'd1' || !mode) {
+      return rows.slice(-320).map((r) => ({ t: r.ts, price: r.c, vol: 0, prev: r.prev }));
+    }
+    const unit = mode === 'wk' ? 'week' : mode === 'mo' ? 'month'
+      : mode === 'qr' ? 'quarter' : 'year';
+    const agg = aggregateFxBy(rows, unit);
+    return agg.map((r, i) => ({
+      t: unit === 'year' ? String(r.y)
+        : unit === 'week' ? r.key
+          : (unit === 'month' || unit === 'quarter')
+            ? r.key.slice(0, 4) + '-' + r.key.slice(5, 7)
+            : String(r.endTs),
+      price: r.c, vol: 0,
+      prev: i > 0 ? agg[i - 1].c : rows[0].prev,
+    }));
+  }
+
+  /* 自选列表里的腾讯行：就地更新（与 fetchWatchlist 独立，失败不影响 OKX 行情） */
+  const TX_ROWS = APP_DATA.watchlist.filter((x) => x.txCode);
+
+  async function fetchTxWatch() {
+    if (!TX_ROWS.length) return;
+    try {
+      const res = await Promise.all(TX_ROWS.map((r) => fetchTxQuote(r.txCode).catch(() => null)));
+      let updated = 0;
+      TX_ROWS.forEach((row, i) => {
+        const q = res[i];
+        if (!q) return;
+        row.price = q.last;
+        row.pct = q.pct;
+        row.change = q.change;
+        row.prevClose = q.prevClose;
+        // A股没有盘前盘后，ext 恒空（渲染层只对 market==='US' 用 ext，这里保持一致）
+        row.extPrice = null;
+        row.extPct = null;
+        // ⚠️ 刻意**不写** asOf：asOf 是「无 K 线静态行」的数据时间备注（见 renderWatchlist）。
+        //   腾讯行已是实时行情，周末休市时显示上一交易日日期反而像过期数据，与约定不符。
+        updated++;
+      });
+      if (updated) {
+        renderWatchlist(APP_DATA.watchlist, APP_DATA.quote.code);
+        const sel = APP_DATA.watchlist.find((x) => x.code === APP_DATA.quote.code);
+        if (sel && sel.txCode) loadInstrument(sel.code);   // 选中的是腾讯行才重画图表
+      }
+    } catch (e) {
+      console.warn('[腾讯] 行情拉取失败，沿用上次数据：', e);
+    }
+  }
+
   /* ===================================================================
      2. 工具函数
      =================================================================== */
@@ -508,7 +933,7 @@
      外汇(USDCNH)与债券(10Y)归入「期货」——那组本来就是大类行情位。 */
   const WL_CAT_OF = { fx: 'fut', bond: 'fut' };
   let wlCat = 'all';
-  let wlTradeCat = 'all';      // 交易页自选分类（与行情页独立）
+  let wlTradeCat = 'all';      // 持仓页分类：'all' 全部 / 'us' 证券 / 'fund' 基金（与行情页独立）
 
   /* ---- 交易页持仓数据（由 initAccountData 数据就绪时填充，见 aoState.series 赋值处） ---- */
   const TRADE_POS = { stock: [], fund: [], fx: 1, totalCny: null, cashCny: 0, ibkrCashCny: 0, ready: false };
@@ -533,7 +958,7 @@
     const fx = TRADE_POS.fx || 1;
     /* 推算总资产 = **上面 8 行的市值求和 + 现金**（用户 2026-10-04 定稿）。
        市值取值必须与行内所见完全一致，否则「加起来」对不上：
-         证券 = tradeValueCny（OKX 价 × 数量），兜底 valueCny → 快照 posVal0
+         证券 = tradeValueCny（腾讯价 × 数量），兜底 valueCny → 快照 posVal0
          基金 = estAmount（无估值时回退官方净值市值 amount） */
     let stockNow = 0;
     TRADE_POS.stock.forEach((r) => {
@@ -576,7 +1001,7 @@
 
   /* 交易页列表：只列**持仓**（证券 + 基金），不列自选。
      最后一列「市值/盈亏」上下两行 —— 上为市值（CNY，= 现价 × 份额），下为**盈亏**：
-       证券：现价取 OKX 永续、盈亏 = (OKX 现价 − 账户页现价) × 数量 × FX
+       证券：现价取腾讯、盈亏 = (腾讯现价 − 账户页现价) × 数量 × FX
        基金：现价 = 官方净值 ×(1+估算涨跌)、盈亏 = estAmount − amount
      ⚠️ 表头文案是「市值/盈亏」，但**不是**相对买入成本的累计盈亏（那个在账户页表格里），
      这里的盈亏是「现价相对基准的浮动」，别改回 pnlCny。
@@ -595,14 +1020,14 @@
     const stock = TRADE_POS.stock.map((r) => ({
       kind: '证券', code: r.code, name: r.name,
       /* 现价 = **OKX 永续**（7×24 连续报价，用户 2026-10-04 定稿）；取不到才回落账户价。
-         涨跌幅 = (OKX 现价 − **账户页那个现价**) ÷ 账户现价（tradePct 是小数，fmtPct 要百分数）。 */
+         涨跌幅 = (腾讯现价 − **账户页那个现价**) ÷ 账户现价（tradePct 是小数，fmtPct 要百分数）。 */
       price: r.pTrade != null ? r.pTrade : r.price, cur: 'USD',
       pct: r.tradePct != null ? r.tradePct * 100 : null,
-      // 市值按交易页的 OKX 价算（= 现价 × 份额），与「现价」列自洽
+      // 市值按交易页的腾讯价算（= 现价 × 份额），与「现价」列自洽
       value: r.tradeValueCny != null ? r.tradeValueCny
           : (r.valueCny != null ? r.valueCny
             : (r.h && r.h.posVal0 != null ? r.h.posVal0 * fx : null)),
-      // 「较基准」盈亏 = (OKX 现价 − 账户现价) × 数量 × 汇率
+      // 「较基准」盈亏 = (腾讯现价 − 账户现价) × 数量 × 汇率
       pnl: r.tradeChgCny != null ? r.tradeChgCny : null,
       decimals: (r.mult === 100 ? 3 : 2),
     }));
@@ -620,28 +1045,32 @@
       decimals: 4,
       isEst: f.estNav != null,
       estChg: f.estChg,
-      // 悬停提示里拆出汇率那一层：估值是「本币涨跌 × 汇率变动」的合成结果，
-      // 报表上看整体涨跌看不出汇率贡献了多少，这里给个数字方便核对。
-      fxNote: f.estFxChg != null && f.estChg != null
-        ? `估值 ${(f.estChg * 100).toFixed(2)}%（其中汇率 ${f.estFxChg >= 0 ? '+' : ''}${(f.estFxChg * 100).toFixed(3)}%）`
+      // 悬停提示：估值涨跌 + 汇率贡献。
+      // ⚠️ `FX_IN_VAL = false`（2026-10-04 用户定稿「持仓的估值计算的时候把汇率因素去了」）时
+      // 汇率贡献恒为 0，再显示「其中汇率 +0.000%」是废话，直接不显示这一段。
+      fxNote: f.estChg != null
+        ? `估值 ${(f.estChg * 100).toFixed(2)}%`
+          + (f.estFxChg ? `（其中汇率 ${f.estFxChg >= 0 ? '+' : ''}${(f.estFxChg * 100).toFixed(3)}%）` : '')
         : '',
     }));
     /* 默认按**市值从大到小**排（用户 2026-10-04 定稿）：一眼看出仓位重心，也和「市值/盈亏」列一致。
-       排序用行内那个 value（= 现价 × 份额，证券用 OKX 价、基金用估算市值），
+       排序用行内那个 value（= 现价 × 份额，证券用腾讯价、基金用估算市值），
        缺失（null）当 0 沉到末尾。切分类 tab 后仍按同一规则排。 */
     const byValueDesc = (a, b) => (b.value || 0) - (a.value || 0);
     let list = stock.concat(fund).sort(byValueDesc);
     if (wlTradeCat !== 'all') {
-      // 交易页分类复用自选分类的取值：us → 证券，ccy/其它 → 全部（基金归到「全部」）
+      // 分类 tab：全部 / 证券 / 基金（2026-10-04 用户加的「基金」tab）。
+      // 三种都要按市值降序，不能直接 `list = stock` —— 那会丢掉排序。
       if (wlTradeCat === 'us') list = stock.slice().sort(byValueDesc);
-      else if (wlTradeCat === 'fut' || wlTradeCat === 'ccy') list = [];
+      else if (wlTradeCat === 'fund') list = fund.slice().sort(byValueDesc);
+      else list = [];
     }
     if (!TRADE_POS.ready) {
       ul.innerHTML = '<li class="wl__row wl__row--empty"><span class="wl-name"><b>加载中…</b></span></li>';
       const s0 = document.getElementById('tradeSum'); if (s0) s0.hidden = true;
       return;
     }
-    // 汇总按「全部」口径算，不随分类 tab 变（切到「证券」时仍显示整体推算总资产）
+    // 汇总按「全部」口径算，不随分类 tab 变（切到「证券」/「基金」时仍显示整体推算总资产）
     renderTradeSum();
     if (!list.length) {
       ul.innerHTML = '<li class="wl__row wl__row--empty"><span class="wl-name"><b>该分类下无持仓</b></span></li>';
@@ -659,7 +1088,9 @@
           <span class="wl-price num ${c}">${fmt(it.price, it.decimals)}</span>
           <span class="wl-pct num ${c}">${fmtPct(it.pct)}</span>
           <span class="wl-vp">
-            <b class="num">${f2(it.value)}</b>
+            <!-- 市值也跟着涨跌上色（用户 2026-10-05：「市值也根据涨跌变颜色」），
+                 用现价/涨跌幅那一档的 cls(pct)；下方盈亏仍按自身正负取色（clsCls(pnl)）。 -->
+            <b class="num ${c}">${f2(it.value)}</b>
             <i class="num ${pc}">${f2(it.pnl, true)}</i>
           </span>
         </li>`;
@@ -698,8 +1129,8 @@
       const showExt = ext && it.extPrice != null;
       const extRow = showExt ? `<i class="wl-sub num">${fmt(it.extPrice, 3)}</i>` : '';
       const extPctCell = showExt ? `<i class="wl-sub num">${fmtPct(it.extPct)}</i>` : '';
-      /* 数据时间备注：只给**无 K 线**的静态行加（USDCNH / 10Y 国债 / 上证指数 —— OKX 没有对应品种，
-         点进去也没有分时图）。有 instId 的实时行不显示，避免看着像过期数据。
+      /* 数据时间备注：只给**无 K 线**的静态行加（USDCNH / 10Y 国债 —— OKX/腾讯都没有
+         对应品种，点进去也没有分时图）。有 instId / txCode 的实时行不显示，避免看着像过期数据。
          asOf 由各自的日频数据源写入（fetchFxWatch / fetchTreasuryWatch），拉不到时保持初始的「快照」。 */
       const asOf = it.asOf ? `<i class="wl-asof">${asOfMd(it.asOf)}</i>` : '';
 
@@ -803,82 +1234,104 @@
   });
 
   /* ===================================================================
-     资讯面板：「最新」是社区评论（占位 mock），「推荐」接**华尔街见闻实时快讯**
-     （用户 2026-10-04 定稿）。数据源实测浏览器可直连：
-       https://api-one.wallstcn.com/apiv1/content/lives?channel=global-channel&client=pc&limit=30
-     CORS 反射 Origin；字段 title / content_text(纯文本) / display_time(Unix) / channels。
-     ⚠️ 约 15% 的快讯**没有 title**，只有正文 → 标题为空时直接只渲染正文，别显示空的加粗行。
-     ⚠️ content_text 里有多处空行（段落间），要压平成一行，否则时间轴会被撑开。 */
-  const NEWS_CHANNEL_CN = {
-    'global-channel': '全球', 'a-stock-channel': 'A股', 'us-stock-channel': '美股',
-    'hk-stock-channel': '港股', 'oil-channel': '原油', 'forex-channel': '外汇',
-    'xgb-channel': '港股', 'commodity-channel': '商品',
-  };
-  const NEWS_STATE = { items: [], ids: new Set(), cursor: null, loaded: false, loading: false };
-  const NEWS_API = 'https://api-one.wallstcn.com/apiv1/content/lives';
-  let cpTab = 'latest';                                  // 资讯面板当前 tab
+     资讯面板两个 tab：
+       - 「最新」社区评论（占位 mock）
+       - 「推荐」**金十数据快讯**（默认，script 标签直连，不走 fetch）
+     -------------------------------------------------------------------
+     为什么用金十而不是富途自己的源（用户 2026-10-04 调研结论）：
+       - `news.futunn.com/news-site-api/main/get-flash-list`（真正的富途快讯 API，能拿 60 条）
+         实测响应里 **0 个 Access-Control-Allow-* 头** → 浏览器 fetch 必被同源策略拦掉。
+       - `news.platform.elebank.com/main`（富途资讯站 SSR 页）
+         同样 **0 个 CORS 头**，且返回 141KB 整个 HTML，快讯不走 JSON 接口而是压缩在
+         `window.__NUXT__` 函数里；浏览器抓包确认它只请求 `get_tourist_sig`（游客签名）
+         与 `beacon`（埋点），**没有任何快讯接口**，`flashList` 字段是空数组。
+       （曾试过 workflow 抓本地 JSON，被用户否决：「不要 yml 和 json」；也曾用 iframe 内嵌
+         elebank 快讯页，后因内容与金十高度重合、且金十更好用而整体删除。）
+     选定方案：`https://www.jin10.com/flash_newest.js`
+       - 响应 `Access-Control-Allow-Origin: *`，但更关键的是它是
+         `var newest = [...]` 这种 **JS 赋值语句**，用 `<script src>` 加载即可拿到
+         全局变量 `newest` —— 连 fetch 都不需要，更不需要 CORS。
+       - 免 key、50 条/次、时间倒序，字段：`id` / `time`('YYYY-MM-DD HH:mm:ss') /
+         `important`(1=重要) / `channel`(频道 id 数组) / `data.{title,content,pic,source}`。
+     ⚠️ 用 script 加载会把 `window.newest` 挂到全局，取完记得删掉，避免污染其他代码。
+     =================================================================== */
+  const JIN10_JS = 'https://www.jin10.com/flash_newest.js';
 
-  /* 拉快讯：首次 30 条，之后每 30s 增量 10 条，新条目插到最前面（按 id 去重）。 */
-  async function fetchWallStcn(limit) {
+  const JIN10_CHANNEL = {                 // channel id -> 中文名（实测取值 1/2/3/5/9）
+    1: '外汇', 2: '原油', 3: '贵金属', 5: 'A股', 9: '加密货币',
+  };
+  const NEWS_STATE = { items: [], loaded: false, loading: false, at: '' };
+  let cpTab = 'news';   // 资讯面板当前 tab：**默认「推荐」**（金十快讯，用户 2026-10-04 定稿）
+
+  /* script 标签加载金十快讯：拿全局 `newest` 数组，用完即删 */
+  function loadJin10Script() {
+    return new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = JIN10_JS + '?_t=' + Date.now();     // 绕开浏览器缓存，保证每轮拿到新的
+      s.onload = () => {
+        const raw = window.newest;
+        // 无论成功失败都要摘掉全局变量，别让它污染页面的 window
+        try { delete window.newest; } catch (e) { window.newest = undefined; }
+        s.remove();
+        if (Array.isArray(raw) && raw.length) resolve(raw);
+        else reject(new Error('empty newest'));
+      };
+      s.onerror = () => { s.remove(); reject(new Error('script load failed')); };
+      document.head.appendChild(s);
+    });
+  }
+
+  async function fetchJin10() {
     if (NEWS_STATE.loading) return;
     NEWS_STATE.loading = true;
     try {
-      const url = `${NEWS_API}?channel=global-channel&client=pc&limit=${limit || 30}`
-        + (NEWS_STATE.cursor ? `&cursor=${NEWS_STATE.cursor}` : '');
-      const r = await Promise.race([fetch(url), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000))]);
-      if (!r.ok) return;
-      const j = await r.json();
-      const items = (j.data && j.data.items) || [];
-      if (j.data && j.data.next_cursor) NEWS_STATE.cursor = j.data.next_cursor;
-      const fresh = [];
-      items.forEach((x) => {
-        const id = String(x.id);
-        if (NEWS_STATE.ids.has(id)) return;
-        NEWS_STATE.ids.add(id);
-        const title = String(x.title || '').trim();
-        let body = String(x.content_text || x.content || '')
-          .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-        /* ⚠️ content_text 通常**以标题开头**（"标题 正文"连写），直接 `${title} ${body}` 会重复一遍。
-           这里削掉正文里与标题重复的前缀，只在标题非空时显示加粗行。 */
+      const raw = await loadJin10Script();
+      NEWS_STATE.items = raw.map((x) => {
+        const d = x.data || {};
+        const title = String(d.title || '').trim();   // ⚠️ 实测约 1/5 条 title 是 null，必须兜底
+        // content 常以【标题】开头（"【…】正文"），标题非空时削掉重复前缀
+        let body = String(d.content || '').replace(/\s+/g, ' ').trim();
         if (title && body.startsWith(title)) body = body.slice(title.length).trim();
-        else if (title && !body) body = '';               // 只有标题没有正文时也别重复
-        fresh.push({
-          id,
-          time: new Date(x.display_time * 1000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
-          ts: x.display_time,
+        return {
+          id: String(x.id || ''),
+          time: String(x.time || ''),          // 'YYYY-MM-DD HH:mm:ss'（北京时间）
           title,
           body,
-          ch: (x.channels || []).map((c) => NEWS_CHANNEL_CN[c] || '').filter(Boolean)[0] || '',
-        });
-      });
-      if (fresh.length) {
-        // 接口按时间倒序返回，fresh 已是新→旧；整体保持倒序拼接
-        NEWS_STATE.items = NEWS_STATE.loaded ? fresh.concat(NEWS_STATE.items) : fresh.concat(NEWS_STATE.items);
-        if (NEWS_STATE.items.length > 300) {
-          const cut = NEWS_STATE.items.splice(300);
-          cut.forEach((x) => NEWS_STATE.ids.delete(x.id));
-        }
-        NEWS_STATE.loaded = true;
-        if (cpTab === 'news') renderCpTab();
-      }
-    } catch (e) { /* 源不可达时保留上一批数据，面板不空 */ }
-    finally { NEWS_STATE.loading = false; }
-  }
-  /* 「更多」：按 cursor 往前翻一页 */
-  async function loadMoreNews() {
-    if (NEWS_STATE.loading || !NEWS_STATE.cursor) return;
-    await fetchWallStcn(20);
+          important: Number(x.important) || 0,
+          ch: (x.channel || []).map((c) => JIN10_CHANNEL[c] || '').filter(Boolean)[0] || '',
+          /* 金十源会混入国际英文快讯（实测 50 条里约 23 条是纯英文），
+             不是渲染 bug。标个 EN 便于分辨，未过滤 —— 英文快讯本身也有信息量。 */
+          en: (title + body).match(/[\u4e00-\u9fff]/g) ? 0 : 1,
+        };
+      }).filter((x) => x.body || x.title)
+        // 源侧已按时间倒序，这里再排一次保证严格有序（画时间轴依赖顺序）
+        .sort((a, b) => (a.time < b.time ? 1 : a.time > b.time ? -1 : 0));
+      NEWS_STATE.loaded = true;
+      NEWS_STATE.at = new Date().toLocaleTimeString('zh-CN',
+        { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Shanghai' });
+      if (cpTab === 'news') renderCpTab();
+    } catch (e) {
+      console.warn('[金十] 快讯加载失败，沿用上次数据：', e);
+    } finally { NEWS_STATE.loading = false; }
   }
 
   function renderCpTab() {
     /* 快讯 tab 隐藏社区的「分享心情」输入框（那是发帖用的，快讯流里没有意义） */
     const compose = document.querySelector('.cp__compose');
-    if (compose) compose.hidden = cpTab === 'news';
+    if (compose) compose.hidden = (cpTab === 'news');
     if (cpTab === 'news') renderNews();
     else renderComments(APP_DATA.comments);
   }
 
-  /* 快讯流：仿富途时间轴 —— 左侧圆点 + 时间，其下正文，右侧分享箭头 */
+  /* 金十 time 形如 '2026-10-04 18:21:13'，取 'HH:MM'。
+     正则匹配而非 slice(11,16)：万一源侧格式变了（如去掉秒、用 T 分隔），
+     slice 会切出乱码，match 至少能安全退回原文。 */
+  function jin10Hm(t) {
+    const m = /(\d{2}):(\d{2})/.exec(String(t || ''));
+    return m ? m[0] : String(t || '');
+  }
+
+  /* 「推荐」快讯流：时间轴样式（左侧圆点 + 时间/频道/EN/重要标签，其下正文） */
   function renderNews() {
     const ul = $('#commentList');
     if (!ul) return;
@@ -887,8 +1340,11 @@
       return;
     }
     ul.innerHTML = NEWS_STATE.items.map((n) => `
-      <li class="cp__item cp__news" data-id="${n.id}" title="${n.ch ? n.ch + ' · ' + n.time : n.time}">
-        <div class="cp__news-time"><i class="cp__dot"></i>${n.time}</div>
+      <li class="cp__item cp__news cp__news--jin10${n.important === 1 ? ' is-important' : ''}" data-id="${n.id}">
+        <div class="cp__news-time"><i class="cp__dot"></i>${jin10Hm(n.time)}${
+          n.ch ? `<em class="cp__ch">${n.ch}</em>` : ''}${
+          n.en ? '<em class="cp__en">EN</em>' : ''}${
+          n.important === 1 ? '<em class="cp__lv">重要</em>' : ''}</div>
         <p class="cp__text">${n.title ? `<b>${n.title}</b> ` : ''}${n.body}</p>
       </li>`).join('');
   }
@@ -956,18 +1412,30 @@
     const prices = series.map((d) => d.price);
     const lo = Math.min.apply(null, prices);
     const hi = Math.max.apply(null, prices);
-    const span = (hi - lo) || 1;
-    const yMin = lo - span * 0.08;
-    const yMax = hi + span * 0.08;
+    /* y 轴范围要把**实时价**算进去：`quote.last` 可能高于 K 线最高价（盘中跳涨），
+       不并进来会让实时价落在画布外、标签被 clamp 顶到边缘、与右侧价格轴对不上。 */
+    const live = (APP_DATA.quote && APP_DATA.quote.last > 0) ? APP_DATA.quote.last : null;
+    const lo2 = live != null ? Math.min(lo, live) : lo;
+    const hi2 = live != null ? Math.max(hi, live) : hi;
+    const span2 = (hi2 - lo2) || 1;
+    const yMin = lo2 - span2 * 0.08;
+    const yMax = hi2 + span2 * 0.08;
 
     const X = (i) => padL + (i / (series.length - 1)) * plotW;
     const Y = (p) => padT + (1 - (p - yMin) / (yMax - yMin)) * plotH;
 
-    // 百分比轴基准：分时用「前一日美东收盘」（与报价头一致，保证图上读数 = 报价头涨跌幅）；
-    // K 线周期用「该周期首根收盘」，否则整个周期的涨跌幅会挤在同一侧。
+    /* 百分比轴基准：
+       - 分时用「前一日美东收盘」`quote.prevClose`（与报价头一致，保证图上读数 = 报价头涨跌幅）；
+       - K 线周期用「该周期**首根的前收**」`series[0].prev`。
+       ⚠️ 原先用 `series[0].price`（首根**收盘**）当基准，是错的：
+          「5日」图 series 覆盖多天，首根收盘与末点收盘在同一天凌晨时段常常**完全相等**
+          （实测 ORCL：首点 10-03 11:59 = 142.46、末点 10-04 12:00 = 142.46）
+          → 标签恒为 0.00%，用户报「5日为什么一直是 0%」。
+          富途的「5日」标签显示的是**当日涨跌幅**，基准就是昨收，与分时同一口径。 */
     const prevClose = chartMode === 'time'
       ? (APP_DATA.quote.prevClose || series[0].price)
-      : series[0].price;
+      : (series[0].prev != null ? series[0].prev
+        : (APP_DATA.quote.prevClose || series[0].price));
 
     /* --- 网格 + 坐标轴 --- */
     ctx.font = '11px "PingFang SC", "Microsoft YaHei", sans-serif';
@@ -1019,15 +1487,20 @@
     ctx.lineJoin = 'round';
     ctx.stroke(linePath);
 
-    /* --- 最新价水平线 --- */
-    const lastY0 = Y(series[series.length - 1].price);
+    /* --- 最新价：优先用**报价头的实时价**，没有才退回最后一根 K 线收盘 ---
+       ⚠️ 用户 2026-10-04：「5日为什么一直是 0%，不应该是实时价吗」。
+       K 线最后一根（尤其 5m/1m）是**已完结的收盘**，会比 ticker 滞后几分钟；
+       报价头 `quote.last` 才是实时价（变量 `live`，见上方 y 轴范围处）。
+       `lastPrice` 只用于**标签与水平虚线**，折线本身仍画 K 线收盘（历史不该被改写）。 */
+    const lastBar = series[series.length - 1];
+    const lastPrice = live != null ? live : lastBar.price;   // live 见上方 y 轴范围处
+    const lastY0 = Y(lastPrice);
     ctx.strokeStyle = (APP_DATA.quote.changePct >= 0) ? 'rgba(0,168,107,0.85)' : 'rgba(234,59,59,0.85)';
     ctx.setLineDash([4, 3]);
     ctx.beginPath(); ctx.moveTo(padL, lastY0); ctx.lineTo(padL + plotW, lastY0); ctx.stroke();
     ctx.setLineDash([]);
 
     /* --- 最新价标签：左端实时价、右端涨跌幅（与两侧纵轴一致：左价格轴、右百分比轴） --- */
-    const lastPrice = series[series.length - 1].price;
     const lastPct = prevClose ? (lastPrice / prevClose - 1) * 100 : 0;
     const tagC = lastPct >= 0 ? THEME.up : THEME.down;
     const tagH = 16;
@@ -1054,16 +1527,26 @@
     drawTag(padL + plotW + 2, padR - 4, (lastPct > 0 ? '+' : '') + lastPct.toFixed(2) + '%');
 
     /* --- 成交量 --- */
-    const maxVol = Math.max.apply(null, series.map((d) => d.vol)) || 1;
+    /* ⚠️ y轴按**最大值**线性缩放时，开盘头几分钟的尖峰会压扁全天其余柱子
+       （实测上证 09:31 单根 1626万手 vs 中位仅 120万手，差 13 倍，中位柱子几乎看不见）。
+       富途等终端的做法是按分位数截顶：超过 P95 的柱子统一画到顶部，
+       少数尖峰不 sacrificed 整体形态。P95 在此足够温和（开盘 5 根以内被截）。 */
+    const volArr = series.map((d) => d.vol).filter((v) => Number.isFinite(v) && v > 0)
+      .sort((a, b) => a - b);
+    const p95 = volArr.length ? volArr[Math.min(volArr.length - 1, Math.floor(volArr.length * 0.95))] : 1;
+    const maxVol = Math.max(p95, 1);
+    /* 柱顶被截的根数（>0 即存在尖峰），用于在 VOL 标签上提示，避免误读柱高 */
+    const clipped = series.filter((d) => d.vol > maxVol).length;
     const bw = Math.max(1, plotW / series.length - 0.4);
     ctx.fillStyle = THEME.volBar;
     for (let i = 0; i < series.length; i++) {
-      const h = (series[i].vol / maxVol) * volH;
+      const h = Math.min(1, series[i].vol / maxVol) * volH;
       ctx.fillRect(X(i) - bw / 2, volTop + volH - h, bw, h);
     }
     ctx.fillStyle = THEME.axisText;
     ctx.textAlign = 'left';
-    ctx.fillText('成交量 VOL: ' + fmt(series[series.length - 1].vol, 3), padL, volTop - 4);
+    ctx.fillText('成交量 VOL: ' + fmt(series[series.length - 1].vol, 3)
+      + (clipped ? `（${clipped} 根尖峰已截顶）` : ''), padL, volTop - 4);
 
     /* --- 时间轴 --- */
     ctx.fillStyle = THEME.axisText;
@@ -1102,9 +1585,39 @@
       });
     } else {
       const ticks = 6;
+      /* 「全天」系列的 t 是 "YYYY-MM-DD HH:mm"（20 字符），刻度只画时间部分，
+         否则 6 个刻度会挤成一团糊在一起。日界由下面那段单独标注。
+         ⚠️ `usSessionSel` 是全局状态：在美股上选过「全天」后再切到非美股标的，
+            t 只有 "HH:mm"（5 字符），直接 slice(11) 会画成空白 —— 故加长度判断。 */
+      const tickText = (t) => {
+        const s = String(t);
+        return (usSessionSel === 'all' && s.length > 11) ? s.slice(11) : s;
+      };
       for (let i = 0; i < ticks; i++) {
         const idx = Math.round((i / (ticks - 1)) * (series.length - 1));
-        ctx.fillText(series[idx].t, X(idx), H - padB / 2 - 2);
+        ctx.fillText(tickText(series[idx].t), X(idx), H - padB / 2 - 2);
+      }
+      /* 「全天 / 1D」会**跨美东日界**（窗口从最近一个 20:00 起算，最长跨两个日历日），
+         只画 HH:MM 分不清哪天。在 ET 00:00 处画一条竖分隔线 + `MM/DD` 标注。
+         series[].t 在 all 模式下是 "YYYY-MM-DD HH:mm"（见 fetchUsSessionSeries）。
+         ⚠️ 非美股标的（上证指数）的 t 只有 "HH:mm"，slice(0,10) 拿不到日期，
+            会让每根的 day 都相同 —— 这里加长度门槛，t 太短直接跳过日界标注。 */
+      if (chartMode === 'time' && usSessionSel === 'all' && String(series[0].t).length > 11) {
+        let prevDay = null;
+        for (let i = 0; i < series.length; i++) {
+          const day = String(series[i].t).slice(0, 10);
+          if (prevDay != null && day !== prevDay) {      // 跨日了
+            const x = X(i);
+            ctx.strokeStyle = THEME.grid;
+            ctx.lineWidth = 0.5;
+            ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, volTop); ctx.stroke();
+            ctx.fillStyle = THEME.axisText;
+            ctx.textAlign = 'center';
+            ctx.fillText(day.slice(5, 7) + '/' + day.slice(8, 10), x, H - padB / 2 - 2);
+          }
+          prevDay = day;
+        }
+        ctx.textAlign = 'center';
       }
     }
 
@@ -1119,7 +1632,7 @@
     renderQuote(APP_DATA.quote);
     renderWatchlist(APP_DATA.watchlist, APP_DATA.quote.code);
     renderTradeList();      // 交易页持仓列表（数据未就绪时显示「加载中…」）
-    renderCpTab();          // 资讯面板：按当前 tab 渲染（社区 / 华尔街见闻快讯）
+    renderCpTab();          // 资讯面板：按当前 tab 渲染（社区评论 / 金十快讯）
     drawChart();          // 无 series 时显示空态，等待 OKX 拉取
   }
 
@@ -1162,12 +1675,15 @@
         renderWatchlist(APP_DATA.watchlist || [], (APP_DATA.quote || {}).code);
         renderTradeList();
       }
-      // 资讯面板 tab：最新（社区 mock）/ 推荐（华尔街见闻快讯）
+      // 资讯面板 tab：最新（社区 mock）/ 推荐（金十快讯）
       const cpc = btn.dataset.cpTab;
       if (cpc && cpc !== cpTab) {
         cpTab = cpc;
         renderCpTab();
-        if (cpTab === 'news' && !NEWS_STATE.loaded) fetchWallStcn(30);   // 首次进快讯 tab 才拉
+        // 每次切到「推荐」都重拉一次（源侧有 ~45 分钟延迟，但刷新仍能拿到该源此刻的最新一条；
+        // 原来只在首次 !loaded 时拉，重新打开页面看到的可能是 30 秒前的旧快照）
+        if (cpTab === 'news') fetchJin10();
+        // 「富途」tab 目前是待接入占位，不拉数据
       }
     });
   });
@@ -1285,28 +1801,35 @@
     ).join(' '));
   }
 
-  /* 左侧 rail 视图切换：自选(行情终端) / 账户 / 交易 */
+  /* 左侧 rail 视图切换：自选(行情终端) / 账户 / 资讯 / 选股器 / 持仓 */
   (function initViewSwitch() {
     const items = document.querySelectorAll('.rail__item[data-view]');
     const accountView = $('#accountView');
     const tradeView = $('#tradeView');
+    const screenView = $('#screenView');
     if (!items.length || !accountView) return;
 
     function switchView(view) {
       const isMarket = view === 'market';
       const isTrade = view === 'trade';
+      const isComment = view === 'comment';
+      const isScreen = view === 'screen';
       items.forEach((b) => b.classList.toggle('is-active', b.dataset.view === view));
-      accountView.hidden = isMarket || isTrade;
+      /* accountView 独占主区（自带侧栏 + 主区），所以资讯/选股视图下必须一起藏掉 ——
+         否则它仍占着 flex 位置，右侧内容被挤到最右、文字溢出（实测过）。 */
+      accountView.hidden = isMarket || isTrade || isComment || isScreen;
       if (tradeView) tradeView.hidden = !isTrade;
+      if (screenView) screenView.hidden = !isScreen;
       // 侧栏迷你走势图：账户视图由 hidden 变可见后 clientWidth 才有值，必须重画一次
       // （账户数据是页面加载时拉的，那时视图还隐藏着，只能画到兜底尺寸）
       if (!isMarket && !isTrade) requestAnimationFrame(drawAccSpark);
+      if (isScreen) mountHeatmap();
       if (isMobile()) {
-        // 移动端：账户/交易视图也要把自选/图表让出去，否则两者同屏叠在一起（残影）。
+        // 移动端：账户/交易/选股视图也要把自选/图表让出去，否则两者同屏叠在一起（残影）。
         // 退出时撤掉 is-comment-mode，回到「列表/图表」那一组互斥状态。
         document.body.classList.remove('is-comment-mode');
         if (!isMarket) {
-          document.body.classList.remove('is-chart-mode');   // 账户/交易页不显示图表
+          document.body.classList.remove('is-chart-mode');   // 账户/交易/选股页不显示图表
           const wl = document.querySelector('.watchlist');
           if (wl) wl.classList.add('is-collapsed');          // 也不显示自选列表
         } else if (drawChart) {
@@ -1316,8 +1839,39 @@
       }
       ['.watchlist', '.chart-area', '.comment-panel'].forEach((sel) => {
         const el = $(sel);
-        if (el) el.classList.toggle('is-hidden-by-view', !isMarket);
+        if (!el) return;
+        /* 桌面三栏：market 显示全部；comment **只显示资讯面板**；
+           account（既非 market 也非 comment/trade）显示自选+图表、藏起资讯。
+           ⚠️ 原来一律 `!isMarket` → 桌面点「资讯」时三个全被藏掉，资讯视图等于不存在
+           （用户 2026-10-04：「桌面端点资讯应该也出来快讯流」）。 */
+        const show = isMarket || (sel === '.comment-panel' && view === 'comment');
+        el.classList.toggle('is-hidden-by-view', !show);
       });
+      /* 桌面「资讯」时自选与图表都让位了，资讯面板**铺满主区**（原来固定 330px 窄抽屉，
+         图表区那大片空白反而没人用）。用 body class 驱动，`is-hidden-by-view` 优先级更高，
+         两者互不干扰。 */
+      document.body.classList.toggle('is-comment-full', view === 'comment' && !isMobile());
+      /* 资讯视图：面板**强制展开**。桌面打开时它默认是收起态（`is-collapsed` + 旁边显示
+         `#cpExpand` 展开按钮），在资讯视图下那样会出现「一大片空白 + 一个孤零零的展开按钮」。
+         这里直接展开并把展开按钮藏掉；切回自选时恢复原来的收起态。 */
+      const cpPanel = $('.comment-panel'), cpExpandBtn = $('#cpExpand'), chartEl = $('.chart-area');
+      if (cpPanel && chartEl) {
+        if (view === 'comment') {
+          cpPanel.classList.remove('is-collapsed');
+          chartEl.classList.remove('cp-collapsed');
+          if (cpExpandBtn) cpExpandBtn.hidden = true;
+        } else {
+          cpPanel.classList.add('is-collapsed');
+          chartEl.classList.add('cp-collapsed');
+          if (cpExpandBtn) cpExpandBtn.hidden = false;
+        }
+      }
+      /* 切到资讯视图时重拉一次快讯（金十源是分钟级更新的流，刷新能拿到更新的内容）。
+         移动端由 is-comment-mode 那套逻辑渲染，这里只在桌面走。 */
+      if (view === 'comment') {
+        if (typeof renderCpTab === 'function') renderCpTab();
+        if (typeof fetchJin10 === 'function') fetchJin10();
+      }
       if (isMarket) drawChart();      // 画布重新可见后按新尺寸重绘
     }
 
@@ -1327,6 +1881,195 @@
       if (isMobile() && btn.dataset.view === 'comment') return;
       switchView(btn.dataset.view);
     }));
+
+    /* ---- 选股器：TickerTiles 热力图 ----
+       ⚠️ 路径必须是 `/markets/heatmap/<key>/`：
+            `/embed/<key>` 渲染的是全屏仪表盘（卡片列表），`/embed/heatmap/<key>` 是空白页。
+       ⚠️ 手写懒加载：容器初始 `hidden`，若用 `loading="lazy"`，
+          浏览器会因「元素不可见」无限期推迟加载（与资讯页内嵌 iframe 同一个坑）。 */
+    const HEATMAP_BASE = 'https://tickertiles.com/markets/heatmap/';
+    const screenFrame = $('#screenFrame');
+    const screenLoading = $('#screenLoading');
+    let heatKey = 'all-stocks';      // 用户 2026-10-05 定稿：默认打开「全部个股」
+    let screenLoadTimer = 0;
+    /* ---- 只显示热力图、把它放大的「虚拟视口」几何 ----
+       TickerTiles 站点自带一堆 chrome，实测 2026-10-04（1684×894 视口下逐层量出来的）：
+         y    0..43   顶部 appbar（logo / 搜索框 / App Store）
+         y   60..104  指数切换行（S&P 500 / Nasdaq 100 / Russell 2000 / ETF or watchlist + 右侧 60s 下拉）
+         y  112..134  heatmap-controls（指数 chip + **60s 刷新下拉**）
+         y  140..160  heatmap-breadth（SPY +0.74% … / Compare SPY vs VOO）
+         y  166..194  heatmap-window-row（1D/5D/1M/…/Sector/Ticker/Movers）
+         y  200..869  **heatmap-canvas ← 真正的格子区，我们只要这个**
+         x  277/287   左侧图标栏 260 + 内边距；canvas 左边界 287，宽 = 视口宽 − 314
+       用户要求把上面四条全裁掉（用户 2026-10-04：「sp500……60s 那一行也不要显示了」），
+       所以偏移取 canvas 的 x/y，尺寸取「容器 + 一圈边距」——
+       站点会按更大的视口重排树图，格子更大且 500 只票全可见，不会裁掉边缘。
+       （比 `transform: scale()` 好：scale 必然切掉一条边。）
+       ⚠️ 窄屏（<721px）是另一套单列布局，必须单独给一组数：canvas x=23、y=284、
+          宽 = 视口 − 46、高固定 948（与视口高无关）。 */
+    const HM_CHROME = {
+      /* 宽屏（桌面）：热力图内容区 x=287 y=200（站点 appbar 43 + 四条工具条） */
+      wide: { x: 287, y: 200, padX: 314, padY: 225 },
+      /* ⚠️ 窄屏这组数**必须在 iPhone UA 下量**（用户 2026-10-05 报「移动端没裁剪对」）：
+         移动端站点会换成另一套布局 —— appbar 高 79（桌面 43）、指数 chip 与周期条**折行**
+         （controls 74px、window-row 50px），所以内容区起点是 y=**308**而不是桌面量的 284。
+         之前用「430px 宽但桌面 UA」量，拿到的是 284，真机（iPhone 15 Pro Max）就裁偏了。
+         画布高度 = min(视口高 − 329, 924)（2,961 只票单列排完就封顶），故padY 取 329。 */
+      narrow: { x: 23, y: 308, padX: 46, padY: 329 },
+      /* 窄屏仪表盘：单列，x=12 y=76（同样只在 iPhone UA 下才是这个值） */
+      narrowMarket: { x: 12, y: 76, padX: 18, padY: 76, fixedScale: 1 / 1.35 },
+      /* 「市场」视图 = Tickertiles 仪表盘（winners/losers/各市场表现/板块/因子）。
+         实测 1800×1200 视口下：`.dashboard-stage` 内容区起点 x=276, y=59，宽 = 视口 − 292。
+         缩放：站点按 **1.35 倍**视口排版，再用 `scale(1/1.35)` 缩回面板
+         （用户 2026-10-05：「桌面端热力图市场改成先 1.35 倍，再 scale」）——
+         一屏能看到比面板原生布局多 35% 的内容，卡片里的表格行不会被裁掉。 */
+      market: { x: 276, y: 59, padX: 292, padY: 59, fixedScale: 1 / 1.35 },
+    };
+    /* 站点布局画布 = 面板 × hmZoom，再由 CSS `transform: scale(1/hmZoom)` 缩回面板大小。
+       ⚠️ 为什么要「放大后缩回」而不是直接把 iframe 设成面板大小（用户 2026-10-05）：
+       TickerTiles 只在**它自己的坐标里**够大时才给格子画代码。实测 all-stocks（2,961 个格子）
+       能显示代码的格子数：×1.0 = 125（4.2%）、×1.25 = 208、×1.5 = 273（9.2%）、×1.8 = 365。
+       也就是说想看全市场（小框也要有代码），必须让它在更大的画布上排版；
+       屏幕上每只股票看起来会变小，这是「信息密度」与「单只可读性」的取舍。
+       窄屏不缩放（那边本来就是单列长图，缩了反而更看不清）。 */
+    let hmZoom = 1.25;            // 桌面端默认 1.25 倍（用户 2026-10-05 定稿）
+    /* 「市场」视图的 URL：Tickertiles 仪表盘，带 sort / 自选代码参数 */
+    const MARKET_URL = 'https://tickertiles.com/?sort=size&names=SPY%2CQQQ%2CEWZ%2CCIBR%2CEWY';
+    const isMarketView = () => heatKey === 'market';
+    /* 缩放下拉只在「宽屏热力图」下有意义：
+       - 市场仪表盘固定 1.35 倍（HM_CHROME.market.fixedScale）
+       - 窄屏热力图/仪表盘固定 s = 1（单列长图，缩放反而看不清）
+       所以这两种情况把下拉藏起来，免得给了个不起作用的控件。 */
+    function syncZoomVisibility() {
+      const zl = document.querySelector('.screen-zoom');
+      if (!zl) return;
+      const mobile = typeof isMobile === 'function' && isMobile();
+      zl.style.display = (mobile || isMarketView()) ? 'none' : '';
+    }
+    function fitHeatmap() {
+      const body = document.querySelector('.screen-body');
+      if (!screenFrame || !body) return;
+      const r = body.getBoundingClientRect();
+      if (!r.width || !r.height) return;                 // 容器隐藏时别算（会算出 0 尺寸）
+      const mobile = typeof isMobile === 'function' && isMobile();
+      /* `s` = **显示缩放**（<1 表示站点按更大视口排版再缩回）。
+         热力图：s = 1/hmZoom（站点画布 = 面板 × hmZoom）；
+         市场仪表盘：s = 0.8 固定（用户要求「乘 80%」）；
+         窄屏：s = 1（单列长图，缩了更看不清）。 */
+      const c = mobile
+        ? (isMarketView() ? HM_CHROME.narrowMarket : HM_CHROME.narrow)
+        : (isMarketView() ? HM_CHROME.market : HM_CHROME.wide);
+      const s = c.fixedScale != null ? c.fixedScale : (mobile ? 1 : 1 / hmZoom);
+      /* iframe 按「面板 ÷ s + 边距」给尺寸，再用 transform 缩回并把内容区左上角对到面板左上角：
+         `translate(tx,ty) scale(s)` 是先 scale 再 translate，所以要让内容区原点(c.x,c.y) 落到 (0,0)，
+         需要 tx = −s·c.x、ty = −s·c.y（transform-origin 必须是 0 0）。 */
+      screenFrame.style.width = Math.round(r.width / s + c.padX) + 'px';
+      screenFrame.style.height = Math.round(r.height / s + c.padY) + 'px';
+      screenFrame.style.left = '0px';
+      screenFrame.style.top = '0px';
+      screenFrame.style.transformOrigin = '0 0';
+      /* ⚠️ s === 1 时**也必须**保留 translate —— 裁剪正是靠它把内容区左上角对到面板左上角。
+         之前图省事写成 `transform: none`，结果移动端（s 固定 1）完全不裁剪，
+         站点自己的导航 + 四条工具条全露出来（用户 2026-10-05 报「移动端没裁剪对」）。 */
+      screenFrame.style.transform = 'translate(' + (-s * c.x) + 'px,' + (-s * c.y) + 'px) scale(' + s + ')';
+    }
+    function mountHeatmap() {
+      if (!screenFrame) return;
+      fitHeatmap();
+      { const t = document.querySelector('.screen-head__title');
+        if (t) t.textContent = isMarketView() ? '市场' : '美股热力图'; }
+      syncZoomVisibility();
+      /* ⚠️ 视图刚从 `display:none` 切出来时，**同步**读 `.screen-body` 拿到的是过期尺寸
+         （实测 344×695，而真实值1390×775）—— 布局还没重排完。所以下一帧 + 一次延时再校两遍。 */
+      requestAnimationFrame(fitHeatmap);
+      setTimeout(fitHeatmap, 400);
+      /* 「市场」不是热力图，走仪表盘地址（带 sort / names 参数） */
+      const want = isMarketView() ? MARKET_URL : HEATMAP_BASE + heatKey + '/';
+      if (screenFrame.getAttribute('src') !== want) {
+        screenFrame.setAttribute('src', want);
+        if (screenLoading) { screenLoading.hidden = false; screenLoading.textContent = isMarketView() ? '市场页加载中…' : '热力图加载中…'; }
+        /* 兜底：iframe 的 load 事件在「src 由 JS 设置 + 首次渲染」时序下可能早于监听器绑定，
+           提示就永远撤不掉。这里再挂一个 12s 定时器，到点无条件收起
+           （真加载失败时页面本身是空白，提示文案由 error 分支负责）。 */
+        clearTimeout(screenLoadTimer);
+        screenLoadTimer = setTimeout(() => { if (screenLoading) screenLoading.hidden = true; }, 12000);
+      }
+    }
+    if (screenFrame) {
+      // 加载完成就撤掉「加载中」提示（iframe 的 load 事件在跨域时仍会触发）
+      screenFrame.addEventListener('load', () => {
+        clearTimeout(screenLoadTimer);
+        if (screenLoading) screenLoading.hidden = true;
+        fitHeatmap();                    // 字体/布局稳定后再校一次尺寸
+      });
+      screenFrame.addEventListener('error', () => { if (screenLoading) screenLoading.textContent = '热力图加载失败，请检查网络'; });
+      /* 窗口尺寸变了要重算：热力图边距是固定像素，但可视区尺寸是容器的。 */
+      window.addEventListener('resize', () => {
+        if (screenView && !screenView.hidden) fitHeatmap();
+      });
+      const sw = document.getElementById('screenSwitch');
+      if (sw) sw.addEventListener('click', (e) => {
+        const b = e.target.closest('[data-screen-key]');
+        if (!b || b.dataset.screenKey === heatKey) return;
+        heatKey = b.dataset.screenKey;
+        sw.querySelectorAll('[data-screen-key]').forEach((x) => x.classList.toggle('is-active', x === b));
+        syncZoomVisibility();
+        /* 标题也跟着换：热力图 vs 市场仪表盘 */
+        const ttl = document.querySelector('.screen-head__title');
+        if (ttl) ttl.textContent = isMarketView() ? '市场' : '美股热力图';
+        mountHeatmap();
+      });
+
+      /* ---- 自动刷新间隔（头部那个「刷新 60s」下拉）----
+         站点自带的 60s 下拉在 `heatmap-controls` 里（y=112），已经被我们裁掉了。
+         跨域拿不到 iframe 内部状态，**唯一能做的外部手段就是定时重载 iframe**，
+         所以这个下拉是「我们自己的刷新节奏」，不是去改它的选项。
+         默认 60s（用户定稿），选择存localStorage，跨刷新保留。 */
+      const REFRESH_KEY = 'futu_screen_refresh_v1';
+      const DEFAULT_REFRESH = 60000;
+      let refreshTimer = 0;
+      function setHeatRefresh(ms, persist) {
+        clearInterval(refreshTimer);
+        refreshTimer = 0;
+        if (ms > 0) {
+          refreshTimer = setInterval(() => {
+            if (document.hidden || !screenFrame) return;         // 页面不可见时不折腾
+            /* 加个时间戳绕过 HTTP 缓存，否则重载回来的可能还是旧页面 */
+            screenFrame.setAttribute('src', (isMarketView() ? MARKET_URL : HEATMAP_BASE + heatKey + '/?z=' + hmZoom) + '&r=' + Date.now());
+          }, ms);
+        }
+        if (persist) { try { localStorage.setItem(REFRESH_KEY, String(ms)); } catch (e) { /* 隐私模式 */ } }
+      }
+      const refreshSel = document.getElementById('screenRefresh');
+      if (refreshSel) {
+        let init = DEFAULT_REFRESH;
+        try {
+          const v = parseInt(localStorage.getItem(REFRESH_KEY) || '', 10);
+          if (!Number.isNaN(v) && v >= 0) init = v;                 // 存过的值优先
+        } catch (e) { /* 隐私模式 */ }
+        refreshSel.value = String(init);
+        setHeatRefresh(init, false);
+        refreshSel.addEventListener('change', () => setHeatRefresh(parseInt(refreshSel.value, 10) || 0, true));
+      }
+
+      /* ---- 缩放下拉 ----
+         ⚠️ 改倍率**必须重载 iframe**：站点是按加载时的视口排版的，
+            只改 CSS transform 的话，格子分布还停在旧尺寸，等于白改。 */
+      const zoomSel = document.getElementById('screenZoom');
+      if (zoomSel) {
+        const ZOOM_KEY = 'futu_screen_zoom_v1';
+        let z = parseFloat(localStorage.getItem(ZOOM_KEY) || '');
+        if (!isFinite(z) || z < 1) z = 1.25;                         // 存过的值优先，默认 125%
+        hmZoom = z;
+        zoomSel.value = String(z);
+        zoomSel.addEventListener('change', () => {
+          hmZoom = parseFloat(zoomSel.value) || 1.25;
+          try { localStorage.setItem(ZOOM_KEY, String(hmZoom)); } catch (e) { /* 隐私模式 */ }
+          fitHeatmap();
+          screenFrame.setAttribute('src', HEATMAP_BASE + heatKey + '/?z=' + hmZoom + '&r=' + Date.now());
+        });
+      }
+    }
 
     // 支持 #account / #trade 直达（用正则取 hash，避免带上后面的查询串）
     const hash = (location.hash || '').replace(/^#/, '').split('?')[0];
@@ -1347,6 +2090,7 @@
         Promise.resolve(initAccountData()).finally(() => { accLoading = false; });
       } else {
         fetchWatchlist();
+        fetchTxWatch();
         fetchFxWatch();
         const sel = APP_DATA.watchlist.find((x) => x.code === APP_DATA.quote.code)
                  || APP_DATA.watchlist.find((x) => x.live)
@@ -1354,6 +2098,30 @@
         if (sel) loadInstrument(sel.code);
       }
     });
+  })();
+
+  /* 「统计」tab：资产/分类 视角切换 + 展开/收起明细 */
+  (function initAoDist() {
+    const sw = document.getElementById('aoDistSwitch');
+    if (sw) {
+      sw.addEventListener('click', (e) => {
+        const b = e.target.closest('button[data-ao-dim]');
+        if (!b || b.dataset.aoDim === aoDist.dim) return;
+        sw.querySelectorAll('button').forEach((x) => x.classList.toggle('is-active', x === b));
+        aoDist.dim = b.dataset.aoDim;
+        aoDist.expanded = false;                 // 换视角时收起，回到一致的初始状态
+        renderAoDist();
+      });
+    }
+    const moreBtn = document.getElementById('aoDistMoreBtn');
+    if (moreBtn) {
+      moreBtn.addEventListener('click', () => {
+        aoDist.expanded = !aoDist.expanded;
+        renderAoDist();
+      });
+    }
+    // 窗口尺寸变化 / 侧栏折叠都要重画环形图（canvas 尺寸变了）
+    window.addEventListener('resize', () => { if (aoDist.dim) renderAoDist(); });
   })();
 
   /* 自选 / 资讯面板收起展开：收起后图表区留浮动展开按钮，画布随宽度重绘 */
@@ -1419,9 +2187,16 @@
       lines.forEach((x) => x.classList.toggle('is-active', x.dataset.cat === cat));
       pages.forEach((p) => { p.hidden = p.dataset.catPage !== cat; });
       if (topCard) topCard.classList.toggle('is-active', cat === 'total');
-      // 总览页的 canvas 在 hidden 期间尺寸为 0，切进来时（重）画
-      if (cat === 'total') drawAoChart();
-      else aoState.hover = null;                    // 离开总览页时清掉十字光标
+      /* 总览页的 canvas 在 hidden 期间尺寸为 0，切进来时（重）画。
+         按当前 tab 分派：环形图也必须在这里重画（它的尺寸取自父容器，
+         总览页 hidden 期间同样是 0）。 */
+      if (cat === 'total') {
+        if (aoState.mode === 'cal') drawAoCal();
+        else if (aoState.mode === 'stat') renderAoDist();
+        else drawAoChart();
+      } else {
+        aoState.hover = null;                         // 离开总览页时清掉十字光标
+      }
     }
 
     lines.forEach((ln) => ln.addEventListener('click', () => activate(ln.dataset.cat)));
@@ -1435,23 +2210,39 @@
     // 走势 tab（收益率 / 资产）与时间范围切换
     const tabs = document.querySelectorAll('#aoTabs [data-ao-tab]');
     const ranges = document.querySelectorAll('#aoRanges [data-ao-range]');
-    // 收益日历：切到该 tab 时显示日历、隐藏走势图 + 统计行 + 时间范围按钮（它们对日历无意义）
-    const showCal = (on) => {
+    /* 三个互斥视图（收益率/资产走势、收益日历、统计）共用同一批容器：
+       走势图 `#aoChartWrap`、悬停统计行 `#aoStats`、时间范围 `#aoRanges`。
+       ⚠️ 曾写成 showCal / showStat 两个各自独立的开关，互相把对方设好的 display 覆盖回去
+       （切到「收益日历」时 showCal(false) 会把 chart/stats/ranges 全部恢复显示，
+        即使当前并不是走势图 tab）。故合并成**单一入口** `applyMode`，
+       按当前 mode 一次性决定每个容器该不该显示 —— 不存在覆盖问题。 */
+    const applyMode = (mode) => {
+      const isChart = mode === 'return' || mode === 'asset';
       const cal = document.getElementById('aoCal');
+      const dist = document.getElementById('aoDist');
       const chart = document.getElementById('aoChartWrap');
       const stats = document.getElementById('aoStats');
       const ranges = document.getElementById('aoRanges');
-      if (cal) cal.hidden = !on;
-      if (chart) chart.style.display = on ? 'none' : '';
-      if (stats) stats.style.display = on ? 'none' : '';
-      if (ranges) ranges.style.display = on ? 'none' : '';
-      if (on) drawAoCal(); else drawAoChart();
+      if (cal) cal.hidden = mode !== 'cal';
+      // 分布图原先常驻在走势图上方，用户 2026-10-04 要求收进「统计」tab
+      if (dist) dist.hidden = mode !== 'stat';
+      if (chart) chart.style.display = isChart ? '' : 'none';
+      if (stats) stats.style.display = isChart ? '' : 'none';
+      if (ranges) ranges.style.display = isChart ? '' : 'none';
+      /* 只重画当前可见的那一个。
+         ⚠️ 统计页的环形图**必须等 hidden 摘掉之后**才能画：它按
+         `wrap.clientWidth/Height` 定尺寸，而 hidden 期间父容器尺寸为 0，
+            会走 `if (W<40) return` 直接跳过，canvas 保持默认 300x150（只画一半）。
+            日历/走势图是 DOM/另有一套守卫，不受此影响。 */
+      if (mode === 'cal') drawAoCal();
+      else if (mode === 'stat') renderAoDist();
+      else if (isChart) drawAoChart();
     };
     tabs.forEach((b) => b.addEventListener('click', () => {
       tabs.forEach((x) => x.classList.toggle('is-active', x === b));
       aoState.mode = b.dataset.aoTab;
       aoState.hover = null;                           // 切换视图时清掉十字光标
-      showCal(b.dataset.aoTab === 'cal');
+      applyMode(aoState.mode);
     }));
     ranges.forEach((b) => b.addEventListener('click', () => {
       if (b.disabled) return;
@@ -1470,6 +2261,7 @@
   (function initMobileFoldAndFullscreen() {
     const side = document.getElementById('accSide');
     const foldBtn = document.getElementById('accSideFold');
+    const foldBar = document.querySelector('.acc-side__foldbar');
     const sumEl = document.getElementById('accSideSum');
     const KEY = 'futu_acc_side_folded';
     if (side && foldBtn) {
@@ -1477,22 +2269,45 @@
         side.classList.toggle('is-folded', folded);
         foldBtn.setAttribute('aria-expanded', folded ? 'false' : 'true');
         // 高度变了，侧栏迷你走势图和总览页图表都要按新尺寸重画
-        requestAnimationFrame(() => { drawAccSpark(); drawAoChart(); });
+        requestAnimationFrame(() => { drawAccSpark(); drawAoChart(); renderAoDist(); });
       };
       // 默认展开（未存过）；只有显式存了 '1' 才折叠
       apply(localStorage.getItem(KEY) === '1');
-      foldBtn.addEventListener('click', () => {
+      const toggle = () => {
         const folded = !side.classList.contains('is-folded');
         apply(folded);
         try { localStorage.setItem(KEY, folded ? '1' : '0'); } catch (e) { /* 隐私模式忽略 */ }
+      };
+      foldBtn.addEventListener('click', (e) => {
+        e.stopPropagation();          // 别冒泡到 foldBar 再切一次（切两次 = 没动）
+        toggle();
       });
+      /* 折叠条**整条可点**都展开/收起（用户 2026-10-04：「这界面的时候点横条的任意位置应该都是展开功能」）。
+         之前左半是 `#accSideToTotal`「进总览页」、右半箭头才是展开 —— 同一横条两套语义，
+         点左边直接跳页、点右边才展开，很容易误触。现在统一成 toggle。
+         ⚠️ `#accSideToTotal` 自己的 click 监听也要在**折叠态**下让位（它 stopPropagation 会把
+         点击拦在半路，导致左半边点了没反应）—— 那段代码里判断了 `is-folded` 就直接 return。 */
+      if (foldBar) {
+        foldBar.addEventListener('click', (e) => {
+          if (e.target.closest('#accSideFold')) return;      // 箭头已在上方处理
+          toggle();
+        });
+        foldBar.style.cursor = 'pointer';
+      }
     }
 
     // 折叠条上要显示总资产 —— 与 .acc-side__total 同步同一个数
     const total = document.getElementById('accTotalVal');
     // 折叠后总资产卡被收起，折叠条左侧的「总资产」就是进总览页的入口（替代它）
     const toTotal = document.getElementById('accSideToTotal');
-    if (toTotal) toTotal.addEventListener('click', () => {
+    if (toTotal) toTotal.addEventListener('click', (e) => {
+      /* 折叠态：整条横条 = 展开（用户 2026-10-04），本按钮**不做任何事也不拦事件**，
+         让它自然冒泡到 foldBar 的 toggle —— 之前这里先 stopPropagation 再 return，
+         点击被吞在半路，点了左半边「总资产」完全没反应。
+         展开态下这个按钮是 `display:none`（CSS `.acc-side:not(.is-folded) .acc-side__toTotal{display:none}`），
+         真正可点的只有折叠态，所以下面的「进总览」逻辑实际是兜底，正常走不到。 */
+      if (side && side.classList.contains('is-folded')) return;      // 不 stopPropagation
+      e.stopPropagation();
       // 复现 initAccCats 里 activate('total') 的行为（那边是独立 IIFE，变量取不到）
       document.querySelectorAll('.as-line[data-cat]').forEach((x) => x.classList.remove('is-active'));
       document.querySelectorAll('.acc-page').forEach((p) => { p.hidden = p.dataset.catPage !== 'total'; });
@@ -1520,7 +2335,8 @@
     let statsHome = statsEl ? statsEl.parentNode : null, statsNext = null;
 
     // 全屏顶部：走势图 tab 高亮 + 时间范围高亮，跟随 aoState 同步（定义在 openFs 之前，避免 TDZ 隐患）
-    const RANGE_LABEL = { '1w': '近1周', '1m': '近1月', 'ytd': '年初至今' };
+    // 范围档位与主页面 #aoRanges 保持一致（用户 2026-10-04 定稿：近1月/近3月/今年以来/自始以来）
+    const RANGE_LABEL = { '1m': '近1月', '3m': '近3月', 'ytd': '今年以来', 'all': '自始以来' };
     const syncFsUi = () => {
       document.querySelectorAll('#aoFsRanges [data-ao-range]').forEach((x) => {
         x.classList.toggle('is-active', x.dataset.aoRange === aoState.range);
@@ -1528,8 +2344,9 @@
       document.querySelectorAll('#aoFsTabs [data-ao-fs-tab]').forEach((x) => {
         x.classList.toggle('is-active', (x.dataset.aoFsTab === 'asset') === (aoState.mode === 'asset'));
       });
-      /* 日历不是 canvas：主页面切到「收益日历」时全屏留着只会显示上一张过期图，直接退出 */
-      if (aoState.mode === 'cal' && !fs.hidden) closeFs();
+      /* 日历与统计都不是 canvas：主页面切过去时走势图是隐藏的，
+         全屏留着只会显示上一张过期图，直接退出。 */
+      if ((aoState.mode === 'cal' || aoState.mode === 'stat') && !fs.hidden) closeFs();
     };
 
     const openFs = () => {
@@ -1597,6 +2414,11 @@
   fetchWatchlist();
   setInterval(fetchWatchlist, 15000);
 
+  /* 自选里的腾讯行（上证指数）独立拉取，同样 15s 一轮。
+     启动延迟 3s 再首拉，避开和上面 OKX 那批同一秒发出去（两个源互不依赖，错开只是省并发）。 */
+  setTimeout(fetchTxWatch, 3000);
+  setInterval(fetchTxWatch, 15000);
+
   /* 持仓行情（交易页 + 账户页证券表）同样 15s 刷新一次。
      入口由 initAccountData 就绪后挂上（TRADE_POS.refresh），这里只负责按点调用；
      两者错开 3s，免得同一秒打两批请求。 */
@@ -1604,11 +2426,11 @@
     if (typeof TRADE_POS.refresh === 'function') TRADE_POS.refresh();
   }, 18000);
 
-  /* 华尔街见闻快讯：启动即预拉一份（这样切到「推荐」tab 不用等），
-     之后每 30s 增量拉 10 条，新条目插到列表顶部。
-     页面不可见时跳过；重复 id 已在 fetchWallStcn 内按 Set 去重。 */
-  fetchWallStcn(30);
-  setInterval(() => { if (!document.hidden) fetchWallStcn(10); }, 30000);
+  /* 金十快讯（「推荐」tab）：script 标签直连 www.jin10.com/flash_newest.js。
+     启动即预拉一份（切到「推荐」不用等），之后每 60s 重拉一次。
+     60s 而非 30s：金十是分钟级更新的流，再密拉到的多半是同一份内容。 */
+  fetchJin10();
+  setInterval(() => { if (!document.hidden) fetchJin10(); }, 60000);
 
   /* 顶栏「刷新」按钮（移动端左侧唯一保留的按钮）：
      手动重拉一轮数据 = 自选行情 + 外汇行 + 当前标的图表/分时。
@@ -1629,6 +2451,7 @@
       try {
         await withTimeout(Promise.all([
           fetchWatchlist(),
+          typeof fetchTxWatch === 'function' ? fetchTxWatch() : Promise.resolve(),
           typeof fetchFxWatch === 'function' ? fetchFxWatch() : Promise.resolve(),
           loadInstrument((APP_DATA.quote || {}).code),   // 重画当前标的图表
         ]), 8000);
@@ -1641,31 +2464,29 @@
     });
   }
 
-  // 美元/离岸人民币：frankfurter 日频参考价（最新 vs 前一交易日），更新自选「外汇」行
+  /* 美元/离岸人民币：**只读** `fund_holdings.json` 的 `usdcnh_daily`（用户 2026-10-04 定稿）。
+     数据由 `fund_holdings.py` 每天抓 frankfurter 写进文件，前端不再直连外币接口：
+       - 浏览器直连 frankfurter 会偶发 `ERR_CERT_COMMON_NAME_INVALID`（静默失败 → 行没价）；
+       - 也不需要每 60s 拉一次外网。
+     ⚠️ 与K 线**同一份数据、同一口径** —— 图上末点就是这个价，不会出现割裂。
+     周末与 ECB 假日不更新，`asOf` 停在最近一个交易日。 */
   async function fetchFxWatch() {
+    const row = APP_DATA.watchlist.find((x) => x.code === 'USDCNH');
+    if (!row) return;
     try {
-      const start = new Date(Date.now() - 14 * 864e5).toISOString().slice(0, 10);
-      const end = new Date(Date.now() + 864e5).toISOString().slice(0, 10);
-      // 同 accJson：fetch 无内置超时，源挂住会一直占着一个 pending
-      const r = await Promise.race([
-        fetch(`https://api.frankfurter.dev/v1/${start}..${end}?base=USD&symbols=CNY`),
-        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000)),
-      ]);
-      if (!r.ok) return;
-      const d = await r.json();
-      const days = Object.keys(d.rates || {}).sort();
-      if (!days.length) return;
-      const rate = d.rates[days[days.length - 1]].CNY;
-      const prev = days.length >= 2 ? d.rates[days[days.length - 2]].CNY : null;
-      const row = APP_DATA.watchlist.find((x) => x.code === 'USDCNH');
-      if (!row) return;
-      row.price = rate;
-      row.pct = prev ? +((rate - prev) / prev * 100).toFixed(2) : null;
-      row.asOf = days[days.length - 1];      // ECB 参考价的最新可得日期（副行显示用）
+      const rows = await loadFxSeries();          // 内部带 10 分钟缓存
+      const last = rows[rows.length - 1];
+      const prev = rows.length >= 2 ? rows[rows.length - 2].c : null;
+      row.price = last.c;
+      row.pct = prev ? +((last.c - prev) / prev * 100).toFixed(2) : null;
+      row.change = prev != null ? +(last.c - prev).toFixed(5) : null;
+      row.prevClose = prev;                       // 报价头 / 百分比轴的基准
+      row.asOf = last.ts;
       renderWatchlist(APP_DATA.watchlist, APP_DATA.quote.code);
-    } catch (e) { console.warn('[汇率] frankfurter 拉取失败：', e); }
+    } catch (e) { console.warn('[汇率] 读取 usdcnh_daily 失败：', e); }
   }
   fetchFxWatch();
+  setInterval(fetchFxWatch, 60000);        // 读本地 usdcnh_daily（内部 10 分钟缓存），1 分钟刷一次足够
 
   /* 10年国债收益率：美国财政部官方 Daily Treasury Par Yield Curve（BC_10YEAR，日频 %）
      ⚠️ 曾用 FRED DGS10，但浏览器无法直连：
@@ -1711,7 +2532,7 @@
   /* ===================== 账户实数据（Asset_parsed.json + fund_holdings.json） ===================== */
 
   /* ---- 全部账户总览页（品类/币种分布 + 收益率/资产走势） ---- */
-  const aoState = { ready: false, mode: 'return', range: '1w', series: [], hover: null };
+  const aoState = { ready: false, mode: 'return', range: '1m', series: [], hover: null };
 
   /* 基金历史净值查询：date 当日或之前最近一条
      ⚠️ nav 行的时间戳是 **毫秒数字**（如 1765209600000），早前直接 String(row[0]).slice(0,10)
@@ -1736,18 +2557,306 @@
     return new Date(ts + 8 * 3600e3).toISOString().slice(0, 10);
   }
 
-  /* 分布条 + 图例（品类 / 币种通用） */
-  function renderAoDist(barId, legendId, items, total) {
-    const bar = document.getElementById(barId);
-    const legend = document.getElementById(legendId);
-    if (!bar || !legend) return;
-    const pctOf = (v) => (total > 0 ? v / total * 100 : 0);
-    bar.innerHTML = items.map((it) =>
-      `<span style="width:${pctOf(it.val).toFixed(2)}%;background:${it.color}"></span>`
-    ).join('');
-    legend.innerHTML = items.map((it) =>
-      `<li><i class="dot" style="background:${it.color}"></i><span>${it.name}</span><b class="num">${pctOf(it.val).toFixed(2)}%</b></li>`
-    ).join('');
+  /* -------------------------------------------------------------------
+     「统计」tab：个人净资产分布 —— **环形图**（富途「个人净资产分布」样式）
+     -------------------------------------------------------------------
+     三个视角（`aoDist.dim`），各自独立成环：
+       - 'asset' 每个持仓一扇区，颜色**按所属分类取同色系**（ORCL 红色系 / 000043 黄色系…）
+       - 'cat'   品类：证券(红) / 基金(黄) / 现金(绿)
+       - 'cur'   币种：美元(蓝) / 人民币(橙)
+     **排序：三个视角都纯按占比从大到小**，12 点方向起顺时针
+       （用户 2026-10-04：「资产我说是按百分比顺时针排，同一类别的不要都放一块」）。
+       分类只影响**颜色**，不影响排序位置。
+     数据由 `setAoDistData()` 送进来，绘制与图例分离，15s 刷新时只重绘不重建结构。 */
+  const aoDist = { dim: 'asset', data: { asset: [], cat: [], cur: [] }, total: 0, expanded: false, dirty: false };
+
+  /* 分类主色（用户 2026-10-04 指定）：证券=红、基金=黄、现金=绿。
+     币种沿用蓝/橙两色以便与分类区分。
+     分类名统一用「证券」（用户 2026-10-04：「股票改成证券」），
+     不再保留 `股票` 这个别名 —— 之前留它是为了掩盖键名不匹配的 bug，已修根因。 */
+  const AO_CAT_COLOR = { 证券: '#e8453c', 基金: '#f0a020', 现金: '#12a05c', 美元: '#2e6bff', 人民币: '#ff8f1f' };
+
+  /* 资产视角的**同色系梯度**：同一分类下的不同持仓在主色深浅上错开，
+     这样「ORCL/TQQQ 都是红的、000043/270023 都是黄的」，一眼能看出归属
+     （用户 2026-10-04：「资产里的细项按分类用同色系的颜色」）。
+     档位向白插值，**跨度要够大**才看得出差别（第一版只到 0.16，四档几乎同色）。 */
+  const AO_SHADES = [0, 0.22, 0.4, 0.55, 0.68];
+  function aoShade(hex, idx) {
+    const k = AO_SHADES[idx % AO_SHADES.length];
+    if (!k) return hex;
+    const m = /^#?([0-9a-f]{6})$/i.exec(hex);
+    if (!m) return hex;
+    const n = parseInt(m[1], 16);
+    const mix = (c) => Math.round(c + (255 - c) * k);       // 向白插值
+    return '#' + [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+      .map((c) => mix(c).toString(16).padStart(2, '0')).join('');
+  }
+
+  /* 金额千分位（环形图中心/明细列用）。
+     ⚠️ 不能用账户视图闭包里的 `f2` —— `renderAoDist` 定义在那个闭包**之外**，
+        直接调会抛 `f2 is not defined`（2026-10-04 实测踩到）。同理 `fmt` 虽全局可用但无千分位。 */
+  const aoMoney = (v) => (v == null || !isFinite(v)
+    ? '--'
+    : Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+
+  /* 送数据 + 重绘。
+     assetList = [{name, code, val, cat, icon, brand}]（每个持仓一项；cat 用于取同色系主色，
+                icon 是 Asset_parsed.json 里那张 base64 图（`data:image/...`））
+     groups    = { cat: [{name,val}...], cur: [{name,val}...] }（分类/币种两组）
+     三个视角各自**独立成环**（用户 2026-10-04：「环形图 现金证券基金 和 美元人民币 分开画」）：
+       资产 = 全部持仓；分类 = 现金/股票/基金；币种 = 美元/人民币。
+       ⚠️ 绝不能把两组塞进同一个环 —— 各组占比之和都为 100%，角度会累加到 720°、扇区重叠。 */
+  function setAoDistData(assetList, groups, total) {
+    /* 资产视角排序：**纯按占比降序**（12 点起顺时针，从大到小）。
+       ⚠️ 曾一度改成「按分类成组」（红→红→黄→黄→绿→绿），用户明确否决：
+       「同一类别的不要都放一块啊」—— 同类聚成一块会让大额持仓挤在一起、
+       环上看不出谁大谁小。**排序只看金额，颜色才看分类**，两件事互不影响。
+       同色系仍然生效：颜色按 `cat` 取主色 + 该类内的出现序号做深浅梯度
+      （所以红色系里ORCL 是主色、TQQQ 是浅红，视觉上仍能认出同类）。 */
+    const sorted = (assetList || []).filter((x) => x && x.val > 0)
+      .sort((a, b) => b.val - a.val);
+    const seen = {};
+    aoDist.data.asset = sorted.map((x) => {
+      const cat = x.cat || '其他';
+      const base = AO_CAT_COLOR[cat] || '#b06be0';
+      const i = seen[cat] = (seen[cat] || 0);
+      return {
+        name: x.name, code: x.code || '', val: x.val, cat,
+        color: aoShade(base, i),
+        icon: x.icon || '',          // base64 data URI，环内/列表里画图标
+        brand: x.brand || '',        // 机构名（可选，列表里备用）
+      };
+    });
+    const g = groups || {};
+    /* 分类/币种视角：也按金额降序，主色直接取 AO_CAT_COLOR。 */
+    const paint = (arr) => (arr || []).filter((x) => x && x.val > 0)
+      .sort((a, b) => b.val - a.val)
+      .map((x) => ({ name: x.name, code: '', val: x.val, color: AO_CAT_COLOR[x.name] || '#b06be0' }));
+    aoDist.data.cat = paint(g.cat);
+    aoDist.data.cur = paint(g.cur);
+    aoDist.total = total > 0 ? total : 0;
+    /* 数据到达时总览页可能还 hidden（canvas 父容器尺寸 0，画了也白画）。
+       打个标记，等真正切到「统计」tab 时由 applyMode 补画一次。 */
+    aoDist.dirty = true;
+    renderAoDist();
+  }
+
+  /* 当前视角的数据集（环形图与列表共用 —— 三个视角都是「一组数据对应一个环」） */
+  function aoDistCurrent() {
+    if (aoDist.dim === 'cat') return aoDist.data.cat;
+    if (aoDist.dim === 'cur') return aoDist.data.cur;
+    return aoDist.data.asset;
+  }
+
+  /* 环形图 + 明细列表
+     三个视角（资产 / 分类 / 币种）结构完全相同：一个数据集 → 一个环 + 一份列表。
+     数据源统一走 `aoDistCurrent()`，不再有「图和列表用不同源」的情况。 */
+  function renderAoDist() {
+    const canvas = document.getElementById('aoDonut');
+    const list = document.getElementById('aoDistList');
+    if (!canvas || !list) return;
+    const items = aoDistCurrent();
+    const total = aoDist.total;
+
+    // 中心总额
+    const hole = document.getElementById('aoDonutTotal');
+    if (hole) hole.textContent = total > 0 ? '¥' + aoMoney(total) : '--';
+
+    if (!items.length || total <= 0) {
+      list.innerHTML = '<li class="cp__item cp__item--empty">暂无数据</li>';
+      drawAoDonut([], []);
+      return;
+    }
+
+    /* 各视角的数据集之和都等于总资产（分类/币种由调用方保证口径），
+       统一除以总资产即扇区占比。 */
+    const pcts = items.map((x) => x.val / total);
+    drawAoDonut(items, pcts);
+
+    /* 明细列表：资产视角项多（十几只持仓），默认只显示 ≥2% 的，「展开其余」后全显示；
+       分类/币种视角项数少（3 / 2），始终全列、不给展开按钮。
+       ⚠️ 过滤后**不能**再用 `shown.map((x,i)=>pcts[i])` 取占比 —— `i` 是过滤前的下标，
+          会让百分比与名称错位（实测建设银行 12.8% 被显示在最后一位、看着像 2.9%）。
+          正确做法：过滤时把 {item, pct} 成对取出。 */
+    const MIN_PCT = 0.02;
+    const pairs = items.map((x, i) => ({ x: x, pct: pcts[i] }));
+    const shown = (aoDist.expanded || aoDist.dim !== 'asset')
+      ? pairs
+      : pairs.filter((r) => r.pct >= MIN_PCT);
+    const hidden = pairs.length - shown.length;
+
+    list.innerHTML = shown.map((r) => {
+      const x = r.x;
+      /* 名称与代码相同时不重复显示（ORCL / ORCL -> 只写一次） */
+      const dup = x.name === x.code;
+      /* 图标：有则显示 18px 方形 logo，没有就退回色块圆点 */
+      const badge = x.icon
+        ? `<img class="ao-dlist__icon" src="${x.icon}" alt="" loading="lazy">`
+        : `<i class="dot" style="background:${x.color}"></i>`;
+      return `
+      <li>
+        ${badge}
+        <span class="ao-dlist__name">${x.name}${x.code && !dup ? `<em>${x.code}</em>` : ''}</span>
+        <b class="num">${(r.pct * 100).toFixed(1)}%</b>
+        <i class="num">${'¥' + aoMoney(x.val)}</i>
+      </li>`;
+    }).join('');
+
+    // 展开/收起
+    const more = document.getElementById('aoDistMore');
+    const btn = document.getElementById('aoDistMoreBtn');
+    const txt = document.getElementById('aoDistMoreTxt');
+    if (more) {
+      // 只有资产视角项数多、需要折叠；分类/币种视角项数少，始终全列
+      more.hidden = aoDist.dim !== 'asset' || hidden <= 0;
+      if (txt) txt.textContent = aoDist.expanded ? '收起' : `展开其余 ${hidden} 项`;
+      if (btn) btn.classList.toggle('is-open', aoDist.expanded);
+    }
+  }
+
+  /* ---- 扇区图标：Asset_parsed.json 里的 base64 图（data URI），异步解码后缓存 ---- */
+  const aoIconCache = {};        // src -> HTMLImageElement（已 decode）
+  const aoIconPending = {};      // src -> true（正在加载，避免重复建Image）
+  function aoIcon(src) {
+    if (!src) return null;
+    const hit = aoIconCache[src];
+    if (hit) return hit.complete && hit.naturalWidth ? hit : null;
+    if (aoIconPending[src]) return null;
+    aoIconPending[src] = true;
+    const img = new Image();
+    img.onload = () => { aoIconCache[src] = img; renderAoDist(); };   // 到位后重画
+    img.onerror = () => { delete aoIconPending[src]; };
+    img.src = src;
+    return null;
+  }
+
+  /* canvas 环形图：扇区 + 扇区内「图标 + 百分比 + 代码」标签
+     顺时针从 12 点起，按传入顺序（调用方已排成金额从大到小）。
+     中心孔半径 = R * 0.44（用户 2026-10-04：「中间的圆圈可以小一点」，原 0.62）。 */
+  function drawAoDonut(items, pcts) {
+    const canvas = document.getElementById('aoDonut');
+    if (!canvas) return;
+    const wrap = canvas.parentElement;
+    const W = wrap.clientWidth, H = wrap.clientHeight;
+    if (W < 40 || H < 40) return;                      // 隐藏时不画
+    const dpr = window.devicePixelRatio || 1;
+    if (canvas.width !== Math.round(W * dpr) || canvas.height !== Math.round(H * dpr)) {
+      canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
+    }
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    if (!items || !items.length) return;
+
+    const cx = W / 2, cy = H / 2;
+    const R = Math.min(W, H) / 2 - 4;                  // 外半径
+    /* 内孔半径比例。改动史：0.62（初版）→ 0.44（用户嫌中心圈太大要小）→ 0.56（又嫌太小）。
+       0.56 下中心足以放下「¥1,052,221.97」而不溢出，环带也还够放图标+百分比。 */
+    const rIn = R * 0.56;
+    const band = R - rIn;                              // 环带宽度
+
+    // 起始角从 12 点方向，顺时针
+    let a0 = -Math.PI / 2;
+    items.forEach((x, i) => {
+      const frac = Math.max(0, Math.min(1, pcts ? pcts[i] : 0));
+      const a1 = a0 + frac * Math.PI * 2;
+      // 扇区之间留 0.6° 白缝，视觉更清爽
+      const gap = 0.006;
+      const s = a0 + gap, e = Math.max(s + 0.001, a1 - gap);
+      ctx.beginPath();
+      ctx.arc(cx, cy, R, s, e);
+      ctx.arc(cx, cy, rIn, e, s, true);
+      ctx.closePath();
+      ctx.fillStyle = x.color;
+      ctx.fill();
+      a0 = a1;
+    });
+
+    /* 扇区内标签（用户 2026-10-04 定稿，第三次改法）。
+       前两版都失败，根因是**排布方向**：
+         v1 沿半径分三行（图标内/百分比中/代码外）→ 文字横着放却分散在不同半径上，互相压、也压出扇区；
+         v2 横向一行 [图标]代码 + 百分比靠内 → 图标和代码分居扇区中线两侧，
+            靠外那端到圆心更远、扇区边界也更外扩，于是「中点处够宽」≠「整行在扇区内」，
+            文字照样压到白色分隔线上（截图实测 0.88 / 0.78 两档余量都不够）。
+       现版：**竖排三行**（图标 / 代码 / 百分比）作为一个整体，圆心角对齐、径向居中放在环带里。
+         竖排时每行都关于中线**对称**，文字两端到圆心距离相同，
+         于是半角公式 `r·sin(半角)` 就是精确的可用半宽，不必再逐点验算。
+         放不下的扇区（半宽 < 行宽/2）直接整块不画。 */
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'center';
+    /* 极坐标 → 直角坐标：r 是到圆心的距离，ang 是相对12 点方向顺时针的弧度 */
+    const at = (r, ang) => [cx + Math.cos(ang) * r, cy + Math.sin(ang) * r];
+    const CODE_FONT = '9px "PingFang SC", "Microsoft YaHei", sans-serif';
+    const PCT_FONT = '600 11.5px "PingFang SC", "Microsoft YaHei", sans-serif';
+    items.forEach((x, i) => {
+      const frac = Math.max(0, Math.min(1, pcts ? pcts[i] : 0));
+      if (frac < 0.035) return;                        // <3.5% 不写标签
+      const mid = a0Of(pcts, i);                       // 该扇区中点角
+      const img = x.icon ? aoIcon(x.icon) : null;
+      const half = frac * Math.PI;                      // 扇区半角（弧度）
+
+      /* 三行统一用**最宽那一行**的半宽做判定，保证整块都不越界。 */
+      ctx.font = CODE_FONT;
+      const codeW = x.code ? ctx.measureText(x.code).width : 0;
+      const pctTxt = (frac * 100).toFixed(1) + '%';
+      ctx.font = PCT_FONT;
+      const pctW = ctx.measureText(pctTxt).width;
+      const iconS = img ? Math.min(18, band * 0.30) : 0;
+      const rowW = Math.max(iconS, Math.max(codeW, pctW));
+      /* 整块的径向中心：环带正中。竖排三行总高 = 图标 + 间距 + 代码 + 间距 + 百分比，
+         放在环带正中时上下留白对称，视觉最稳。 */
+      const rMid = rIn + band * 0.5;
+      /* 竖排时行关于中线对称，可用半宽 = rMid·sin(半角)，这是精确值。留 6% 边。 */
+      if (rowW / 2 > rMid * Math.sin(half) * 0.94) return;   // 放不下就整块不画
+
+      const [rx, ry] = at(rMid, mid);
+      /* 竖排偏移（屏幕 y 方向）：上= 负。整体高度逐行累加。 */
+      const GAP = 2.5;
+      const hIcon = iconS, hCode = x.code ? 10 : 0, hPct = 13;
+      const totalH = hIcon + (hIcon && hCode ? GAP : 0) + hCode + (hCode ? GAP : 0) + hPct;
+      let cy = ry - totalH / 2;
+
+      if (img) {
+        const s2 = iconS, bx = rx - s2 / 2, by = cy;
+        cy += hIcon;
+        ctx.save();
+        ctx.fillStyle = 'rgba(255,255,255,0.92)';
+        const rr = s2 * 0.22;
+        ctx.beginPath();
+        ctx.moveTo(bx + rr, by);
+        ctx.arcTo(bx + s2, by, bx + s2, by + s2, rr);
+        ctx.arcTo(bx + s2, by + s2, bx, by + s2, rr);
+        ctx.arcTo(bx, by + s2, bx, by, rr);
+        ctx.arcTo(bx, by, bx + s2, by, rr);
+        ctx.closePath();
+        ctx.fill();
+        ctx.clip();
+        const ir = img.naturalWidth / img.naturalHeight || 1;   // logo 等比缩放居中
+        let dw = s2 - 3, dh = dw / ir;
+        if (dh > s2 - 3) { dh = s2 - 3; dw = dh * ir; }
+        ctx.drawImage(img, bx + (s2 - dw) / 2, by + (s2 - dh) / 2, dw, dh);
+        ctx.restore();
+        if (hCode) cy += GAP;
+      }
+      if (x.code) {
+        ctx.fillStyle = 'rgba(255,255,255,0.94)';
+        ctx.font = CODE_FONT;
+        ctx.fillText(x.code, rx, cy + 4);
+        cy += hCode + GAP;
+      }
+      ctx.fillStyle = 'rgba(255,255,255,0.97)';
+      ctx.font = PCT_FONT;
+      ctx.fillText(pctTxt, rx, cy + 5);
+    });
+  }
+
+  /* 第 i 个扇区的起始角（12 点起顺时针）；与 drawAoDonut 的累加口径保持一致 */
+  function a0Of(pcts, i) {
+    let a = -Math.PI / 2;
+    for (let k = 0; k < i; k++) a += Math.max(0, Math.min(1, pcts[k])) * Math.PI * 2;
+    return a + (Math.max(0, Math.min(1, pcts[i])) * Math.PI * 2) / 2;
   }
 
   /* 总览页 canvas：收益率走势（百分比轴）/ 资产走势（金额轴）
@@ -1779,11 +2888,23 @@
 
     const all = aoState.series || [];
     let data;
-    if (aoState.range === 'ytd') {
+    /* 时间范围（用户 2026-10-04 定稿）：近1月 / 近3月 / 今年以来 / 自始以来。
+       ⚠️ 序列起点是 **2026-02-06**（IBKR 净值第一天，Asset_parsed.json 的
+          totalNetValueDaily 从这天开始），所以：
+            - 「今年以来」与「自始以来」在当前数据下**范围相同**（都是 02-06 起）
+            - 「近3月」= 最近 90 个自然日
+          保留两档是为了口径完整：等IBKR 净值攒满一年后，两者才会分叉。
+       「近1月/近3月」按**自然日**切（与旧版的「最近 30 个数据点」不同：
+       数据点会随休市日变稀，按点数切出来的实际跨度不稳定）。 */
+    if (aoState.range === 'all') {
+      data = all;
+    } else if (aoState.range === 'ytd') {
       const ymd = new Date().getFullYear() + '-01-01';
       data = all.filter((p) => p.date >= ymd);
     } else {
-      data = all.slice(-(aoState.range === '1m' ? 30 : 7));
+      const days = aoState.range === '3m' ? 90 : 30;
+      const from = new Date(Date.now() - days * 864e5).toLocaleDateString('sv-SE');
+      data = all.filter((p) => p.date >= from);
     }
     if (data.length < 2) return;
     const first = data[0].cny;
@@ -1959,11 +3080,14 @@
     aoSetStat(gain, pctV, pt, prev == null ? 0 : d[idx].cny - prev);
   }
 
-  /* 绑定鼠标交互：横向取最近数据点 */
+  /* 绑定鼠标/触摸交互：横向取最近数据点，显示横纵坐标引线
+     ⚠️ 事件必须绑在 **canvas 自身**，不能绑 `#aoChartWrap`：
+        全屏时 `openFs()` 会把 canvas **搬到 `#aoFsChartWrap`**（同一个节点搬家，不是复制），
+        绑在旧容器上的监听就跟着失效 → 全屏里拖动没反应（用户 2026-10-04）。
+        canvas 自己一直在 DOM 里，搬到哪里监听都跟着走。 */
   (function initAoHover() {
-    const wrap = document.getElementById('aoChartWrap');
     const canvas = document.getElementById('aoChart');
-    if (!wrap || !canvas) return;
+    if (!canvas) return;
     const pick = (clientX) => {
       const d = aoGeo.data;
       if (!d || d.length < 2) return null;
@@ -1976,13 +3100,39 @@
       aoState.hover = null;
       drawAoChart();
     };
-    wrap.addEventListener('mousemove', (e) => {
+    canvas.addEventListener('mousemove', (e) => {
       const i = pick(e.clientX);
       if (i == null || i === aoState.hover) return;
       aoState.hover = i;
       drawAoChart();
     });
-    wrap.addEventListener('mouseleave', clear);
+    canvas.addEventListener('mouseleave', clear);
+
+    /* ---- 触摸（移动端）：原来**只绑了 mousemove**，手指按住拖动不会出横纵坐标引线
+       （用户 2026-10-04：「移动端资产走势全屏后也要能移动看tab」= 要能拖动看十字引线）。
+       用 Pointer Events 统一处理：桌面（mouse）与触屏（touch）走同一套逻辑，
+       比分别绑 touch/mouse 更稳，也不会在触摸后残留 mousemove 的幽灵事件。 */
+    if (window.PointerEvent) {
+      const onPointer = (e) => {
+        const i = pick(e.clientX);
+        if (i == null) return;
+        if (i !== aoState.hover) { aoState.hover = i; drawAoChart(); }
+      };
+      // 手指按下即出引线（富途行为：点一下就显示，不一定要拖）
+      canvas.addEventListener('pointerdown', (e) => { onPointer(e); });
+      canvas.addEventListener('pointermove', (e) => {
+        /* 只在「按住」或「有鼠标」时更新：
+           - touch 要 `e.buttons` 或已处于 hover 态才动，避免手指轻扫页面就乱跳引线；
+           - mouse 无 `buttons` 概念（移动时为 0），故单独放行。 */
+        if (e.pointerType === 'mouse' || e.buttons || aoState.hover != null) onPointer(e);
+      });
+      canvas.addEventListener('pointerup', clear);
+      canvas.addEventListener('pointercancel', clear);
+      canvas.addEventListener('pointerleave', clear);
+      /* 触摸时页面可能跟着滚动/缩放 → 阻止图表内的手势冒泡到页面，
+         否则手指横向滑动会被当成「横向滚动页面」，引线只闪一下就没了。 */
+      canvas.addEventListener('touchmove', (e) => { if (aoState.hover != null) e.preventDefault(); }, { passive: false });
+    }
     // 兜底：光标开着时，若指针已不在画布范围内则清除。
     // 不用「统计行 vs 画布」的 leave 冒泡判断（鼠标从画布移到上方统计行时 leave 也会触发，
     // 但指针其实还在总览区内），改为按坐标判定，稳定可靠。
@@ -2006,58 +3156,261 @@
      剔除后日收益 = 当日净值 − 前日净值 − 当日净入金；
      收益率分母用「前一日净值 + 当日净入金/2」（Modified Dietz，与资金明细页 TWR 同口径）。 */
   const calState = { mode: 'month', y: 0, m: 0 };      // m: 0-11
+  /* calIndex 依赖的运行时数据，由 initAccountData 填（见文件末尾）：
+     CAL_FX_MAP     'YYYY-MM-DD' → 当日 USD→CNY（fund_holdings.json 的 usdcnh_daily，**逐日**）
+     CAL_TQQQ_SHARES  TQQQ 股数
+     CAL_TQQQ_MAP   'YYYY-MM-DD' → **TQQQ 自己的**收盘价（Alpaca 日线）
+     ⚠️ 不要再用 `qqq_daily`（那是 QQQ ETF，价格 ≈742）配 TQQQ 股数：
+        TQQQ ≈ 3× 杠杆后的 ETF，价格 ≈81，差 9 倍，市值与日差全错。 */
+  let CAL_FX = 0;
+  let CAL_FX_MAP = {};
+  let CAL_FX_KEYS = null;
+  let CAL_TQQQ_SHARES = 0;
+  let CAL_TQQQ_MAP = {};
 
-  // TQQQ 买入等 detailState 之外的现金流，由 initAccountData 填进来
-  const calExtraFlows = {};
+  /* 某日汇率：`usdcnh_daily` 只有 ECB 交易日（周末/节假日不出数），
+     所以取「≤ 该日最近的一条」；早于序列起点就用最早那条。 */
+  function fxOn(date) {
+    if (!CAL_FX_MAP) return CAL_FX || 0;
+    if (!CAL_FX_KEYS) CAL_FX_KEYS = Object.keys(CAL_FX_MAP).sort();
+    if (!CAL_FX_KEYS.length) return CAL_FX || 0;
+    if (date <= CAL_FX_KEYS[0]) return CAL_FX_MAP[CAL_FX_KEYS[0]];
+    let lo = 0, hi = CAL_FX_KEYS.length - 1, best = 0;
+    while (lo <= hi) {                       // 二分找 ≤ date 的最后一条
+      const mid = (lo + hi) >> 1;
+      if (CAL_FX_KEYS[mid] <= date) { best = mid; lo = mid + 1; } else hi = mid - 1;
+    }
+    return CAL_FX_MAP[CAL_FX_KEYS[best]];
+  }
 
-  // 每日外部现金流（CNY 正数=投入）。**惰性求值**：detailState 在本文件更下方才声明
-  // （const 有 TDZ），模块加载时立即读取会 ReferenceError。
-  let calFlowCache = null;
-  function calFlows() {
-    if (calFlowCache) return calFlowCache;
-    const map = {};
-    const add = (d, cny) => { if (d && cny) map[d] = (map[d] || 0) + cny; };
-    const fx = (detailState && detailState.fx) || 1;
-    Object.keys((detailState && detailState.flows) || {}).forEach((d) => add(d, detailState.flows[d] * fx));
-    Object.keys((detailState && detailState.fundFlows) || {}).forEach((d) => add(d, detailState.fundFlows[d]));
-    Object.keys(calExtraFlows).forEach((d) => add(d, calExtraFlows[d]));
-    calFlowCache = map;
-    return map;
+  /* 某日 TQQQ 收盘价：同样取「≤ 该日最近的一条」（TQQQ 在 IBKR 之外手动买入，
+     日线与净值日期不重合）。找不到返回 null（不拿 QQQ 顶替 —— 量级差 9 倍）。 */
+  function tqqqCloseOn(date) {
+    if (!CAL_TQQQ_MAP || !Object.keys(CAL_TQQQ_MAP).length) return null;
+    if (CAL_TQQQ_MAP[date] != null) return CAL_TQQQ_MAP[date];
+    return qqqOn(CAL_TQQQ_MAP, date);
+  }
+  /* 证券入金（CNY）—— `electronicFundTransfers` × 当前汇率，见 initAccountData 处的说明。
+     入金当天 IBKR 净值会跳升，不扣掉就会被算成当日暴涨（实测 03-20 凭空 +85,104）。 */
+  let CAL_STOCK_FLOW = {};
+
+  /* TQQQ 在某日的收盘价：**≤ 该日最近一条**（周末/节假日沿用上一交易日）。
+     TQQQ 在 IBKR 之外手动买入，日线与净值日期不重合，所以必须向前找。 */
+  function qqqOn(map, date) {
+    const ks = Object.keys(map).sort();
+    let best = null;
+    for (const k of ks) { if (k <= date) best = k; else break; }
+    return best != null ? map[best] : null;
+  }
+
+
+  /* ===================================================================
+     收益日历的每日盈亏 —— **证券 + 基金两段独立相加**（用户 2026-10-04 定稿）
+     ===================================================================
+     口径（用户原话：「收益日历不要算现金，只算基金和证券」）：
+
+     ① **证券** = IBKR 净值日差 + TQQQ 日线日差，**统一按当前汇率**（FX）折人民币。
+        - IBKR 净值来自 `detailState.stock`（= Asset_parsed.json 的 totalNetValueDaily）。
+        - 废值段（02-06 ~ 03-17，净值恒为 1.42）必须剔除 —— 那是 IBKR 的占位噪声，不是真实资产。
+        - TQQQ 用 `fund_holdings.json` 的 `qqq_daily`（439 根日线，覆盖 2025-01 起）。
+        - 入金**不做扣减**（用户：「不算之前的汇率，就按现在的汇率换成人民币算每天的盈亏」）
+          —— 汇率波动因此不影响收益曲线，IBKR 入金也不当成「当日投入」剔掉。
+
+     ② **基金** = Σ基金份额 × 当日净值，逐日与前一日比。
+        - 基准 = **2026-02-06 的申购值 483,199.29**（= 5 只基金首日申购 shares×price 之和）。
+        - 中途 06-04 买入建信 539002（7,778.96）当天要**扣除这笔成本**，
+          否则那天会被算成凭空暴增（用户：「当天扣除它的成本」）。
+        - 之后正常按天加减。
+
+     ③ **不含现金** —— 各银行账户余额恒定，本来就不产生损益，算进去只会污染曲线。
+
+     收益率分母：当日证券权益（净值×FX + TQQQ）+ 基金市值，即「当日在投资产」，
+     不含现金 —— 与「只算基金和证券」的口径一致。
+     =================================================================== */
+  const CAL_BASE = {
+    /* 基金基准日与**真实成本**。
+       ⚠️ 首日基线要用「真实成本」而不是「当日市值」（用户 2026-10-04：「算到最后应该就是
+          +161065.08 吧」→ 要求与侧栏同源）。侧栏的基金累计 = Σ份额×净值 − Σ(份额×成本)，
+          所以日历的基金段也必须从成本起算，否则会多算/少算「开局那一天」。
+       fundTotalCost = **全部**申购的 shares×price 之和 = 483,199.29(02-06) + 7,779(06-04 建信)
+                      = 490,978；旧的 fundBaseValue 只统计基准日当天的 483,199.29，别用。 */
+    fundBaseDate: '2026-02-06',
+    fundTotalCost: 0,
+  };
+  /* 证券侧的本金：**forexTrades 的 CNH 之和** = 167,599.89 ≈ 167,600（用户 2026-10-04：
+     「日历证券应该是167600，你把json里CNY加起来就看出来了」）。
+     这 4 笔 cnh 是**实际掏口袋的人民币**，已经是 CNY，不需要再折汇率：
+       2026-02-10  17,600.00  = TQQQ 买入（55 股 @ 49.56 = 2,725.8 USD，在 IBKR 之外）
+       2026-03-20  99,999.96  = 14,517.68 USD
+       2026-06-25  39,999.94  =  5,879.88 USD
+       2026-07-15   9,999.99  =  1,475.60 USD
+     ⚠️ 不要再用 `electronicFundTransfers`（IBKR 入账，USD，合计 21,841.22）—— 口径不同：
+        EFT 里 03-18 那笔 1,449.10 USD 在 forexTrades 里根本没有，而 TQQQ 那 17,600 也不在 EFT 里。 */
+  let CAL_TQQQ_BASE_CNY = 17600;
+
+  /* 收益日历收益率 —— **Modified Dietz（修正 Dietz）**，不是简单相除。
+     -------------------------------------------------------------------
+       R = G / (BMV + Σ wᵢ · CFᵢ)
+       G  = 区间内已扣掉现金流的净收益（本项目里就是各日 `gain` 之和 = 月度 own）
+       BMV = 期初在投资产（不含现金）
+       wᵢ = (区间总天数 − 第 i 笔入金距区间起点的天数) / 区间总天数
+     分子**不能**直接用 EMV − BMV：calIndex 里每个交易日已`gainStock -= stockFlows[date]`，
+     所以 EMV − BMV 里含着 Σ CF，会把"新投的本金"算成收益。用已扣流水的 G 才对。
+
+     为什么必须加权（用户 2026-10-05）：
+       03-20 入金 99,999.96，若分母只用「上月末市值」，后续赚的钱会被这 10 万新本金稀释
+       → 3 月被低估成 −7.07%；按日加权（03-20 是当月第 20 天，剩 12/31 ≈ 38.7% 的时间在场）
+       → **−6.55%**。这就是"简单加权"与"时间加权"的分别：每一笔本金按**实际在场时间**定权重，
+       因此它是 TWR（时间加权收益率）的标准近似做法。
+       ⚠️ 只加权**证券入金**：基金申购成本已含在首日基线 fundTotalCost 里，
+          再当现金流加权会重复计算（侧栏口径也是一次性减）。
+     ------------------------------------------------------------------- */
+  function calDietzPct(gain, bmv, flows, totalDays) {
+    if (gain == null || !(bmv > 0) || !(totalDays > 0)) return null;
+    let wsum = 0;
+    for (let i = 0; i < flows.length; i++) {
+      const f = flows[i];
+      if (!f || !f.amt) continue;
+      /* off = 该笔入金距区间起点的天数（0 = 区间第一天）。
+         日视图传 0.5 —— 视作当天中午到账，权重按半日算（Modified Dietz 的通行做法）。 */
+      const w = Math.max(0, Math.min(1, (totalDays - f.off) / totalDays));
+      wsum += f.amt * w;
+    }
+    const den = bmv + wsum;
+    return den > 0 ? gain / den * 100 : null;
+  }
+
+  /* 'YYYY-MM-DD' → 年内第几天（1-based），年视图加权用 */
+  function calDoy(dateStr) {
+    const y = +dateStr.slice(0, 4), m = +dateStr.slice(5, 7), d = +dateStr.slice(8, 10);
+    return Math.round((Date.UTC(y, m - 1, d) - Date.UTC(y, 0, 1)) / 864e5) + 1;
   }
 
   function calIndex() {
-    const flows = calFlows();
-    // 跳过废值段：totalNetValueDaily 前 28 天净值恒为 1.42（真实值从 03-18 起）
-    const all = aoState.series || [];
-    const s = all.filter((d, i) => i === 0 || d.cny > 100 || all[i - 1].cny <= 100);
+    const fundFlows = (detailState && detailState.fundFlows) || {};
+    /* 证券入金（forexTrades.cnh，逐日扣）—— 见 initAccountData 处的口径说明 */
+    const stockFlows = CAL_STOCK_FLOW;
+    /* ---- ① 证券：IBKR 净值（跳过废值段）× **当日汇率** ---- */
+    const stockRows = ((detailState && detailState.stock) || [])
+      .filter((r) => r.value > 100)                 // 废值段净值恒为 1.42
+      .map((r) => ({ date: r.date, usd: r.value, cny: r.value * fxOn(r.date) }));
+    /* ---- ② TQQQ：**自己的**日线收盘 × 股数 × 当日汇率 ---- */
+    const tqqqShares = CAL_TQQQ_SHARES;
+    /* ---- ③ 基金：Σ 份额 × 当日净值（已是人民币，不折算） ---- */
+    const fundRows = ((detailState && detailState.fund) || []).filter((r) => r.value != null);
+
+    /* 合并所有出现的日期，按时间排序 —— 证券 / TQQQ / 基金三者的交易日不完全重合。
+       ⚠️ 一律从**基金基准日 02-06** 起算：基金 nav 回溯到 2025-12、IBKR 净值从 02-06 才开始，
+          若不截断，1 月会出现「有基线无前值」的假数据（实测凭空 +19,182），
+          2 月则把 02-06 的申购总额当成当日暴跌（实测 -483,977）。 */
+    const from = CAL_BASE.fundBaseDate;
+    const dates = new Set();
+    stockRows.forEach((r) => { if (r.date >= from) dates.add(r.date); });
+    Object.keys(CAL_TQQQ_MAP).forEach((d) => { if (d >= from) dates.add(d); });
+    fundRows.forEach((r) => { if (r.date >= from) dates.add(r.date); });
+    const allDates = [...dates].sort();
+
+    /* 基线：证券取首个有效净值日，基金取基准日（02-06）。 */
+    const stockByDate = {};
+    stockRows.forEach((r) => { stockByDate[r.date] = r.cny; });
+    const fundByDate = {};
+    fundRows.forEach((r) => { fundByDate[r.date] = r.value; });
+
     const byDate = {}, days = [], months = [];
+    /* ⚠️ **首日基线 = 真实成本**（用户 2026-10-04 定稿，要与侧栏 161,065.08 同源）：
+         基金 = Σ(份额×成本) = 490,978（含 06-04 建信那笔，所以**不再**逐日扣申购）
+         TQQQ = forexTrades 里 02-10 那笔 cnh = 17,600
+         证券 = 0（IBKR 那 1,449.10 USD 初始转入侧栏也没算本金，这里同样不算 → 算进收益）
+       以前是拿「首日市值」当基线、再逐日扣入金/申购，结果与侧栏差 2 万多。 */
+    let prevStock = 0, prevQ = CAL_TQQQ_BASE_CNY, prevFund = CAL_BASE.fundTotalCost;
+    /* 三段各自的「上一次已知值」，用于**分母** —— 缺口日（周末/节假日/某段没数据）
+       必须沿用上一次的市值，不能当 0，否则分母会剧烈跳变（实测 02-13 481,992 →
+       02-17 18,372 → 02-24 495,019），每日涨跌幅与月度收益率跟着失真。 */
+    let lastStock = 0, lastQ = 0, lastFund = 0;
     let mKey = null, cur = null;
-    for (let i = 0; i < s.length; i++) {
-      const d = s[i];
-      const prev = i > 0 ? s[i - 1] : null;
-      const fl = prev ? (flows[d.date] || 0) : 0;   // 首日的投入已在基线里，不重复扣
-      const gain = prev ? d.cny - prev.cny - fl : null;
-      const den = prev ? prev.cny + fl / 2 : null;    // Modified Dietz：分母加当日投入的一半
-      const pct = den ? gain / den * 100 : null;
-      const rec = { date: d.date, cny: d.cny, gain, pct, flow: fl };
-      byDate[d.date] = rec;
+    for (const date of allDates) {
+      const stock = stockByDate[date] != null ? stockByDate[date] : null;
+      const fund = fundByDate[date] != null ? fundByDate[date] : null;
+      /* TQQQ 当日市值 = **TQQQ 自己的收盘价** × 股数 × 当日汇率
+         （该日若无日线，沿用最近一条 ≤ 该日）。 */
+      const qClose = tqqqCloseOn(date);
+      const q = qClose != null ? qClose * tqqqShares * fxOn(date) : null;
+      /* 期初在投资产 = 循环变量更新**之前**的三段之和（Dietz 的 BMV）。
+         ⚠️ 必须在下面改 prev* 之前取，否则读到的已是当日值。 */
+      const bmv = prevStock + prevQ + prevFund;
+
+      /* 证券日盈亏 = (IBKR 净值 + TQQQ 市值) 与前一段已知值的差，两段独立相加。
+         ⚠️ 逐日扣掉 `forexTrades.cnh` 的当日入金（03-20 99,999.96 / 06-25 39,999.94 /
+            07-15 9,999.99）：入金当天净值会跳升，不扣就是当日暴涨（实测 03-20 凭空 +85,104）。
+            TQQQ 的 17,600 已作为 TQQQ 段的首日基线，不在这里重复扣。 */
+      let gainStock = 0, hasStock = false;
+      const flow = stockFlows[date] || 0;
+      if (stock != null) { gainStock += stock - prevStock; prevStock = stock; lastStock = stock; hasStock = true; }
+      if (q != null) { gainStock += q - prevQ; prevQ = q; lastQ = q; hasStock = true; }
+      if (hasStock && flow) gainStock -= flow;
+      /* 基金日盈亏 = 当日市值 − 前一段已知值。
+         ⚠️ 申购成本**不再**逐日扣：06-04 建信那笔 7,779 已包含在首日基线 fundTotalCost 里，
+            再扣一次就重复了（侧栏口径是 Σ(份额×成本) 一次性减）。 */
+      let gainFund = 0, hasFund = false;
+      if (fund != null) { gainFund = fund - prevFund; prevFund = fund; lastFund = fund; hasFund = true; }
+      const gain = hasStock || hasFund ? gainStock + gainFund : null;
+      /* 分母 = 当日在投资产（证券权益含 TQQQ + 基金市值），**不含现金**；
+         三段都取「最近一次已知值」，缺口日不再掉到 0。 */
+      const den = lastStock + lastQ + lastFund;
+      /* 日收益率同样用 Modified Dietz：BMV = 前一段已知日的市值，
+         当日入金视作**中午到账**（off = 0.5 → 权重 50%）。
+         分子 gain 已扣掉当日入金，所以不用再减一次。 */
+      const pct = gain != null
+        ? calDietzPct(gain, bmv > 0 ? bmv : den, flow ? [{ off: 0.5, amt: flow }] : [], 1)
+        : null;
+
+      const rec = { date, cny: den, gain, pct, flow: fundFlows[date] || 0, gainStock, gainFund };
+      byDate[date] = rec;
       days.push(rec);
-      const ym = d.date.slice(0, 7);
-      if (ym !== mKey) { mKey = ym; cur = { ym, y: +d.date.slice(0, 4), m: +d.date.slice(5, 7) - 1, first: d.cny, last: d.cny }; months.push(cur); }
-      cur.last = d.cny;
+      const ym = date.slice(0, 7);
+      if (ym !== mKey) { mKey = ym; cur = { ym, y: +date.slice(0, 4), m: +date.slice(5, 7) - 1, first: den, last: den }; months.push(cur); }
+      cur.last = den;
     }
-    // own = 本月自己的净收益；gain = 截至本月的累计净收益；
-    // pct = **本月**收益率（own ÷ 上月末净值），不是累计 —— 否则亏损月会显示正的累计收益率
+    /* 各月 own = 该月每日 gain 之和；pct = **Modified Dietz**（见 calDietzPct 的说明）。
+       own 已经逐日扣掉了当月入金，所以它就是 Dietz 公式的分子 (EMV − BMV)；
+       分母要在 BMV 上加「当月入金按在场天数加权」，否则新投的钱会稀释收益率。
+       ⚠️ 只加权**证券入金**（stockFlows）：基金申购成本已包含在首日基线 fundTotalCost 里，
+          再当现金流加权就是重复计算（侧栏口径也是一次性减）。 */
     let run = 0;
     for (let i = 0; i < months.length; i++) {
-      const prevBase = i > 0 ? months[i - 1].last : months[i].first;
-      months[i].days = days.filter((d) => d.date.slice(0, 7) === months[i].ym);
-      months[i].own = months[i].days.reduce((s2, d) => s2 + (d.gain || 0), 0);
-      run += months[i].own;
-      months[i].gain = run;
-      months[i].pct = prevBase ? months[i].own / prevBase * 100 : null;
+      const m = months[i];
+      const bmv = i > 0 ? months[i - 1].last : m.first;
+      m.days = days.filter((d) => d.date.slice(0, 7) === m.ym);
+      m.own = m.days.reduce((s2, d) => s2 + (d.gain || 0), 0);
+      run += m.own;
+      m.gain = run;
+      /* 当月入金：off = 距当月 1 号的天数（0-based），当月总天数用自然月天数 */
+      const dim = new Date(m.y, m.m + 1, 0).getDate();
+      const flows = [];
+      m.days.forEach((d) => {
+        const f = stockFlows[d.date] || 0;
+        if (f) flows.push({ off: +d.date.slice(8, 10) - 1, amt: f });
+      });
+      m.flows = flows;
+      m.flow = flows.reduce((s2, f) => s2 + f.amt, 0);
+      /* 分子 = own（已扣当月入金），分母 = 上月末市值 + 加权入金 */
+      m.pct = calDietzPct(m.own, bmv, flows, dim);
     }
-    return { byDate, days, months };
+    /* 年视图（区间合计的收益率）：跨 12 个月**连续加权**，不是各月 pct 的平均。
+       分母 = 上年最后月的市值 + 当年所有入金按「距 1/1 的天数」加权。 */
+    const yearStats = {};
+    months.forEach((m, i) => {
+      const st = yearStats[m.y] || (yearStats[m.y] = { y: m.y, own: 0, first: m.first, last: m.last, flows: [] });
+      st.own += m.own;
+      st.last = m.last;
+      (m.flows || []).forEach((f) => st.flows.push({ off: calDoy(m.ym + '-01') - 1 + f.off, amt: f.amt }));
+      st.bmv = i > 0 ? months[i - 1].last : m.first;
+    });
+    Object.values(yearStats).forEach((st) => {
+      const dim = (st.y % 4 === 0 && st.y % 100 !== 0) || st.y % 400 === 0 ? 366 : 365;
+      st.pct = calDietzPct(st.own, st.bmv, st.flows, dim);
+    });
+    return { byDate, days, months, yearStats };
   }
 
   /* 日历金额**只显示整数**（用户 2026-10-04 定稿）：格子里原本是 +3,208.15 这种两位小数，
@@ -2088,19 +3441,23 @@
     const first = idx.days[0].date, lastDate = idx.days[idx.days.length - 1].date;
     const isYear = calState.mode === 'year';
     label.textContent = isYear ? String(calState.y) : calState.y + '/' + String(calState.m + 1).padStart(2, '0');
-    // 区间合计：年视图 = 该年各月 own 之和；月视图 = 该月 own
     const months = idx.months.filter((x) => x.y === calState.y && (isYear || x.m === calState.m));
+    /* 区间合计 = 各月 own 之和（own = 该月每日「证券+基金」盈亏之和）。
+       新口径下逐日与汇总已经是同一套算法，不需要再借侧栏的值 ——
+       用户 2026-10-04 定的口径是「只算基金和证券，不算现金，按当前汇率折算」，
+       侧栏那个「存量−成本」的口径包含现金与历史汇率，与日历不再同源。 */
     const gain = months.reduce((s, x) => s + (x.own || 0), 0);
-    const base = (() => {
-      if (!months.length) return null;
-      const i0 = idx.months.indexOf(months[0]);
-      return i0 > 0 ? idx.months[i0 - 1].last : months[0].first;
-    })();
+    /* 区间收益率：月视图直接用该月的 Modified Dietz 值；年视图用跨 12 个月连续加权的
+       yearStats（**不是**各月 pct 求平均 —— 简单平均既不是 TWR 也不是 Dietz，
+       会让"入金多的月份"和"没有入金的月份"被同等对待）。 */
+    const pctVal = isYear
+      ? ((idx.yearStats && idx.yearStats[calState.y]) ? idx.yearStats[calState.y].pct : null)
+      : (months.length ? months[0].pct : null);
     sumLbl.textContent = (isYear ? calState.y + '年收益 · CNY' : (calState.m + 1) + '月收益 · CNY');
     sumEl.textContent = (gain > 0 ? '+' : '') + calFmt(gain);
     sumEl.className = 'num ' + calCls(gain);
-    pctEl.textContent = calPctText(base ? gain / base * 100 : null);
-    pctEl.className = 'num ' + calCls(base ? gain / base * 100 : null);
+    pctEl.textContent = calPctText(pctVal);
+    pctEl.className = 'num ' + calCls(pctVal);
     // 首尾边界：年视图不跨年跳（数据只有 2026），月视图到最新月为止
     const minY = +first.slice(0, 4), maxY = +lastDate.slice(0, 4);
     prevBtn.disabled = isYear ? calState.y <= minY : (calState.y < minY || (calState.y === minY && calState.m <= +first.slice(5, 7) - 1));
@@ -2166,8 +3523,13 @@
   })();
 
   /* ===================== 账户表头排序（双三角图标，点击升/降切换） ===================== */
+  /* 默认排序（用户 2026-10-04：「证券基金现金表格默认按市值大到小排序」）：
+     三张表的默认键就是各自的**市值列** —— stock=`value`、fund=`amount`、cash=`cny`，
+     `dir: -1` 表示降序（大→小）。点表头可切换；点别的列就用那个列的键。
+     三个弹窗里的历史表（stockH/fundH/cashH）**不参与**默认排序，仍按原始顺序（时间倒序），
+     与用户诉求无关、别顺手改。 */
   const ACC_SORT = {
-    stock: { key: null, dir: -1 }, fund: { key: null, dir: -1 }, cash: { key: null, dir: -1 },
+    stock: { key: 'value', dir: -1 }, fund: { key: 'amount', dir: -1 }, cash: { key: 'cny', dir: -1 },
     stockH: { key: null, dir: -1 }, fundH: { key: null, dir: -1 }, cashH: { key: null, dir: -1 },
   };
   const ACC_RENDERERS = {};                          // kind -> render 函数，由 initAccountData 填充
@@ -2451,6 +3813,10 @@
       return d.toISOString().slice(0, 10);
     };
     // 日线数组 -> [最新价参考, 前收]：bars 升序，最后一根是今日（未完结），前一根收盘即前收
+    /* 日线数组（**升序**，最后一根是最新交易日）→ [现价, 昨收]
+       昨收 = 倒数第二根（用户 2026-10-04 定稿：「昨收就是现价的前一根，138.07 是对的」）。
+       休市日最后一根已完结（= 最新交易日收盘），倒数第二根就是它的**前一交易日**收盘；
+       这正是「现价相对前一根」的语义，不按日期做特例。 */
     const prevCloseOf = (bars) => {
       if (!bars || !bars.length) return [null, null];
       const last = bars[bars.length - 1];
@@ -2467,7 +3833,9 @@
       const firstDate = (asset && asset.totalNetValueDaily && asset.totalNetValueDaily[0]
         && asset.totalNetValueDaily[0].date) || '2026-02-01';
       const d = await accJson(
-        `${ACC_API}/v2/stocks/bars?symbols=TQQQ&timeframe=1Day&start=${firstDate}&limit=400&feed=iex`,
+        /* 同样用默认 SIP 口径（不加 feed=iex）：这条序列用于给历史点补 TQQQ 市值，
+           必须和其余持仓一样是全市场收盘价，否则整条资产曲线偏。 */
+        `${ACC_API}/v2/stocks/bars?symbols=TQQQ&timeframe=1Day&start=${firstDate}&limit=400`,
         { headers: ACC_HDR });
       const bars = d && d.bars && d.bars.TQQQ;
       if (!bars || !bars.length) return tqqqBars;
@@ -2482,29 +3850,58 @@
       /* Alpaca 不可达时（弱网/被墙/本机开发）绝不能把整个 initAccountData 卡死在这里 ——
          下面所有基于本地 JSON 的计算（净值、基金、现金、TWR）都还没跑，
          结果就是整页全是 `--`。
-         给每批请求加 4s 上限：超时 → res 保持为空 → 后面走 JSON 兜底口径
-         （市值用 holdings[].positionValue，价格用 markPrice）。 */
-      const withTimeout = (p, ms) => Promise.race([
-        p, new Promise((r) => setTimeout(r, ms)),
+         给每批请求加 9s 上限：超时 → res 保持为空 → 后面走 JSON 兜底口径
+         （市值用 holdings[].positionValue，价格用 markPrice）。
+         ⚠️ 原为 4s，实测 Alpaca 单请求常耗 1.0~1.5s、并发时偶尔超 4s → **整批结果被丢弃**，
+         页面瞬间从 Alpaca 价（142.41）掉到 OKX 兜底（142.5），下一个周期又跳回来 = 现价闪跳。
+         accJson 自身已有 8s 上限，这里给 9s 留足余量，只兜「accJson 也没兜住」的极端情况。 */
+      /* ⚠️ 三个端点**各自**独立超时，不要再套一个总的 `Promise.all + 9s race`：
+         旧写法里只要最慢的那条（期权 snapshots 通常最慢）超 9s，**整批结果被一起丢掉**，
+         表现就是「账户里所有证券现价一起消失」，而 Alpaca 其实只是慢了几百毫秒。
+         现在每条自己兜底：股票慢了不影响期权，期权挂了也不影响股票现价。
+         （局部名用 accRace，避开下面腾讯段那个 `withTimeout`—— 同作用域，不能重名。） */
+      const accRace = (p, ms) => Promise.race([
+        p, new Promise((r) => setTimeout(() => r(null), ms)),
       ]);
-
-      await withTimeout(Promise.all([
-        stockSyms.length && accJson(`${ACC_API}/v2/stocks/trades/latest?symbols=${stockSyms.join(',')}`, { headers: ACC_HDR })
-          .then((d) => { if (d && d.trades) for (const [k, v] of Object.entries(d.trades)) { const t = v.trade || v; put(res.stock, k, { price: t ? t.p : null }); } }),
-        stockSyms.length && accJson(`${ACC_API}/v2/stocks/bars?symbols=${stockSyms.join(',')}&timeframe=1Day&start=${start}&limit=30`, { headers: ACC_HDR })
-          .then((d) => { if (d && d.bars) for (const [k, v] of Object.entries(d.bars)) { const [now, prev] = prevCloseOf(v); put(res.stock, k, { price: now, prevClose: prev }); } }),
-        optSyms.length && accJson(`${ACC_API}/v1beta1/options/snapshots?symbols=${optSyms.join(',')}`, { headers: ACC_HDR })
-          .then((d) => {
-            if (!d || !d.snapshots) return;
-            for (const [k, s] of Object.entries(d.snapshots)) {
-              const qt = s.latestQuote || {};
-              const mid = (qt.bp > 0 && qt.ap > 0) ? (qt.bp + qt.ap) / 2 : (s.dailyBar ? s.dailyBar.c : null);
-              put(res.opt, k, { price: mid });
-            }
-          }),
-        optSyms.length && accJson(`${ACC_API}/v1beta1/options/bars?symbols=${optSyms.join(',')}&timeframe=1Day&start=${start}&limit=30`, { headers: ACC_HDR })
-          .then((d) => { if (d && d.bars) for (const [k, v] of Object.entries(d.bars)) { const [, prev] = prevCloseOf(v); put(res.opt, k, { prevClose: prev }); } }),
-      ]), 4000);
+      await Promise.all([
+        /* 现价来源 = **日线最后一根的收盘价**（用户 2026-10-04 定稿：「账户orcl现价应该是142.30」）。
+           为什么不用 `trades/latest`：免费账户的逐笔成交**只有 IEX 有数据**
+           （实测 feed=sip / feed=otc 返回空），所以「最新成交价」必然是 IEX 那一笔 = 142.41；
+           而全市场真实收盘是 142.30（成交量 3543 万 vs IEX 的 65.7 万）。账户账面要跟券商对得上，必须用 SIP。
+           ⚠️ 代价：日线粒度下**盘中拿不到分时价**（最后一根未完结日线会随成交跳动，够用但不精细）。
+           若将来有 SIP 权限，可改回 trades/latest + `feed=sip`。
+           日线同时给出昨收（倒数第二根），一次请求两件事，不存在两个端点抢同一字段 → 不会闪跳。
+           ⚠️ **不要加 `feed=iex`**（用户纠正过一次）：feed=iex → 10-02 C=142.41、成交量 65.7 万（仅 IEX）；
+              SIP/默认 → 10-02 C=**142.30**、成交量 3543 万（全市场合并）。 */
+        stockSyms.length && accRace(
+          /* 多标的同样是分页的（每页 ~9~10 个代码），必须翻页 —— 见 alpacaPaged 注释。 */
+          alpacaPaged(`${ACC_API}/v2/stocks/bars?symbols=${stockSyms.join(',')}&timeframe=1Day&start=${start}&limit=30`, 'bars', 3),
+          9000,
+        ).then((bars) => {
+          for (const [k, v] of Object.entries(bars || {})) {
+            const [now, prev] = prevCloseOf(v);
+            put(res.stock, k, { price: now, prevClose: prev });
+          }
+        }),
+        /* 期权仍走 snapshots / bars（期权没有 IEX/SIP 这个区分问题），同样翻页。 */
+        optSyms.length && accRace(
+          alpacaPaged(`${ACC_API}/v1beta1/options/snapshots?symbols=${optSyms.join(',')}`, 'snapshots', 3), 9000,
+        ).then((snaps) => {
+          for (const [k, s] of Object.entries(snaps || {})) {
+            const qt = (s && s.latestQuote) || {};
+            const mid = (qt.bp > 0 && qt.ap > 0) ? (qt.bp + qt.ap) / 2 : (s.dailyBar ? s.dailyBar.c : null);
+            put(res.opt, k, { price: mid });
+          }
+        }),
+        optSyms.length && accRace(
+          alpacaPaged(`${ACC_API}/v1beta1/options/bars?symbols=${optSyms.join(',')}&timeframe=1Day&start=${start}&limit=30`, 'bars', 3), 9000,
+        ).then((bars) => {
+          for (const [k, v] of Object.entries(bars || {})) {
+            const [, prev] = prevCloseOf(v);
+            put(res.opt, k, { prevClose: prev });
+          }
+        }),
+      ]);
       return res;
     }
 
@@ -2555,17 +3952,25 @@
     if (!asset) return;
     const fundH = await accJson('fund_holdings.json');
     const seed = asset.seed || {};
+    /* 账户折人民币的汇率：**统一取 `fund_holdings.json` 的 `usdcnh_daily` 最后一条**
+       （= 自选里「美元/离岸人民币」那一行、= 收益日历 `fxOn(最后一天)`，三处同源）。
+       用户 2026-10-05定稿：「应该是 6.7046 吧，侧栏不要用 seed，按自选里最新汇率来」。
+       ⚠️ 原来这里是 `seed.pa_fx = 6.737816`（IBKR 快照时的手工汇率），再用一个**不稳定的**
+          `frankfurter.dev/v1/latest` 实时调用去覆盖它 —— 那个调用会因本机 HTTPS 拦截而失败，
+          于是侧栏时而 6.7378 时而 6.7046，**收益日历与侧栏对不上**（实测差 53 CNY）。
+          现在改成读本地 JSON：确定、无网络请求、三处口径一致。 */
     let FX = seed.pa_fx || 7;                 // 兜底：Asset_parsed.json 的手工汇率
-    /* frankfurter 只作「锦上添花」的实时汇率，失败就用 pa_fx。
-       accJson 里已有 8s 上限，这里再压到 3s：不可达时不该让整页干等，
-       汇率差 0.1% 对总资产影响远小于加载延迟带来的体感损失。 */
-    try {
-      const fxr = await Promise.race([
-        accJson('https://api.frankfurter.dev/v1/latest?base=USD&symbols=CNY'),
-        new Promise((r) => setTimeout(r, 3000)),
-      ]);
-      if (fxr && fxr.rates && fxr.rates.CNY) FX = fxr.rates.CNY;
-    } catch (e) {}
+    {
+      const rows = (fundH && fundH.usdcnh_daily) || [];
+      let lastRow = null;
+      for (const r of rows) {
+        const d = String((r && r.d) || '');
+        if (!d || !r.c) continue;
+        if (!lastRow || d > lastRow.d) lastRow = { d, c: +r.c };
+      }
+      if (lastRow && lastRow.c > 0) FX = lastRow.c;
+      else console.warn('[账户] usdcnh_daily 缺失，汇率回落 seed.pa_fx', FX);
+    }
 
     /* ---- 汇率序列（QDII 基金的外汇敞口）—— 基金是人民币计价，资产是外币，
          人民币净值 = Σ(外币资产 × 该货币兑人民币)，所以估值必须叠加一层汇率变动。
@@ -2576,13 +3981,14 @@
             精度高一个量级。同理 JPY/CNY ≈ 0.0426 也只有 3 位。
          数据是欧洲央行日频参考价（北京时间约 16:00 出当日，周末/欧洲假期不更新）。 */
     const FX_SERIES = {};                 // { USD: [{ d:'20260929', v:6.7034 }, …], JPY: […], KRW: […], HKD: […] }
-    /* ---- 估值是否叠加「期间汇率变动」—— 2026-10-03 用户定稿：**叠加** ----
-       基金是人民币计价、资产是外币，人民币净值 = Σ(外币资产 × 该货币兑人民币)，
-       所以每个成分都要在本币涨跌上再乘一层该货币兑人民币的涨跌（详见 estimateFund / fxChgOn）。
-       实测 frankfurter 是可达的（curl 与浏览器都能取到 9-25~10-02 的序列），
-       但偶发超时 —— 所以加了 localStorage 缓存：拉到就存，拉不到就用上一份（日频数据，隔天不失真）。
-       要临时退回「不含汇率」的口径，把这里改成 false 即可（下面 3 处调用会跟着走）。 */
-    const FX_IN_VAL = true;
+    /* ---- 估值是否叠加「期间汇率变动」—— 2026-10-04 用户定稿：**不叠加** ----
+       基金估值只看**成分股本身**的涨跌，不叠「外币兑人民币」的期间变动。
+       人民币净值里已经隐含了汇率，但汇率每天都在动、且各基金持有币种不同，
+       叠加后会让同一只基金因汇率噪声出现与持仓无关的涨跌，掩盖真实表现。
+       代码全部保留（loadFxSeries / fxChgOn / toCny），只由这一个开关控制：
+       ① estimateFund 里的 `toCny()` 恒返回 chg；② 汇率贡献恒 0；
+       ③ loadFxSeries 不会发请求（省一次空等）。要恢复改成 true 即可。 */
+    const FX_IN_VAL = false;
     const FX_CACHE_KEY = 'futu_fx_series_v1';
     async function loadFxSeries(startDate) {
       const parse = (j) => {
@@ -2650,7 +4056,7 @@
        ⚠️ OKX 并非所有代码都有永续合约，个别标的要用同一公司的另一类股份顶替（比 QQQ 兜底准得多）：
           GOOG（谷歌-C）没有 `GOOG-USDT-SWAP`，用 GOOGL（谷歌-A）的行情 —— A/C 两类股同股不同权，
           同属 Alphabet，价格长期贴合，基金季报里两者也常混用。 */
-    const VAL = { qqq: [], dq: {}, splits: {}, dqDirty: new Set(), okx: {} };
+    const VAL = { qqq: [], dq: {}, splits: {}, dqDirty: new Set(), txUs: {} };
     {
       const FH = fundH || {};
       // 日期格式必须归一化后再比较（ymd 已在上面定义，详见那里注释）
@@ -2754,13 +4160,162 @@
 
     /* 单个标的的区间涨跌（小数，如 0.0056）；
        baseDate = 基金净值日（'YYYY-MM-DD'）；取不到返回 null → 走 QQQ 兜底。
-       非美标的用复权后的序列（拆股已前复权，见上）；美股 OKX 永续自带连续合约处理。
+       非美标的用复权后的序列（拆股已前复权，见上）；美股走腾讯交易所日线。
        ⚠️ 返回的是**本币**涨跌，人民币口径要再乘汇率（见 estimateFund 里的 toCny）。 */
-    /* OKX 股票永续只挂**一个**上市代码：谷歌只有 GOOGL，没有 GOOG-USDT-SWAP。
-       而部分基金的季报持仓写的是 GOOG（谷歌-C），直接查会 404 → 该股被判为「未知」走 QQQ 兜底。
-       两者同为 Alphabet 普通股，价格长期贴合约 0.1%，所以 GOOG 直接复用 GOOGL 的行情。 */
+    /* -------------------------------------------------------------------
+       OKX 永续 —— **只服务「持仓」页**（用户 2026-10-04 定稿：
+       「持仓里面 orcl 和 tqqq 的现价应该用 okx 的」）。
+       为什么持仓页要另用一个源：OKX 股票永续 7×24 连续报价，盘中/周末都在动，
+       反映的是「此刻真实价格」；而账户页那个是 IBKR/Alpaca 的**账面收盘价**
+       （休市日就停在最后一个收盘，= 142.30）。两者之差就是持仓页的「较基准涨跌」。
+       ⚠️ 别再把 OKX 用作**账户页**的兜底（上一轮已按要求移除）：
+          账户页现价必须是券商口径，否则和 IBKR 对不上账。
+       ⚠️ OKX 永续只挂一个上市代码：谷歌只有 GOOGL，没有 GOOG-USDT-SWAP，
+          而部分基金季报持仓写的是 GOOG（谷歌-C）→ 用 GOOGL 的行情顶替
+          （A/C 同股不同权，价格长期贴合约 0.1%）。 */
+    const OKX_API_BASE = 'https://www.cnoyu.org/api/v5';
     const OKX_ALIAS = { GOOG: 'GOOGL' };
     const okxInst = (code) => `${OKX_ALIAS[code] || code}-USDT-SWAP`;
+    const VAL_OKX = {};                        // code -> { now, prevClose }
+    const okxGet = async (url, tries) => {
+      for (let i = 0; i <= (tries || 2); i++) {
+        const r = await fetch(url);
+        if (r.status === 429) { await new Promise((s) => setTimeout(s, 350 * (i + 1))); continue; }
+        return r.json();
+      }
+      return null;
+    };
+    /* 拉持仓股/ETF 的 OKX永续现价 + 昨收（分批 4 个，避免 429）。
+       昨收取「日期早于今天」的最后一根日线：当天那根会随行情实时变动，
+       取倒数第二根会得到 ≈0% 的假涨跌。
+       `opt.nowOnly`：**只要现价、不拉日线**（省一半请求）。基金成分股估值只需要现价 ——
+       涨跌基准是 Alpaca 净值日收盘，不需要 OKX 昨收；成分股有 20+ 个，
+       每个多一次 candles 请求很容易撞 OKX 的 20 次/2秒 限流。 */
+    async function loadOkxTradeQuotes(codes, opt) {
+      const list = [...new Set((codes || []).filter(Boolean).map((c) => String(c).toUpperCase()))];
+      if (!list.length) return;
+      const needPrev = !(opt && opt.nowOnly);
+      const instMap = new Map();               // instId -> 原始代码[]
+      list.forEach((c) => {
+        const inst = okxInst(c);
+        if (!instMap.has(inst)) instMap.set(inst, []);
+        instMap.get(inst).push(c);
+      });
+      const todayUtc = new Date().toISOString().slice(0, 10);
+      const batches = chunk([...instMap.keys()], 4);
+      for (const batch of batches) {
+        await Promise.all(batch.map(async (inst) => {
+          try {
+            const tj = await okxGet(`${OKX_API_BASE}/market/ticker?instId=${inst}`);
+            const now = (tj && tj.data && tj.data[0]) ? +tj.data[0].last : null;
+            let prevClose = null;
+            if (needPrev) {
+              const j = await okxGet(`${OKX_API_BASE}/market/candles?instId=${inst}&bar=1Dutc&limit=6`);
+              const rows = ((j && j.data) || []).map((x) => ({
+                d: new Date(+x[0]).toISOString().slice(0, 10), close: +x[4],
+              })).sort((a, b) => (a.d < b.d ? -1 : 1));
+              for (const r of rows) if (r.d < todayUtc) prevClose = r.close;
+            }
+            if (now == null && prevClose == null) return;
+            (instMap.get(inst) || []).forEach((c) => {
+              VAL_OKX[c] = VAL_OKX[c] || {};
+              if (now != null) VAL_OKX[c].now = now;
+              if (prevClose != null) VAL_OKX[c].prevClose = prevClose;
+            });
+          } catch (e) { /* 单个失败就回落腾讯 / 账户价 */ }
+        }));
+      }
+    }
+
+    /* 腾讯只挂**一个**上市代码，且 A/C 两类股是两个独立代码（不像 OKX 永续那样合并）。
+       探测到的后缀按代码缓存起来，避免每轮都试3 次。
+       ⚠️ 缓存在 **localStorage** 里跨刷新存活（后缀是稳定的静态事实，没必要每次重新探测）。
+          这不是为了省请求好看，而是**防触发腾讯 WAF**：一次探测最坏打 3 个请求，
+          20+ 成分股 × 3 = 60+ 请求，一次页面加载就可能把本机 IP 打进限流，
+          之后 fqkline 持续返回 **501 + 无 CORS 头**（实测被限流后连冷��� 30s+ 都不恢复）。
+          限流一旦触发，整条美股估值链又会退化成 QQQ 兜底 —— 症状和 WAF 拦截一模一样，
+          但根因完全不同，别混淆。 */
+    const US_SUFFIXES = ['.OQ', '.N', '.A'];   // 纳斯达克 / 纽交所 / 美国交易所
+    const TX_US_CACHE_KEY = 'futu_tx_us_suffix_v1';
+    let txUsCache = {};
+    try { txUsCache = JSON.parse(localStorage.getItem(TX_US_CACHE_KEY) || '{}') || {}; }
+    catch (e) { txUsCache = {}; }
+    const txUsCacheSave = () => {
+      try { localStorage.setItem(TX_US_CACHE_KEY, JSON.stringify(txUsCache)); } catch (e) { /* 隐私模式等 */ }
+    };
+    /* ⚠️ 必须是无 www 的 ifzq.gtimg.cn —— web. 那个域名的 fqkline 被腾讯 WAF 拦（501 + 无 CORS 头），
+       后果是整条美股估值链断掉：txGetUsDay 返回 null → VAL.txUs 全空 → 每只基金的成分股
+       全部退化成 QQQ 兜底，持仓页基金涨跌「一动不动」。详见 TX_FQ_BASE 上方的说明。 */
+    const TX_US_BASE = 'https://ifzq.gtimg.cn/appstock/app/fqkline/get';
+    /* 腾讯返回的日线里，最后一根早于这个日期就说明是脏数据（见 probeTxUs 注释） */
+    const TX_US_MIN_DATE = '2026-01-01';
+    /* 超时**reject**（不是 resolve undefined）：探测代码的后缀时要靠异常跳到下一个候选 */
+    const withTimeout = (p, ms) => Promise.race([
+      p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms || 8000)),
+    ]);
+
+    /* 探测失败是否**值得重试**。
+       区分两种失败（2026-10-04 踩过，症状相同但处理相反）：
+         - 501 / WAF 拦截页：本机被限流，**继续试其他后缀纯属浪费**（还加重限流）→ 放弃。
+         - 后缀猜错（code≠0 / rows 脏数据）：换后缀是对的。
+       返回 true = 该代码本轮不再试（留到下一轮 refresh 再来）。 */
+    let txWafBlocked = false;
+    function markTxFailure(err) {
+      const s = String((err && (err.status || err.message)) || '');
+      if (/501|WAF|waf\.tencent/.test(s)) txWafBlocked = true;
+    }
+    const txResetWaf = () => { txWafBlocked = false; };
+    const txIsWaf = () => txWafBlocked;
+
+    /* 代码 -> 腾讯合约代码（usORCL.N）。未探测过时返回首个候选。 */
+    function txUsInst(code) {
+      const c = String(code || '').toUpperCase();
+      return txUsCache[c] || ('us' + c + US_SUFFIXES[0]);
+    }
+
+    /* 探测一个代码在腾讯的交易所后缀。
+       ⚠️ 不带后缀（`usAAPL`）虽然也返回 code=0，但会给**远古垃圾数据**——
+          实测 AAPL 末根是 2026-10-02、往前第二根却是 2011-06-02；
+          而 `usMU` 直接连接被重置。所以必须带后缀，且要校验末根日期是最近的。 */
+    async function probeTxUs(code) {
+      const c = String(code || '').toUpperCase();
+      if (txUsCache[c]) return txUsCache[c];
+      if (txIsWaf()) return null;                  // 限流中，本轮不再打腾讯
+      for (const sfx of US_SUFFIXES) {
+        const key = 'us' + c + sfx;
+        try {
+          const j = await txGetUsDay(key, 4);
+          const rows = j && j.rows;
+          if (rows && rows.length >= 2 && String(rows[rows.length - 1][0]) >= TX_US_MIN_DATE) {
+            txUsCache[c] = key;
+            txUsCacheSave();
+            return key;
+          }
+        } catch (e) {
+          markTxFailure(e);
+          if (txIsWaf()) return null;              // 被限流：别再试剩下两个后缀
+        }
+      }
+      return null;                                // 三种后缀全失败 → 走 QQQ 兜底
+    }
+    /* 拉腾讯美股日线，返回 { key, rows }；rows = [[日期,开,收,高,低,量], ...]（升序）
+       ⚠️ 非 2xx **抛异常并带上 status**：调用方靠它区分「限流 501」和「代码不存在」。
+          早前这里一律 `r.ok ? r.json() : null`，把 501 吞成 null → 上层以为只是这个代码查不到，
+          于是继续试另外两个后缀，白白再打两个请求加深限流。 */
+    async function txGetUsDay(key, limit) {
+      const u = `${TX_US_BASE}?param=${key},day,,,${limit || 320},qfq`;
+      const j = await withTimeout(
+        fetch(u).then((r) => {
+          if (!r.ok) { const e = new Error('http ' + r.status); e.status = r.status; throw e; }
+          return r.json();
+        }), 8000);
+      if (!j || j.code !== 0) return null;
+      const node = (j.data || {})[key];
+      if (!node) return null;
+      const rows = node.day || node.qfqday || null;
+      if (!rows || !rows.length) return null;
+      return { key, rows, qt: (node.qt || {})[key] || null };
+    }
 
     function symbolChg(code, mkt, baseDate) {
       const bd = String(baseDate || '').replace(/-/g, '');
@@ -2775,95 +4330,165 @@
         return last.c / arr[bi].c - 1;
       };
       if (mkt === 'us') {
-        if (/^QQQ$/i.test(code)) return qqqChgOn(baseDate);    // QQQ 走专用日线
         const k = code.toUpperCase();
-        // 读行情时也要过别名：拉的是 GOOGL 的合约，持仓/重仓里写的却是 GOOG
-        const ok = VAL.okx[k] || (OKX_ALIAS[k] ? VAL.okx[OKX_ALIAS[k]] : null);
-        if (ok && ok.base != null && ok.now != null && ok.base > 0) return ok.now / ok.base - 1;
-        return null;                                        // → QQQ 兜底
+        /* 腾讯 A/C 两类股是两个独立代码，直接按各自代码取即可（不再需要 GOOG→GOOGL 别名） */
+        const q = VAL.txUs[k];                 // Alpaca：base = 净值日那天的收盘
+        /* ⚠️ 现价 = **OKX 永续**，基准 = Alpaca 净值日收盘（用户 2026-10-04 定稿：
+           「持仓里最新价格都用 okx 读，qqq 也是，成分股 nvda 之类也都用 okx，
+             只是基准按照基金最新更新的时间那天的 alpaca 收盘价」）。
+           OKX 永续 7×24 连续报价，**周末/休市也在动**，所以「一动不动」的问题从根上消失；
+           Alpaca 只负责提供那个固定的基准价。
+           取不到 OKX 时依次回落 Alpaca 现价 → OKX 昨收 → 文件日线（`qqqChgOn`）。 */
+        const ok = VAL_OKX[k];
+        const now = (ok && ok.now != null) ? ok.now : (q ? q.now : null);
+        if (q && q.base != null && now != null && q.base > 0) return now / q.base - 1;
+        if (ok && ok.now != null && ok.prevClose > 0) return ok.now / ok.prevClose - 1;
+        if (/^QQQ$/i.test(code)) return qqqChgOn(baseDate);   // 最后兜底：静态文件日线
+        return null;
       }
       return pick(VAL.dq[mkt + code]);                      // jp285A / kr000660 / hk02513 / sz300408
     }
 
-    /* 拉美股行情（两个用途）：
-       ① 基金估值：基准 = 基金净值日的美东收盘（OKX 1H 线 15:00-16:00 那根），最新 = ticker 现价；
-       ② 证券现价：Alpaca 不可达时用 OKX 现价补上（TQQQ 也要，它不在 funds.items 里）。
+    /* 拉美股行情 —— 数据源：**腾讯 gtimg**（用户 2026-10-04 定稿，替换原OKX 永续）。
+       两个用途：
+         ① 基金估值：基准 = 基金净值日（baseDate）那天的美东收盘，最新 = 现价；
+         ② 证券现价：Alpaca 限流/不可达时用腾讯现价补上（TQQQ 也要，它不在 funds.items 里）。
        `baseDate` 为空时只取现价（不找基准），供 ② 使用。
-       ⚠️ 必须**限流**：一次 Promise.all 打 20+ 个并发会被 OKX 返 429（实测持仓股 ORCL/TQQQ
-       恰好排在最后被限流掉，现价变 `--`）。这里分批 4 个 + 429 退避重试。 */
-    const okxGet = async (url, tries) => {
-      for (let i = 0; i <= (tries || 2); i++) {
-        const r = await fetch(url);
-        if (r.status === 429) { await new Promise((s) => setTimeout(s, 350 * (i + 1))); continue; }
-        return r.json();
-      }
-      return null;
-    };
+       腾讯一次 `fqkline` 就同时给到「日线序列 + qt 快照（现价/昨收/涨跌幅）」，
+       所以基准、昨收、现价三个数都能从**同一个响应**里取，不用分多次请求。
+       ⚠️ 限流：一次 Promise.all 打 20+ 并发会被腾讯返 429，这里分批 4 个。 */
     const chunk = (arr, n) => { const o = []; for (let i = 0; i < arr.length; i += n) o.push(arr.slice(i, i + n)); return o; };
+
+    /* ---- 基金成分股行情：**优先 Alpaca，腾讯兜底**（2026-10-04 改）----
+       为什么换主源：腾讯 fqkline 的 WAF 会**按 IP 限流**，实测一次页面加载（20+ 成分股 ×
+       3 个候选后缀探测）就能把本机打进去，之后持续 501 且**响应不带 CORS 头** ——
+       浏览器只报「CORS policy」错误，看不出是限流，排查时极易误判成「域名没 CORS」。
+       而 Alpaca `/v2/stocks/bars` 是账户本来就在用的源，CORS 稳定、一次请求给全市场
+       所需日线（既能取现价也能取净值基准日那天的收盘），限流阈值也宽得多。
+       结果：估值不再因为腾讯抽风而整体退化成 QQQ 兜底 —— 那正是「基金盈亏一动不动」的成因。
+       Alpaca 拉不到（非成分股/未授权/网络不通）时，仍由下面的腾讯路径兜底，再不行才用 QQQ。 */
+    /* 一批 bars → 写进 VAL.txUs（now = 最新收盘 / prevClose = 前一根 / base = 净值日那根） */
+    function applyAlpacaBars(code, v, baseDate) {
+      const bars = (v || []).slice().sort((a, b) => String(a.t) < String(b.t) ? -1 : 1);
+      if (!bars.length) return false;
+      const rec = VAL.txUs[code] = VAL.txUs[code] || {};
+      rec.now = bars[bars.length - 1].c;
+      if (bars.length >= 2) rec.prevClose = bars[bars.length - 2].c;
+      /* 基准 = 净值日那天的收盘；取不到就退到该日之前最近的一条（那天休市）。 */
+      let bi = -1;
+      const bd = String(baseDate || '').slice(0, 10);
+      if (bd) for (let i = 0; i < bars.length; i++) if (String(bars[i].t).slice(0, 10) <= bd) bi = i;
+      if (bi >= 0) rec.base = bars[bi].c;
+      rec.alpaca = true;
+      return true;
+    }
+
+    /* ⚠️⚠️ Alpaca 多标的 bars 是**分页**的，不是「随机丢符号」（2026-10-04 查明）：
+       `GET /v2/stocks/bars?symbols=<20个>` 只返回**按字母序的前 9~10 个**，
+       响应里带 `next_page_token`，必须跟着它翻页才能拿到剩下的（实测 20 个 → 3 页：9+9+2）。
+       **看起来像随机丢**只是因为不同 symbols 集合的首批字母不同 —— 我先前据此误判成
+       「随机丢符号」，改用「缺哪个就单标的补拉」，结果每轮多打 10 次请求、串行带 120ms 间隔，
+       把 Alpaca 调用拖长，撞上 `accAlpacaQuotes` 的 9s 全批超时 → **证券现价整批消失**
+       （用户报的「账户里证券的现价都出不来了」）。
+       ⚠️ **不是被限流**：实测每轮 `X-Ratelimit-Remaining: 199`（上限 200/分钟），
+       请求量远低于阈值。**别再用补拉的方式绕分页**。
+       本函数：自动翻页合并，`key` 是响应里的数据字段名（bars / snapshots）。 */
+    async function alpacaPaged(urlBase, key, maxPages) {
+      const out = {};
+      let token = null;
+      for (let i = 0; i < (maxPages || 5); i++) {
+        const url = urlBase + (token ? '&page_token=' + encodeURIComponent(token) : '');
+        /* 每页重试 1 次：`accJson` 内部 8s 超时返回 null，某一页超时若直接 break，
+           **整批数据就都没了**（实测偶发，表现是所有成分股突然退化成 QQQ 兜底）。
+           重试仍失败就保留已取到的部分，不清空。 */
+        let d = null;
+        for (let a = 0; a < 2 && !d; a++) {
+          d = await accJson(url, { headers: ACC_HDR });
+          if (!d) await new Promise((s) => setTimeout(s, 400));
+        }
+        if (!d) { console.warn('[alpaca] 第 %d 页拉取失败，保留已取到的 %d 个代码', i + 1, Object.keys(out).length); break; }
+        const part = d[key];
+        if (part && typeof part === 'object') Object.assign(out, part);
+        token = d.next_page_token || null;
+        if (!token) break;                                   // 没有下一页 → 收齐了
+      }
+      return out;
+    }
+
+    /* 基金估值需要的**全部美股代码**（含 QQQ）。
+       嘉实纳斯达克100（016532/016533）的成分只有 QQQ 一个，所以 QQQ 绝不能排除。 */
+    function usComponentCodes() {
+      const s = new Set();
+      funds.forEach((f) => (f.items || []).forEach((it) => {
+        if (it.m === 'us') s.add(String(it.c).toUpperCase());
+      }));
+      return [...s];
+    }
+
+    async function loadUsQuotesAlpaca(baseDate) {
+      /* Alpaca 只负责**基准价**（净值日那天的收盘）；现价由 OKX 提供。
+         这里仍然把 Alpaca 的 now/prevClose 也存下来，作为 OKX 拉不到时的回落。 */
+      const list = usComponentCodes();
+      if (!list.length) return;
+      /* 基准日可能远在 40 天前（QDII 净值滞后），start 要留足回溯窗口。 */
+      const start = baseDate || etDate(12);
+      /* 一次批量 + 跟着 next_page_token 翻页（20 个代码 = 3 次请求），比「逐个补拉」少 8 次。 */
+      try {
+        const bars = await alpacaPaged(
+          `${ACC_API}/v2/stocks/bars?symbols=${list.join(',')}&timeframe=1Day&start=${start}&limit=90`, 'bars', 5);
+        Object.entries(bars).forEach(([k, v]) => applyAlpacaBars(String(k).toUpperCase(), v, baseDate));
+      } catch (e) { console.warn('[alpaca] 成分股基准拉取失败', e); }
+    }
 
     async function loadUsQuotes(baseDate, extraCodes) {
       const codes = new Set();
       funds.forEach((f) => (f.items || []).forEach((it) => { if (it.m === 'us' && !/^QQQ$/i.test(it.c)) codes.add(it.c.toUpperCase()); }));
-      (extraCodes || []).forEach((c) => codes.add(String(c).toUpperCase()));
+      (extraCodes || []).forEach((c) => codes.add(String(c). toUpperCase()));
       if (!codes.size) return;
-      /* 按**实际合约**去重：GOOG 与 GOOGL 都指向 GOOGL-USDT-SWAP，
-         不合并会白打一次请求（还多占一次 429 额度）。 */
-      const instMap = new Map();                          // instId -> 需要这个合约的原始代码[]
-      [...codes].forEach((c) => {
-        const inst = okxInst(c);
-        if (!instMap.has(inst)) instMap.set(inst, []);
-        instMap.get(inst).push(c);
-      });
-      const batches = chunk([...instMap.keys()], 4);      // 4 个一批，避免 429
+      txResetWaf();          // 每轮重新尝试：限流是暂时的，不能永久放弃腾讯
+      const list = [...codes];
+      /* 批次大小 4 → **3**，且批间加 150ms 间隔。
+         腾讯 WAF 对突发请求很敏感：并发 4 × 无间隔实测能把本机 IP 打进限流，
+         之后 fqkline 持续 501（且 501 响应没有 CORS 头 → 浏览器报 CORS 错误，
+         很容易被误判成「域名没 CORS」而走错方向）。
+         后缀缓存已落localStorage，第二轮起probeTxUs 不再发探测请求，量降一半以上。 */
+      const batches = chunk(list, 3);
       for (const batch of batches) {
-        await Promise.all(batch.map(async (inst) => {
+        if (txIsWaf()) break;                      // 已限流：剩余代码留到下一轮
+        await Promise.all(batch.map(async (code) => {
           try {
-            let base = null;
+            /* Alpaca 已经给出**完整**数据（now + base）的代码就跳过：
+               腾讯既慢又容易撞 WAF，没必要为已有数据再打一轮请求。
+               判定：baseDate 为空时只要 now；否则 now 和 base 都得齐。 */
+            const pre = VAL.txUs[code];
+            if (pre && pre.now != null && (!baseDate || pre.base != null)) return;
+            const key = await probeTxUs(code);
+            if (!key) return;
+            /* 基准日可能远在 40 天前（QDII 净值滞后），要多拉一些日线才够回溯。
+               baseDate 为空时只要 6 根就够（现价 + 昨收）。 */
+            const d = await txGetUsDay(key, baseDate ? 90 : 6);
+            if (!d) return;
+            const rows = d.rows;
+            const rec = VAL.txUs[code] = VAL.txUs[code] || {};
+            /* 现价优先用 qt 快照（腾讯给的是最新成交价，含盘中），
+               拿不到就退回日线末根收盘。 */
+            const snapLast = d.qt && d.qt.length > 3 ? parseFloat(d.qt[3]) : NaN;
+            rec.now = Number.isFinite(snapLast) && snapLast > 0 ? snapLast : parseFloat(rows[rows.length - 1][2]);
+            /* 昨收：qt[4] 是腾讯给的昨收；没有就取「日期早于末根那根」的收盘
+               —— 末根是当天未完结的K 线，不能拿它当昨收。 */
+            const snapPrev = d.qt && d.qt.length > 4 ? parseFloat(d.qt[4]) : NaN;
+            if (Number.isFinite(snapPrev) && snapPrev > 0) rec.prevClose = snapPrev;
+            else if (rows.length >= 2) rec.prevClose = parseFloat(rows[rows.length - 2][2]);
+            /* 基准 = baseDate 那天的收盘（QDII 按美东交易日计，腾讯日线日期就是美东日）。
+               取不到就退到该日之前最近的一条（那天休市的情况）。 */
             if (baseDate) {
-              const j = await okxGet(`${OKX_API_BASE}/market/candles?instId=${inst}&bar=1H&limit=120`);
-              const rows = ((j && j.data) || []).map((x) => ({ ts: +x[0], close: +x[4] }));
-              for (const it of rows) {
-                const d = new Date(it.ts);
-                const et = d.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
-                const etH = Number(d.toLocaleString('en-US', { timeZone: 'America/New_York', hour12: false, hour: '2-digit' }));
-                if (et === baseDate && etH >= 15 && etH < 16) base = it.close;
-              }
+              let bi = -1;
+              for (let i = 0; i < rows.length; i++) if (String(rows[i][0]) <= baseDate) bi = i;
+              if (bi >= 0) rec.base = parseFloat(rows[bi][2]);
             }
-            const tj = await okxGet(`${OKX_API_BASE}/market/ticker?instId=${inst}`);
-            const now = (tj && tj.data && tj.data[0]) ? +tj.data[0].last : null;
-            if (now != null) {
-              // ⚠️ 合并而非覆盖：loadUsQuotes 会被调用两次（先基金重仓带 baseDate、
-              //    再持仓股 baseDate=null），若直接 `= { now, base }` 会把上一轮拿到的
-              //    基准价清成 null，基金估值就全退回 QQQ 兜底了。
-              (instMap.get(inst) || []).forEach((c) => {
-                VAL.okx[c] = VAL.okx[c] || {};
-                VAL.okx[c].now = now;
-                if (base != null) VAL.okx[c].base = base;
-              });
-            }
-          } catch (e) { /* 单个失败就走 QQQ 兜底 / 快照兜底 */ }
+          } catch (e) { markTxFailure(e); }        // 单个失败就走 QQQ 兜底 / 快照兜底
         }));
-      }
-      // 持仓股再补一次「昨收」：只拉现价(baseDate 为 null)时 prevClose 是空的，
-      // 交易页涨跌列会一直显示 --。取**最近一根已完结**的日线收盘。
-      const held = (extraCodes || []).map((c) => String(c).toUpperCase());
-      if (held.length) {
-        const todayUtc = new Date().toISOString().slice(0, 10);
-        await Promise.all(held.map(async (c) => {
-          if (!VAL.okx[c] || VAL.okx[c].prevClose) return;
-          try {
-            const j = await okxGet(`${OKX_API_BASE}/market/candles?instId=${okxInst(c)}&bar=1Dutc&limit=6`);
-            const rows = ((j && j.data) || []).map((x) => ({
-              d: new Date(+x[0]).toISOString().slice(0, 10), close: +x[4],
-            })).sort((a, b) => (a.d < b.d ? -1 : 1));
-            // ⚠️ 不能用「倒数第二根」：OKX 当天那根日线会随行情实时变动（收 10-02 的盘时
-            // 最老一根就是今天，close 已等于现价），取倒数第二根会得到 ≈0% 的假涨跌。
-            // 正确做法：取**日期早于今天**的最后一根。
-            let prev = null;
-            for (const r of rows) if (r.d < todayUtc) prev = r;
-            if (prev) VAL.okx[c].prevClose = prev.close;
-          } catch (e) {}
-        }));
+        await new Promise((r) => setTimeout(r, 150));   // 批间限速，别把 WAF 打出限流
       }
     }
 
@@ -2875,7 +4500,13 @@
       const stockW = alloc.stock || 0;
       const bondW = alloc.bond || 0;                       // 债券：无利息 → 原币价值不变
       const cashW = alloc.cash || 0;                       // 现金：同上
-      const qc = qqqChgOn(baseDate);                       // 本基金基准日下的 QQQ 涨幅（兜底用）
+      /* 未披露股票仓位（季报只列前十大重仓，剩下那部分按 QQQ 推算）用的 QQQ 涨幅。
+         ⚠️ 必须走 `symbolChg('QQQ','us',…)`（**实时 OKX 现价 / Alpaca 净值日基准**），
+            不能直接用 `qqqChgOn()` —— 后者读的是 `fund_holdings.json` 的静态日线文件，
+            一天才更新一次。两者混用会让「持有 QQQ 的基金」和「按 QQQ 推算的残余仓位」
+            用了两个不同的 QQQ 涨跌（实测同一天 1.83% vs 1.58%）。
+            `symbolChg` 内部拉不到 OKX 时会自动回退到 `qqqChgOn`，不会开天窗。 */
+      const qc = symbolChg('QQQ', 'us', baseDate);
       // 汇率层：FX_IN_VAL=false（用户定稿）时恒 0 → 人民币口径涨跌 == 本币涨跌
       const fxUsd = FX_IN_VAL ? fxChgOn('USD', baseDate) : 0;
       const fxUsdV = fxUsd == null ? 0 : fxUsd;            // 序列缺失 → 汇率层整体作废（=0）
@@ -2951,7 +4582,12 @@
       const usBase = funds.find((f) => f.navDate) ? funds.find((f) => f.navDate).navDate : null;
       const back = new Date(Date.now() - 40 * 86400e3).toISOString().slice(0, 10);
       // 汇率序列只在开关打开时才拉（frankfurter 本机不可达，关着就省掉一次 6s 空等）
-      await Promise.all([loadUsQuotes(usBase), FX_IN_VAL ? loadFxSeries(back) : Promise.resolve()]);
+      await Promise.all([
+        loadUsQuotesAlpaca(usBase),        // Alpaca：只取净值日那天的**基准收盘**
+        loadOkxTradeQuotes(usComponentCodes(), { nowOnly: true }),   // OKX：全部美股成分的**实时价**
+        loadUsQuotes(usBase),
+        FX_IN_VAL ? loadFxSeries(back) : Promise.resolve(),
+      ]);
     }
     let fundAmount = 0, fundYesterday = 0, fundCum = 0;
     funds.forEach((f) => {
@@ -2985,7 +4621,11 @@
       funds.forEach((f) => { f.cur = 'CNY'; });
       ACC_RENDERERS.fund = () => {
         fundTbody.innerHTML = accSorted('fund', funds).map((f) =>
-          `<tr><td>${f.name}</td><td class="num">${f.code}</td>` +
+          `<tr><td class="td-name"><div class="td-clamp">${f.name}</div></td>` +
+          // 净值日期**每只基金各写各的**（QDII 滞后天数不同，统一取最旧那个会掩盖差异）。
+          // ⚠️ 顺序必须与 thead 的 `data-sort-table="fund"` 一致：名称 | 净值 | ISIN | 金额 …
+          `<td class="num td-navdate">${f.navDate ? String(f.navDate).slice(5) : '--'}</td>` +
+          `<td class="num">${f.code}</td>` +
           `<td class="num">${f2(f.amount)}</td><td class="num">${f.shares.toFixed(2)}</td>` +
           `<td class="num ${f.yest > 0 ? 'up' : f.yest < 0 ? 'down' : ''}">${f2(f.yest, true)}</td>` +
           `<td class="num ${f.yestPct > 0 ? 'up' : f.yestPct < 0 ? 'down' : ''}">${pctS(f.yestPct)}</td>` +
@@ -2996,15 +4636,10 @@
       };
       accRender('fund');
     }
-    setTxt('fundSumVal', f2(fundAmount));
-    setTxt('fundSumYesterday', f2(fundYesterday, true), fundYesterday);
-    setTxt('fundSumProfit', f2(fundCum, true), fundCum);
     setTxt('fundMYest', f2(fundYesterday, true), fundYesterday);
     setTxt('fundMCum', f2(fundCum, true), fundCum);
-    // 净值更新日期：QDII 各基金滞后天数不同，取**最旧**那个日期（最保守，不会让人误以为数据更新）
-    // ⚠️ 变量名不要用 navDates —— 下面「历史·净值」段已用同名（`new Set()`），const 重名会直接语法报错。
-    const fundNavDates = funds.map((f) => f.navDate).filter(Boolean).sort();
-    setTxt('fundNavDate', fundNavDates.length ? fundNavDates[0] : '--');
+    /* 净值更新日期不再集中显示（用户 2026-10-04：上方汇总行删除，改为**表格里每只基金各写一列**，
+       QDII 各基金滞后天数不同，集中取「最旧」那个会掩盖差异）。见 fund 渲染器里的 td-navdate。 */
     setTxt('accFundVal', f2(fundAmount));
     setTxt('accFundNote', f2(fundYesterday, true), fundYesterday);
     // 昨日涨跌幅 = 昨日收益 ÷ 昨日市值（今日市值 − 昨日收益）
@@ -3056,16 +4691,18 @@
     const cashTbody = $id('cashTbody');
     if (cashTbody) {
       ACC_RENDERERS.cash = () => {
+        /* ⚠️ td 个数必须与 thead 的 10 列**严格一致**（名称/ISIN/市值/持有面值/参考中间价/
+           持仓成本/应计利息/已获利息/持仓收益/币种），否则整行错位 —— 之前多写了一个 `--`，
+           把「币种」顶到第 11 列，页面上「币种」表头下面全是 `--`（用户 2026-10-04 发现）。 */
         cashTbody.innerHTML = accSorted('cash', cashRows).map((r) =>
-          `<tr><td>${r.note}</td><td class="num">--</td>` +
+          `<tr><td class="td-name"><div class="td-clamp">${r.note}</div></td><td class="num">--</td>` +
           `<td class="num">${f2(r.cny)}</td><td class="num">${f2(r.bal)}</td>` +
           `<td class="num">--</td><td class="num">--</td><td class="num">--</td><td class="num">--</td>` +
-          `<td class="num">--</td><td class="num">--</td><td>${r.cur}</td></tr>`
+          `<td class="num">--</td><td>${r.cur}</td></tr>`
         ).join('');
       };
       accRender('cash');
     }
-    setTxt('cashSumVal', f2(cashCny));
     setTxt('accCashVal', f2(cashCny));
 
     /* ---- 历史·成交订单（forexTrades 换汇 + 各现金账户出入金） ---- */
@@ -3137,6 +4774,14 @@
     const ibkrCash = (cashFromDaily != null && isFinite(cashFromDaily))
       ? cashFromDaily
       : lastNV - filePosVal;
+    /* ⚠️ `cashDaily` 只是**现金余额**，不含 IBKR 的应计利息；
+       `Asset_parsed.json` 的 `ibkrAccruedInterest`（当前 7.93 USD）才是账户权益的一部分。
+       这正是「侧栏 vs 收益日历」差 53 CNY 的根源（用户 2026-10-05 指出）：
+         日历用 `totalNetValueDaily`（含利息）→ 32,847.97
+         侧栏用 (cashDaily + 持仓)   （不含利息）→ 32,840.04，差 7.93 USD。
+       所以证券权益/现金总值一律用 `ibkrCashAll = ibkrCash + ibkrInterest`。 */
+    const ibkrInterest = +asset.ibkrAccruedInterest || 0;
+    const ibkrCashAll = ibkrCash + ibkrInterest;
 
     let rtPosVal = 0, todayPnlUsd = 0;
     const stockTbody = $id('stockTbody');
@@ -3154,7 +4799,7 @@
       } else if (h.tqqqShares != null) {
         const s = (qq && qq.stock && qq.stock[h.code]) || {};
         // ⚠️ 不用 tqqq.price（种子文件里的**快照价**，会长期陈旧）当现价：
-        //    Alpaca → OKX → 快照，三级兜底由下方统一处理。
+        //    Alpaca → 腾讯 → 快照，三级兜底由下方统一处理。
         pAcct = s.price; prevClose = s.prevClose;
         qty = h.tqqqShares; cost = h.tqqqCost;
       } else {
@@ -3162,19 +4807,32 @@
         pAcct = s.price; prevClose = s.prevClose;
         qty = h.pos; cost = h.cost;
       }
-      /* ① 账户页现价 pAcct：Alpaca → OKX → 快照（IBKR markPrice）。
-         ⚠️ Alpaca 已有价时**不覆盖**：它是真实正股报价，休市日就停在上一个收盘（正确的行为）。 */
+      /* ① 账户页现价 pAcct：Alpaca → 腾讯 → IBKR 快照 markPrice。
+         ⚠️ Alpaca 已有价时**不覆盖**：它是真实正股报价，休市日就停在上一个收盘（正确的行为）。
+         ⚠️ 以前这条链**只给 TQQQ 留了兜底**（`tqqq.price`），ORCL 什么都没有 ——
+            于是 Alpaca + 腾讯同时失败时，ORCL 直接渲染 `--`、市值也空，
+            而同一张表里 TQQQ 还有 71.69 的快照价看着「正常」，很像只有一只股票出问题。
+            `h.mark0` 就是 IBKR 每日快照里的 markPrice（ORCL = 142.30，正常交易日它就等于收盘价），
+            拿它兜底比开空行强得多。
+         ⚠️⚠️ **不要**把 `seed.pa_us[0].price`（= 71.69）当兜底（用户 2026-10-04 明确要求撤掉）：
+            那是**建仓当时记下的旧价**，与真实价差得远（TQQQ 10-02 真实收盘 81.01）。
+            用它兜底会算出**看着正常但完全错误**的数字 —— 市值 26,435（真实 30,020）、
+            累计盈亏 +44.65%（真实 +63.46%），比显示 `--` 危险得多。
+            TQQQ 不在 IBKR 持仓里（`mark0` 恒为 0），所以它没有快照兜底：
+            两个源都挂时就显示 `--`，这是诚实的结果。 */
       const k = String(h.code || '').toUpperCase();
-      const ok = VAL.okx[k] || (OKX_ALIAS[k] ? VAL.okx[OKX_ALIAS[k]] : null);
+      const tx = VAL.txUs[k];
       if (pAcct == null || !(pAcct > 0)) {
-        if (ok && ok.now) { pAcct = ok.now; src = 'okx'; if (!(prevClose > 0)) prevClose = ok.prevClose != null ? ok.prevClose : prevClose; }
-        else if (h.tqqqShares != null && tqqq.price) { pAcct = tqqq.price; src = '快照'; }
+        if (tx && tx.now) { pAcct = tx.now; src = '腾讯'; if (!(prevClose > 0)) prevClose = tx.prevClose != null ? tx.prevClose : prevClose; }
+        else if (h.mark0 > 0) { pAcct = h.mark0; src = '快照'; }
       }
-      /* ② 交易页现价 pTrade：**OKX 优先**（用户 2026-10-04 定稿）。
-         OKX 股票永续 7×24 连续报价，盘中/周末都在动，能反映当下真实价格；
-         账户页那个是 IBKR/Alpaca 的休市快照价。两者之差就是交易页的「较基准涨跌」。
-         OKX 取不到时才回落账户价，保证不出现空行。 */
-      const pTrade = (ok && ok.now) ? ok.now : pAcct;
+      /* ② 持仓页现价 pTrade：**OKX 永续优先**（用户 2026-10-04 定稿：
+         「持仓里面 orcl 和 tqqq 的现价应该用 okx 的」）。
+         OKX 永续 7×24 连续报价，盘中/周末都在动，反映当下真实价格；
+         账户页那个是 IBKR/Alpaca 的账面收盘价（休市日停在 142.30）。
+         取不到时依次回落腾讯 → 账户价，保证不出现空行。 */
+      const ok = VAL_OKX[k];
+      const pTrade = (ok && ok.now) ? ok.now : ((tx && tx.now) ? tx.now : pAcct);
       const value = pAcct != null ? qty * pAcct * mult : null;          // 账户页市值（账面口径）
       const tradeValue = pTrade != null ? qty * pTrade * mult : null;   // 交易页市值（OKX 口径）
       const pnl = pAcct != null ? (pAcct - cost) * qty * mult : null;
@@ -3197,9 +4855,20 @@
         tradeValueCny: cny(tradeValue), tradeChgCny: cny(tradeChgUsd),
       };
     };
-    /* 持仓股票也拉一遍 OKX 行情（Alpaca 不可达时靠它给现价）。
+    /* 持仓股拉两路行情：
+       ① loadUsQuotes（腾讯）—— 给**账户页**现价兜底（Alpaca 限流时用）；
+       ② loadOkxTradeQuotes（OKX 永续）—— 给**持仓页**现价（用户 2026-10-04 定稿）。
+       两路并行，腾讯失败不影响持仓页、OKX 失败不影响账户页。
        holdings 在这里才声明完，所以补拉放在 forEach 之前。 */
-    await loadUsQuotes(null, holdings.filter((h) => !h.opt).map((h) => h.code).filter(Boolean));
+    const heldCodes = holdings.filter((h) => !h.opt).map((h) => h.code).filter(Boolean);
+    await Promise.all([
+      loadUsQuotesAlpaca(null),      // Alpaca 兜底现价（base 已在初始化时锚定；现价主力是 OKX）
+      loadUsQuotes(null, heldCodes),
+      loadOkxTradeQuotes(heldCodes),
+      /* 基金成分股的实时价也走 OKX（用户 2026-10-04 定稿：持仓里所有最新价格都用 OKX）。
+         heldCodes 与成分股代码合并去重，一次拉完；只要现价不拉日线，省一半请求。 */
+      loadOkxTradeQuotes([...heldCodes, ...usComponentCodes()], { nowOnly: true }),
+    ]);
     holdings.forEach((h) => {
       const r = computeRow(h, q);
       if (r.value != null) rtPosVal += r.value;
@@ -3216,7 +4885,7 @@
           const c = (v) => v == null ? '--' : v * FX;
           const pf = (v) => v == null ? '--' : (r.mult === 100 ? v.toFixed(3) : f2(v));
           const cls = (v) => v > 0 ? 'up' : v < 0 ? 'down' : '';
-          return `<tr><td>${r.code}</td><td>${r.name}</td>` +
+          return `<tr><td>${r.code}</td><td class="td-name"><div class="td-clamp">${r.name}</div></td>` +
             `<td class="num">${r.qty}</td>` +
             `<td class="num">${pf(r.price)}</td><td class="num">${pf(r.cost)}</td>` +
             `<td class="num">${f2(c(r.value))}</td>` +
@@ -3238,15 +4907,12 @@
       const shortVal = () => rows.filter((r) => r.value != null && r.qty < 0).reduce((s, r) => s + r.value, 0);
       const todayUsd = () => rows.reduce((s, r) => s + (r.todayPnl || 0), 0);
       const rtVal = posVal();
-      const stockEquityCny = (ibkrCash + rtVal) * FX;
+      const stockEquityCny = (ibkrCashAll + rtVal) * FX;
       const stockTodayCny = todayUsd() * FX;
       const stockPnlCny = rows.reduce((s, r) => s + (r.pnl || 0), 0) * FX;
       // 证券累计盈亏（CNY）= 证券权益实时折算 − 人民币本金 167,600（forexTrades 四笔 CNH 合计，含 TQQQ 的 17,600）
       // 口径：实际掏口袋的人民币，换汇手续费/点差自动计入盈亏；usInvest=167600 互证
       const stockCumCny = stockEquityCny - 167600;
-      setTxt('stockSumVal', f2(rtVal * FX));
-      setTxt('stockSumToday', f2(stockTodayCny, true), stockTodayCny);
-      setTxt('stockSumPnl', f2(stockPnlCny, true), stockPnlCny);
       setTxt('mStockVal', f2(rtVal * FX));
       setTxt('mStockLong', f2(longVal() * FX));
       setTxt('mStockShort', f2(shortVal() * FX));
@@ -3257,13 +4923,16 @@
       usdNote('mStockValUsd', rtVal);
       usdNote('mStockLongUsd', longVal());
       usdNote('mStockShortUsd', shortVal());
-      usdNote('mPnlTotalUsd', (ibkrCash + rtVal) - 167600 / FX);
+      usdNote('mPnlTotalUsd', (ibkrCashAll + rtVal) - 167600 / FX);
       // 证券净值 = 证券账户权益 = (盈透现金 + 持仓实时市值) 折 CNY，与「总资产」里的证券口径一致
       setTxt('mStockEquity', f2(stockEquityCny));
-      usdNote('mStockEquityUsd', ibkrCash + rtVal);
-      // 现金总值（已并入「资产」卡，排在证券净值上面）= 盈透账户现金折 CNY，右侧括注美元原值
-      setTxt('mCashCny', f2(ibkrCash * FX));
-      usdNote('mCashUsd', ibkrCash);
+      usdNote('mStockEquityUsd', ibkrCashAll + rtVal);
+      /* 现金总值（已并入「资产」卡，排在证券净值上面）= 盈透账户现金 **+ 应计利息** 折 CNY。
+         ⚠️ 现金是负数（保证金借方 −9,849.96 USD），利息 +7.93 也要算进权益，
+            否则与「总资产」里的证券口径（用 totalNetValueDaily）差 7.93 USD。
+            右侧括注美元原值并**备注利息**，让「现金为负」这件事看得懂。 */
+      setTxt('mCashCny', f2(ibkrCashAll * FX));
+      setTxt('mCashUsd', f2(ibkrCashAll) + ' USD（含利息 ' + f2(ibkrInterest) + '）');
       setTxt('accStockVal', f2(stockEquityCny));
       setTxt('accStockNote', f2(stockTodayCny, true), stockTodayCny);
       setTxt('accStockPct', stockEquityCny - stockTodayCny ? pctS(stockTodayCny / (stockEquityCny - stockTodayCny)) : '--', stockTodayCny);
@@ -3272,10 +4941,10 @@
       setTxt('accStockCumPct', pctS(stockCumCny / 167600), stockCumCny);
     }
     renderStockSum();
-    const stockEquityCny = (ibkrCash + rtPosVal) * FX;   // ↓ 供下方总资产/曲线沿用
+    const stockEquityCny = (ibkrCashAll + rtPosVal) * FX;   // ↓ 供下方总资产/曲线沿用
     const stockTodayCny = todayPnlUsd * FX;
     const stockPnlCny = rows.reduce((s, r) => s + (r.pnl || 0), 0) * FX;
-    const stockCumCny = (ibkrCash + rtPosVal) * FX - 167600;
+    const stockCumCny = (ibkrCashAll + rtPosVal) * FX - 167600;
 
     /* ---- 历史·成交（Asset_parsed.trades 88 条 + TQQQ 手动买入） ---- */
     // 证券持仓表已有名称映射，复用它把期权 symbol 拆成「名称 + 代码」
@@ -3295,7 +4964,7 @@
         name, code, side: isSell ? '卖出' : '买入',
         price: t.price,
         amount: qty * (t.price || 0) * mult,              // 成交金额按原币（USD），与「币种」列一致
-        amountCny: qty * (t.price || 0) * mult * FX,      // 头部「总成交额: CNY」用
+        amountCny: qty * (t.price || 0) * mult * FX,      // 成交金额（CNY），头部汇总行已删，留给明细用
         realized: t.realized || 0,                        // 该笔已实现盈亏（USD 原币，期权已含 ×100）
         qty, date: t.date, market: '美股', cur: 'USD',
         decimals: mult === 100 ? 3 : 2,                   // 期权价格 3 位小数
@@ -3327,9 +4996,9 @@
           `${r.realized == null ? '--' : f2(r.realized, true)}</td></tr>`
         ).join('');      };
       accRender('stockH');
-      const amtSum = tradeRows.reduce((s, r) => s + (r.amountCny || 0), 0);
       setTxt('stockHistCount', tradeRows.length, 1);
-      setTxt('stockHistAmt', f2(amtSum), amtSum);
+      /* 「总成交额: CNY」行已按用户要求删除（2026-10-04），这里不再统计 amtSum。
+         `tradeRows[].amountCny` 字段保留（成交明细表里可能用到）。 */
       const realSum = tradeRows.reduce((s, r) => s + (r.realized || 0), 0);
       setTxt('stockHistRealized', f2(realSum, true), realSum);
     }
@@ -3339,7 +5008,7 @@
        否则账户页「证券表在跳、总资产不动」。基金按官方净值（fundAmount）不随盘中变。 */
     function renderAccTotal() {
       const rtVal = rows.reduce((s, r) => s + (r.value != null ? r.value : (r.h.posVal0 || 0)), 0);
-      const eqCny = (ibkrCash + rtVal) * FX;
+      const eqCny = (ibkrCashAll + rtVal) * FX;
       const todayCny = rows.reduce((s, r) => s + (r.todayPnl || 0), 0) * FX + fundYesterday;
       const tot = eqCny + fundAmount + cashCny;
       const yestBase = tot - todayCny;
@@ -3361,18 +5030,102 @@
     ACC_SPARK.series = tail.map((p) => p.value);
     drawAccSpark();
 
-    /* ---- 全部账户总览页：品类/币种分布 + 每日总资产序列 ---- */
+    /* ---- 全部账户总览页：资产分布环形图 + 每日总资产序列 ---- */
 
-    renderAoDist('aoCatBar', 'aoCatLegend', [
-      { name: '现金', val: cashCny,        color: '#00a86b' },
-      { name: '股票', val: stockEquityCny, color: '#13c2c2' },
-      { name: '基金', val: fundAmount,     color: '#2e6bff' },
-    ], totalCny);
+    /* 图标解析：Asset_parsed.json 顶层 `icons` 是**富途 app 的品牌图标库**（39 个 base64 图片），
+       各项的 `icon.img` 形如 `'@b64:3'` 指向其中下标。
+       ⚠️ JSON 里**只有 12 条**持仓真的引用了图标（6 只基金 + 6 个现金账户 + TQQQ），
+          其余 27 个是库里的备用图标 —— 包括甲骨文（索引 38，红 O 形 logo）。
+          所以美股正股要靠下面这张**代码 → 库下标**的手工对照表补上，
+          否则 ORCL 会没图标（用户 2026-10-04：「orcl也有图标啊」）。
+       下标由逐个解码识别（渲染成网格肉眼比对）得出，见下表。 */
+    const ICON_MAP = (() => {
+      const map = {};
+      (asset.icons || []).forEach((dataUri, i) => { map['@b64:' + i] = dataUri; });
+      const pick = (ic) => (ic && ic.img && map[ic.img]) || '';
+      const put = (code, ic) => { if (code && pick(ic)) map[code] = pick(ic); };
+      (seed.pa_funds || []).forEach((f) => put(f.code, f.icon));
+      (seed.pa_cash || []).forEach((c) => put(c.id, c.icon));
+      (seed.pa_us || []).forEach((u) => put(u.symbol, u.icon));
+      /* 库里没被持仓引用的品牌图标 → 代码对照。
+         下标由「把 39 个图标渲染成网格逐个肉眼辨认」得出（2026-10-04）。
+         ⚠️ 只写**能确认**的，宁缺勿滥：第一版我凭logo 猜了十几个，十几个都错
+         （把支付宝「支」当 Google、把中信银行当高盛…），已全部删掉。
+           0 嘉实  1 广发  2 微软  3 ProShares  4 NVIDIA  5 汇丰  6 建设银行
+           7 农业银行  8 中国银行  9 建设银行(?)  10 蚂蚁  11 嘉实理财  12 邮储
+           13 兴证  14 Visa  15 中信  16 微信  17 支付宝  18 汇丰中国  19 东方财富
+           20 兴业  21 高盛  22 富途  23 华泰  24 华泰证券  25 博时  26 citi
+           27 京东  28 摩根士丹利  29 理财通  30 兴业银行  31 平安  32 PayPal
+           33 VISA  34 万事达  35 美国运通  36 Apple Pay  37 G Pay  38 Oracle */
+      const CODE_ICON = {
+        ORCL: '@b64:38',   // Oracle
+        NVDA: '@b64:4',    // NVIDIA
+        MSFT: '@b64:2',    // 微软四色方块
+        TQQQ: '@b64:3',    // ProShares（seed.pa_us 里已引用同一张）
+      };
+      Object.keys(CODE_ICON).forEach((code) => {
+        if (!map[code] && map[CODE_ICON[code]]) map[code] = map[CODE_ICON[code]];
+      });
+      /* 现金账户：除 id 外**再按账户名（note）建一份键**。
+         ⚠️ 这是修「环形图里广发银行/农业银行显示成 CNY、图标也没了」：
+            调用方传的是 `c.note`（账户名）当 code，而这里只按 `c.id` 建了键 → 查不到。
+         顺带把币种兜底也改成**取该币种第一笔**（原先 `!map[k]` 只认第一笔，
+            但汇丰中国 @b64:5 在前，USD 分不到图标；这里按币种各自记首个）。 */
+      (seed.pa_cash || []).forEach((c) => {
+        if (c.note) put(String(c.note), c.icon);            // 账户名：环形图/列表用这个
+        if (c.currency) put('cash:' + String(c.currency).toUpperCase(), c.icon);
+      });
+      return map;
+    })();
+    /* 图标查找：证券/基金用代码 → 现金用账户名 → 最后才按币种兜底。 */
+    const iconOf = (code, cur) => ICON_MAP[code] || ICON_MAP['cash:' + String(cur || '').toUpperCase()] || '';
+
+    /* 「资产」视角：每个持仓一扇区（对齐富途「个人净资产分布」）。
+       数据源拼接：证券 rows（实时市值折 CNY）+ 基金逐只（份额×净值）+ 现金各账户。
+       ⚠️ 现金按**账户**分列（而不是笼统一个「现金」）—— 与富途一致，
+          IBKR 的 USD 现金和各 CNY 账户在「币种」维度上是不同的东西。
+       ⚠️ 证券市值优先用 rows 里的实时价折 CNY（valueCny）；取不到价时退回
+          Asset_parsed.json 的快照市值 posVal0×FX，别让该项整个消失。
+       `cat` 决定配色归属（红/黄/绿，同分类在资产视角下取同色系梯度）。 */
+    const assetItems = [];
+    rows.forEach((r) => {
+      const v = r.valueCny != null && r.valueCny > 0
+        ? r.valueCny
+        : (r.h && r.h.posVal0 != null ? r.h.posVal0 * FX : null);
+      if (v > 0) assetItems.push({
+        name: r.name || r.code, code: r.code || '', val: v,
+        cat: '证券', icon: iconOf(r.code),
+      });
+    });
+    funds.forEach((f) => {
+      const amt = f.shares > 0 && f.navL != null ? f.shares * f.navL : 0;
+      if (amt > 0) assetItems.push({
+        name: f.name, code: f.code, val: amt, cat: '基金', icon: iconOf(f.code),
+      });
+    });
+    cashRows.forEach((c) => {
+      if (c.cny > 0) assetItems.push({
+        /* code 用**账户名**（广发银行/ 农业银行 / 汇丰中国…），不是币种。
+           用户 2026-10-04：「广发银行，农业银行不是写 CNY，就写广发银行，农业银行」。
+           账户名同时是 ICON_MAP 的键（见上面 ICON_MAP 的 note 建键），
+           所以环内/列表里都能拿到各银行自己的 logo。币种挪到 cur 字段备用。 */
+        name: c.note, code: c.note, val: c.cny, cat: '现金',
+        icon: iconOf(c.note, c.cur),
+      });
+    });
+
     const cnyPart = fundAmount + cashRows.filter((r) => r.cur !== 'USD').reduce((s, r) => s + r.bal, 0);
-    renderAoDist('aoCurBar', 'aoCurLegend', [
-      { name: '美元（含折算）', val: totalCny - cnyPart, color: '#2e6bff' },
-      { name: '人民币',         val: cnyPart,            color: '#ff8f1f' },
-    ], totalCny);
+    setAoDistData(assetItems, {
+      cat: [
+        { name: '现金', val: cashCny },
+        { name: '证券', val: stockEquityCny },
+        { name: '基金', val: fundAmount },
+      ],
+      cur: [
+        { name: '美元', val: totalCny - cnyPart },
+        { name: '人民币', val: cnyPart },
+      ],
+    }, totalCny);
 
     /* 每日总资产 = IBKR 净值×FX + TQQQ 市值 + Σ基金份额×当日nav + 现金常数；
        末点替换/追加为实时总资产，与侧栏数字一致。
@@ -3397,7 +5150,10 @@
         const v = navOn(f.hist, row.date);
         return s + (v != null ? f.shares * v : (f.amount || 0));
       }, 0);
-      return { date: row.date, cny: row.value * FX + tqqqValueOn(row.date) * FX + fundPart + cashCny };
+      /*带上 `nv`（IBKR 原始净值，USD）。calIndex 的废值段过滤要用它 ——
+        判据不能看 cny：cny 含基金/现金（合计70 多万），哪怕 IBKR 净值只有 1.42
+        也远大于阈值，前 28 天的占位噪声会一行都滤不掉（用户 2026-10-04 发现的偏差）。 */
+      return { date: row.date, cny: row.value * FX + tqqqValueOn(row.date) * FX + fundPart + cashCny, nv: row.value };
     });
     if (aoSeries.length) {
       /* 末点（今天）用**与历史点相同的口径**外推：以最后一条 IBKR 净值为锚，
@@ -3417,8 +5173,12 @@
         + fundAmount
         + cashCny
         + stockDeltaUsd * FX;
-      if (aoSeries[aoSeries.length - 1].date === todayBj) aoSeries[aoSeries.length - 1].cny = projCny;
-      else aoSeries.push({ date: todayBj, cny: projCny });
+      if (aoSeries[aoSeries.length - 1].date === todayBj) {
+        aoSeries[aoSeries.length - 1].cny = projCny;
+        aoSeries[aoSeries.length - 1].nv = null;       // 外推值，不是真实 IBKR 净值
+      } else {
+        aoSeries.push({ date: todayBj, cny: projCny, nv: null });
+      }
     }
     aoState.series = aoSeries;
 
@@ -3428,11 +5188,10 @@
     TRADE_POS.stock = rows.filter((r) => r.qty);          // 剔除已清仓（qty=0）
     TRADE_POS.fund = funds.filter((f) => f.shares);
     TRADE_POS.splits = VAL.splits;      // 识别到的拆股（键 = 市场+代码），供调试/展示
-    if (window.__VALDEBUG) window.__VALDEBUG(VAL, funds, symbolChg, qqqChgOn);
     TRADE_POS.fx = FX;
     TRADE_POS.totalCny = totalCny;      // 账户页口径：证券权益 + 基金 + 现金
     TRADE_POS.cashCny = cashCny;        // 各银行账户现金
-    TRADE_POS.ibkrCashCny = ibkrCash * FX;  // 盈透账户内现金（未投出去的部分）
+    TRADE_POS.ibkrCashCny = ibkrCashAll * FX;  // 盈透账户内现金 **+ 应计利息**（未投出去的部分）
     TRADE_POS.ready = true;
     /* 行情定时刷新入口（15s，与自选列表同频，由模块级定时器调用）。
        为什么要它：交易页原先只在初始化取一次价，页面开着不动就永远停在打开那一刻的数
@@ -3444,8 +5203,47 @@
       if (document.hidden) return;                 // 页面不可见时省一次请求
       try {
         const q2 = await accAlpacaQuotes(stockSyms, optSyms);
-        await loadUsQuotes(null, holdings.filter((h) => !h.opt).map((h) => h.code).filter(Boolean));
-        rows.forEach((r) => { Object.assign(r, computeRow(r.h, q2)); });   // 原地更新，引用不变
+        const held2 = holdings.filter((h) => !h.opt).map((h) => h.code).filter(Boolean);
+        /* 基金成分股也要每轮刷新现价（base 保持不变，见 loadUsQuotesAlpaca 注释）。
+           `baseDate` 传 null → 只更新 now，估值基准仍锚在各基金自己的 navDate 上。 */
+        await Promise.all([
+          loadUsQuotesAlpaca(null),
+          loadUsQuotes(null, held2),
+          loadOkxTradeQuotes(held2),
+          loadOkxTradeQuotes([...held2, ...usComponentCodes()], { nowOnly: true }),
+        ]);
+        rows.forEach((r) => {
+          const prevAcct = r.pAcct;                  // 记住本轮之前的账户价（Alpaca 口径）
+          const next = computeRow(r.h, q2);
+        /* 抗闪跳（用户 2026-10-04：「现价一直跳，142.30 / 142.41」）：
+           若这一轮 **Alpaca 本身**没取到价（弱网/限流），computeRow 会按设计退到腾讯兜底 →
+           现价从 142.41 变成腾讯的 142.30，下个周期 Alpaca 恢复又跳回来。
+             这里沿用上一轮的账户价：只有 Alpaca 真给到新价才更新。
+             「取不到数据」应表现为「数字不动」，而不是「数字乱跳」—— 前者正常，后者像坏了。
+             ⚠️ 判断依据是 **Alpaca 有没有给价**，不能看 `next.pAcct > 0`（那时已被腾讯兜底填成 >0 了）。
+             ⚠️ 只锁**账户页**口径（pAcct）；持仓页 pTrade 用 OKX 永续实时价，
+                本就该每轮都动，不受这段抗闪跳影响。 */
+          const kk = String(r.code || r.h.code || '').toUpperCase();
+          const alpacaOk = r.h.opt
+            ? !!(q2 && q2.opt && q2.opt[r.h.occ] && q2.opt[r.h.occ].price > 0)      // 期权走 snapshots
+            : !!(q2 && q2.stock && q2.stock[kk] && q2.stock[kk].price > 0);         // 正股/TQQQ 走 trades
+          if (!alpacaOk && prevAcct > 0) {
+            next.pAcct = prevAcct; next.price = prevAcct; next.src = r.src || '';
+            next.value = prevAcct * next.qty * next.mult;
+            next.tradeValue = next.pTrade != null ? next.pTrade * next.qty * next.mult : next.value;
+            next.pnl = (prevAcct - next.cost) * next.qty * next.mult;
+            next.pnlRatio = next.cost ? (prevAcct - next.cost) / next.cost : null;
+            next.todayPnl = next.prevClose != null ? (prevAcct - next.prevClose) * next.qty * next.mult : null;
+            next.todayPct = next.prevClose ? (prevAcct - next.prevClose) / next.prevClose : null;
+            const fx2 = next.value != null ? FX : 1;
+            next.valueCny = next.value != null ? next.value * fx2 : null;
+            next.pnlCny = next.pnl != null ? next.pnl * fx2 : null;
+            next.todayCny = next.todayPnl != null ? next.todayPnl * fx2 : null;
+            next.tradeValueCny = next.tradeValue != null ? next.tradeValue * fx2 : null;
+            next.tradeChgCny = next.tradeChgUsd != null ? next.tradeChgUsd * fx2 : null;
+          }
+          Object.assign(r, next);                   // 原地更新，引用不变
+        });
         funds.forEach((f) => {
           if (!(f.items && f.items.length && f.navDate)) return;
           const est = estimateFund(f, f.navDate);
@@ -3502,14 +5300,74 @@
       return { date: d, value: ok ? v : null, cur: 'CNY', src: 'Σ 份额×净值', accrued: null };
     }).filter((r) => r.value != null);
 
-    /* ---- 收益日历用的 TQQQ 买入现金流 ----
-       TQQQ 在 seed.pa_us 里，既不在 detailState.flows（IBKR 入金）也不在 fundFlows（基金申购），
-       但它的买入当天总资产会跳升、却不是收益，必须单独登记，否则日历会虚高。 */
-    Object.keys(calExtraFlows).forEach((k) => delete calExtraFlows[k]);
-    ((asset.seed && asset.seed.pa_us) || []).forEach((a) => (a.trades || []).forEach((t) => {
-      const cny = (t.amount != null ? t.amount : (t.shares || 0) * (t.price || 0)) * FX;
-      calExtraFlows[t.date] = (calExtraFlows[t.date] || 0) + cny;
-    }));
+    /* ---- 收益日历的数据准备（见 calIndex 处的口径说明）----
+       ① CAL_FX_MAP：**逐日** USD→CNY（`fund_holdings.json` 的 `usdcnh_daily`，由 fund_holdings.py
+          每天从 frankfurter 抓。用户 2026-10-04：「既然每天汇率 json 里都有了，收益日历当然也可以算了」）
+       ② TQQQ 股数 + **TQQQ 自己的**日线（`tqqqBars`，Alpaca）
+       ③ 校验基金基准：02-06 申购总额应为 483,199.29（用户给的基准值） */
+    CAL_FX = FX;
+    CAL_FX_MAP = {};
+    CAL_FX_KEYS = null;
+    /* usdcnh_daily 的 d 形如 '2026-10-02'，统一成 'YYYY-MM-DD'（8 位串也兼容）。 */
+    ((fundH && fundH.usdcnh_daily) || []).forEach((r) => {
+      const d = String((r && r.d) || '');
+      if (!d) return;
+      CAL_FX_MAP[/^\d{8}$/.test(d) ? d.slice(0, 4) + '-' + d.slice(4, 6) + '-' + d.slice(6, 8) : d] = +r.c;
+    });
+    if (!Object.keys(CAL_FX_MAP).length) {
+      console.warn('[日历] usdcnh_daily 缺失，逐日汇率退回当前汇率', FX);
+    }
+    CAL_TQQQ_SHARES = tqqqShares;
+    /* ⚠️ 用 TQQQ 自己的收盘价，**不是** `qqq_daily`（QQQ ETF，价差 9 倍）。 */
+    CAL_TQQQ_MAP = tqqqBars || {};
+    if (!Object.keys(CAL_TQQQ_MAP).length) console.warn('[日历] TQQQ 日线缺失，TQQQ 市值按 0 计');
+    /* 基准校验 + **基金总成本**（首日基线用）。
+       `fundTotalCost` = 全部申购的 shares×price 之和 = 483,199.29(02-06) + 7,779(06-04) = 490,978。
+       ⚠️ 旧代码只统计基准日当天的 483,199.29，漏掉 06-04 那笔 → 合计会差 7,779。 */
+    {
+      let base = 0, total = 0;
+      funds.forEach((f) => (f.trades || []).forEach((t) => {
+        const c = (t.shares || 0) * (t.price || 0);
+        total += c;
+        if (t.date === CAL_BASE.fundBaseDate) base += c;
+      }));
+      CAL_BASE.fundBaseValue = base;
+      CAL_BASE.fundTotalCost = total;
+      if (Math.abs(base - 483199.29) > 1) {
+        console.warn('[日历] 基金基准 %.2f 与预期 483,199.29 不符，请核对申购数据' % base);
+      }
+    }
+    /* 证券本金：forexTrades 的 CNH（已在 CAL_BASE 注释里列明细）。
+       只需取出 **TQQQ 那一笔**（按 TQQQ 成交日匹配）当它的首日基线，
+       其余三笔（03-20 / 06-25 / 07-15）本质是 IBKR 的本金，已包含在净值里了，
+       侧栏也是一次性拿 167,600 去减，所以这里**不再逐日扣**。 */
+    {
+      const tqqqTradeDate = (tqqq && tqqq.trades && tqqq.trades[0] && tqqq.trades[0].date) || '';
+      const cnh = ((asset.forexTrades) || [])
+        .filter((t) => t && t.date === tqqqTradeDate)
+        .reduce((s2, t) => s2 + (t.cnh || 0), 0);
+      CAL_TQQQ_BASE_CNY = cnh > 0 ? cnh : 17600;
+      const totalCnh = ((asset.forexTrades) || []).reduce((s2, t) => s2 + ((t && t.cnh) || 0), 0);
+      CAL_BASE.stockTotalCny = totalCnh;                    // 展示/核对用，理论 167,599.89
+    }
+    /* 证券入金（CNY）—— **`forexTrades.cnh`，逐日扣减**（用户 2026-10-04 定稿：
+       「日历证券应该是 167600，你把 json 里 CNY 加起来就看出来了」）。
+       ⚠️ 不要再用 `electronicFundTransfers`（IBKR 入账，USD，合计 21,841.22 再乘汇率）——
+          那是另一个口径：EFT 里 03-18 那笔 1,449.10 USD 在 forexTrades 里根本没有，
+          而 TQQQ 的 17,600 也不在 EFT 里（TQQQ 在 IBKR 之外手动买入）。
+       forexTrades.cnh 才是**实际掏口袋的人民币**，合计 167,599.89 ≈ 侧栏用的 167,600：
+         2026-02-10 17,600.00（TQQQ 买入）→ **已作为 TQQQ 首日基线，这里跳过**
+         2026-03-20 99,999.96 / 2026-06-25 39,999.94 / 2026-07-15 9,999.99 → 逐日扣
+       ⚠️ 已经是 CNH，**不要再乘汇率**。 */
+    CAL_STOCK_FLOW = {};
+    {
+      const tqqqTd = (tqqq && tqqq.trades && tqqq.trades[0] && tqqq.trades[0].date) || '';
+      ((asset.forexTrades) || []).forEach((t) => {
+        if (!t || !t.date || !t.cnh) return;
+        if (t.date === tqqqTd) return;                     // 已是 TQQQ 的首日基线
+        CAL_STOCK_FLOW[t.date] = (CAL_STOCK_FLOW[t.date] || 0) + t.cnh;
+      });
+    }
   }
   initAccountData();
 })();

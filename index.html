@@ -15,7 +15,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="资产看板" />
-<link rel="stylesheet" href="styles.css?v=20261004h" />
+<link rel="stylesheet" href="styles.css?v=20261007q" />
 </head>
 <body>
 <div class="app">
@@ -50,8 +50,8 @@
       <button class="rail__item is-active" data-view="market" data-label="自选" title="自选"><svg viewBox="0 0 24 24" class="ic"><path d="M12 3l2.6 5.6 6.1.7-4.5 4.2 1.2 6-5.4-3-5.4 3 1.2-6L3.3 9.3l6.1-.7z"/></svg></button>
       <button class="rail__item" data-view="account" data-label="账户" title="账户"><svg viewBox="0 0 24 24" class="ic"><path d="M4 20V9M9 20V4M14 20v-7M19 20V7"/></svg></button>
       <button class="rail__item" data-view="comment" data-label="资讯" title="资讯"><svg viewBox="0 0 24 24" class="ic"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 9h8M8 13h8M8 17h5"/></svg></button>
-      <button class="rail__item" data-label="选股" title="选股器"><svg viewBox="0 0 24 24" class="ic"><path d="M4 6h16M7 12h10M10 18h4"/></svg></button>
-      <button class="rail__item" data-view="trade" data-label="交易" title="交易"><svg viewBox="0 0 24 24" class="ic"><path d="M4 18l5-5 4 3 7-8"/><path d="M16 8h4v4"/></svg></button>
+      <button class="rail__item" data-view="screen" data-label="选股" title="选股器"><svg viewBox="0 0 24 24" class="ic"><path d="M4 6h16M7 12h10M10 18h4"/></svg></button>
+      <button class="rail__item" data-view="trade" data-label="持仓" title="持仓"><svg viewBox="0 0 24 24" class="ic"><path d="M4 18l5-5 4 3 7-8"/><path d="M16 8h4v4"/></svg></button>
       <button class="rail__item" data-label="我的" title="我的"><svg viewBox="0 0 24 24" class="ic"><circle cx="12" cy="8" r="4"/><path d="M4 20a8 8 0 0 1 16 0"/></svg></button>
       <div class="rail__spacer"></div>
       <button class="rail__avatar" title="个人中心"></button>
@@ -172,8 +172,8 @@
 
     <aside class="comment-panel">
       <div class="cp__head" data-tabs="feed">
-        <button class="cp-tab is-active" data-cp-tab="latest">最新</button>
-        <button class="cp-tab" data-cp-tab="news" title="华尔街见闻实时快讯">推荐</button>
+        <button class="cp-tab" data-cp-tab="latest">最新</button>
+        <button class="cp-tab is-active" data-cp-tab="news" title="金十数据快讯（默认）">推荐</button>
         <button class="icon-btn icon-btn--sm cp__close" title="收起"><svg viewBox="0 0 24 24" class="ic"><path d="M9 5l7 7-7 7"/></svg></button>
 </div>
       <div class="cp__compose">
@@ -204,7 +204,7 @@
         </div>
         <div class="acc-side__body" id="accSideBody">
         <div class="acc-side__card">
-          <div class="acc-side__label">总资产 · CNY<span class="acc-side__account">盈透证券账户(U18576039)</span></div>
+          <div class="acc-side__label">总资产 · CNY<span class="acc-side__account" title="盈透证券账户(U18576039)">IBKR（U18576039）</span></div>
           <div class="acc-side__total num" id="accTotalVal">--</div>
           <div class="acc-side__row">
             <svg class="acc-side__spark" viewBox="0 0 100 24" preserveAspectRatio="none"><path id="accSpark" d="" fill="none" stroke="#ff8f1f" stroke-width="1.5"/></svg>
@@ -247,21 +247,6 @@
         <div class="acc-page" data-cat-page="total" hidden>
           <div class="acc-overview">
 
-            <!-- 品类 / 币种分布 -->
-
-            <div class="ao-dist">
-              <div class="ao-dist__col">
-                <h4>品类</h4>
-                <div class="ao-bar" id="aoCatBar"></div>
-                <ul class="ao-legend" id="aoCatLegend"></ul>
-</div>
-              <div class="ao-dist__col">
-                <h4>币种</h4>
-                <div class="ao-bar" id="aoCurBar"></div>
-                <ul class="ao-legend" id="aoCurLegend"></ul>
-</div>
-</div>
-
             <!-- 走势 tab + 时间范围 -->
 
             <div class="ao-chart-head">
@@ -269,18 +254,48 @@
                 <button class="is-active" data-ao-tab="return">收益率走势</button>
                 <button data-ao-tab="asset">资产走势</button>
                 <button data-ao-tab="cal">收益日历</button>
+                <!-- 统计：品类/币种分布（原先常驻在走势图上方，用户 2026-10-04 要求收进 tab） -->
+                <button data-ao-tab="stat" title="品类 / 币种分布">统计</button>
 </div>
               <div class="ao-ranges" id="aoRanges">
 
                 <!-- 全屏按钮：放在时间范围这一行的最左侧（放在 .ao-ranges 内部才会跟着换行到第二行） -->
 
                 <button class="ao-ranges__fs" id="aoFsBtn" title="全屏查看"><svg viewBox="4 4 16 16" class="ic"><path d="M4 9V4h5M20 15v5h-5M15 4h5v5M9 20H4v-5"/></svg></button>
-                <button data-ao-range="1w" class="is-active">近1周</button>
-                <button data-ao-range="1m">近1月</button>
-                <button data-ao-range="ytd">年初至今</button>
-                <button disabled>自定义</button>
+                <button data-ao-range="1m" class="is-active">近1月</button>
+                <button data-ao-range="3m">近3月</button>
+                <button data-ao-range="ytd">今年以来</button>
+                <button data-ao-range="all">自始以来</button>
 </div>
 </div>
+
+            <!-- 「统计」tab：资产分布环形图（富途「个人净资产分布」样式）
+                 三个视角各自独立成环：资产（每个持仓一扇区）/ 分类（现金·股票·基金）/ 币种（美元·人民币） -->
+
+            <div class="ao-dist" id="aoDist" hidden>
+              <div class="ao-dist__head">
+                <h4>个人净资产分布</h4>
+                <div class="ao-dist__switch" id="aoDistSwitch">
+                  <button class="is-active" data-ao-dim="asset">资产</button>
+                  <button data-ao-dim="cat">分类</button>
+                  <button data-ao-dim="cur">币种</button>
+                </div>
+              </div>
+              <div class="ao-donut-wrap">
+                <canvas id="aoDonut"></canvas>
+                <div class="ao-donut-hole" id="aoDonutHole">
+                  <b class="num" id="aoDonutTotal">--</b>
+                  <span>总资产 · CNY</span>
+                </div>
+              </div>
+              <ul class="ao-dlist" id="aoDistList"></ul>
+              <div class="ao-dmore" id="aoDistMore" hidden>
+                <button class="ao-dmore__btn" id="aoDistMoreBtn">
+                  <span id="aoDistMoreTxt">展开全部</span>
+                  <svg viewBox="0 0 24 24" class="ic"><path d="M6 9l6 6 6-6"/></svg>
+                </button>
+              </div>
+            </div>
 
             <!-- 悬停时：日期 + 资产净值 / 当日收益；未悬停：累计收益 / 区间收益率 -->
 
@@ -347,17 +362,6 @@
 
         <!-- 筛选行已按用户要求删除（全部市场/全部币种/搜索/导出/批量平仓 全是无绑定装饰） -->
 
-        <!-- 汇总行：市值 / 今日盈亏 / 持仓收益 -->
-
-        <div class="acc-sumline">
-          <button class="acc-sumline__cur">市值 (CNY) <i class="caret"></i></button>
-          <b class="num" id="stockSumVal">0.00</b>
-          <span class="sum-label">今日盈亏</span>
-          <b class="num" id="stockSumToday">0.00</b>
-          <span class="sum-label">持仓收益</span>
-          <b class="num" id="stockSumPnl">0.00</b>
-</div>
-
         <!-- 持仓表（当前为空） -->
 
         <div class="acc-table-wrap">
@@ -392,9 +396,6 @@
             <span class="acc-hist__sep"></span>
             <span class="sum-label">成交数量</span>
             <b class="num" id="stockHistCount">0</b>
-            <span class="acc-hist__sep"></span>
-            <span class="sum-label">总成交额: CNY <i class="caret"></i></span>
-            <b class="num" id="stockHistAmt">0.00</b>
             <span class="acc-hist__sep"></span>
             <span class="sum-label">已实现盈亏: USD</span>
             <b class="num" id="stockHistRealized">0.00</b>
@@ -467,21 +468,6 @@
 
           <!-- 筛选行已按用户要求删除 -->
 
-          <!-- 汇总行 -->
-
-          <div class="acc-sumline">
-            <button class="acc-sumline__cur">市值 (CNY) <i class="caret"></i></button>
-            <b class="num" id="fundSumVal">--</b>
-            <span class="sum-label">昨日收益</span>
-            <b class="num" id="fundSumYesterday">--</b>
-            <span class="sum-label">持仓收益</span>
-            <b class="num" id="fundSumProfit">--</b>
-
-            <!-- 净值更新日期：QDII 净值有滞后，必须让人看得出数据到几号 -->
-
-            <span class="sum-label sum-label--date">净值更新至</span>
-            <b class="num" id="fundNavDate">--</b>
-</div>
 
           <!-- 持仓表（JS 渲染基金数据） -->
 
@@ -490,6 +476,7 @@
               <thead>
                 <tr>
                   <th data-sort="name">名称<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                  <th data-sort="navDate">净值<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
                   <th data-sort="code">ISIN代码<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
                   <th data-sort="amount">持仓金额<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
                   <th data-sort="shares">持仓份额<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
@@ -576,15 +563,6 @@
 
           <!-- 筛选行已按用户要求删除 -->
 
-          <!-- 汇总行 -->
-
-          <div class="acc-sumline">
-            <button class="acc-sumline__cur">市值 (CNY) <i class="caret"></i></button>
-            <b class="num" id="cashSumVal">--</b>
-            <span class="sum-label">持仓收益</span>
-            <b class="num" id="cashSumProfit">0.00</b>
-</div>
-
           <!-- 持仓表（当前为空） -->
 
           <div class="acc-table-wrap">
@@ -665,18 +643,19 @@
       </div>
     </section>
 
-    <!-- ================= 交易视图（点左侧 rail「交易」打开） =================
+    <!-- ================= 持仓视图（点左侧 rail「持仓」打开） =================
 
          自选列表从这里复制一份（#watchlistTrade），与行情页的 #watchlist 相互独立 ——
-         便于在交易页单独改造而不影响行情页。两份共用同一份 APP_DATA.watchlist 数据源。 -->
+         便于在持仓页单独改造而不影响行情页。两份共用同一份 APP_DATA.watchlist 数据源。 -->
     <section class="trade-view" id="tradeView" hidden>
       <aside class="watchlist watchlist--trade">
         <div class="watchlist__head">
-          <span class="wl__title">交易 · 持仓</span>
+          <span class="wl__title">持仓</span>
         </div>
         <div class="wl__tabs" data-tabs="wlTrade">
           <button class="tab is-active" data-wl-trade-cat="all">全部</button>
           <button class="tab" data-wl-trade-cat="us">证券</button>
+          <button class="tab" data-wl-trade-cat="fund">基金</button>
         </div>
         <div class="wl__columns wl__columns--4">
           <span>名称代码</span>
@@ -712,6 +691,72 @@
       </main>
     </section>
 
+    <!-- ================= 选股器视图（点左侧 rail「选股」打开） =================
+
+         内容 = **TickerTiles美股热力图**（https://tickertiles.com/markets/heatmap/）。
+         选它是因为实测三项硬指标全部达标（2026-10-04）：
+           ① `Access-Control-Allow-Origin: *`
+           ② **无 X-Frame-Options**、无 CSP frame-ancestors → 允许被 iframe 嵌套
+           ③ 免key / 免注册
+         对比：finviz 与 stocknear 都有 Cloudflare 挑战 + SAMEORIGIN，嵌不进来。
+
+         ⚠️ 路径必须用 `/markets/heatmap/<index>/` —— 它才是热力图；
+            `/embed/<index>` 渲染的是全屏仪表盘，`/embed/heatmap/<index>` 是空白页。
+         ⚠️ TickerTiles 条款：embed 免费不限量，**须保留它自带的署名徽章**；
+            图片与 embed 仅供展示，不能拿它反查数据（所以我们只嵌、 不 fetch）。
+
+         iframe 用手写懒加载：容器初始 hidden，`loading="lazy"` 会因「不可见」
+         被浏览器无限期推迟，必须切到该 tab 时才设 src。 -->
+    <section class="screen-view" id="screenView" hidden>
+      <div class="screen-head">
+        <h3 class="screen-head__title">美股热力图</h3>
+        <div class="screen-switch" id="screenSwitch">
+          <button data-screen-key="sp-500">S&amp;P 500</button>
+          <button data-screen-key="nasdaq-100">Nasdaq 100</button>
+          <button data-screen-key="russell-2000">Russell 2000</button>
+          <button class="is-active" data-screen-key="all-stocks">全部个股</button>
+          <button data-screen-key="sectors">板块</button>
+          <button data-screen-key="market" title="Winners / Losers / 各市场表现 / 板块 / 因子（Tickertiles 仪表盘）">市场</button>
+        </div>
+        <!-- 缩放：让站点在「面板 ×倍率」的大画布上排版（格子更小但**在站点那边够大**，
+             能显示代码），再用 CSS transform 缩回面板大小。
+             实测 all-stocks（2,961 个格子）能显示代码的格子数：
+               ×1.0=125(4.2%)  ×1.25=208(7.0%)  ×1.5=273(9.2%)  ×1.8=365(12.3%)。
+             ⚠️ 调**小**只会更少（×0.8 连大字也没了），所以默认给 ×1.5。 -->
+        <label class="screen-zoom" title="热力图缩放（数值越大＝塞进越多股票，小框能显示代码；屏幕上每只股票看起来更小）">
+          <span class="screen-zoom__label">缩放</span>
+          <select id="screenZoom">
+            <option value="1">100%（字大，只有大票有代码）</option>
+            <option value="1.25" selected>125%（默认）</option>
+            <option value="1.5">150%</option>
+            <option value="1.8">180%（最密，字最小）</option>
+          </select>
+        </label>
+        <!-- 刷新间隔：站点自带那个 60s 下拉在 heatmap-controls 里（y=112），
+             已经被我们裁掉了，所以在这里补一个 —— 跨域拿不到 iframe 内部状态，
+             只能靠「定时重载 iframe」来实现刷新。默认 60s。 -->
+        <label class="screen-refresh" title="热力图自动刷新间隔">
+          <span class="screen-refresh__label">刷新</span>
+          <select id="screenRefresh">
+            <option value="0">关闭</option>
+            <option value="30000">30s</option>
+            <option value="60000" selected>60s</option>
+            <option value="120000">2分钟</option>
+            <option value="300000">5分钟</option>
+          </select>
+        </label>
+      </div>
+      <div class="screen-body">
+        <iframe id="screenFrame" class="screen-frame" title="美股热力图"
+          referrerpolicy="no-referrer" scrolling="no"></iframe>
+        <div class="screen-loading" id="screenLoading">热力图加载中…</div>
+      </div>
+      <p class="screen-note">
+        数据与图表由 <a href="https://tickertiles.com" target="_blank" rel="noopener">TickerTiles</a> 提供 ·
+        面积为市值占比、颜色按当日涨跌
+      </p>
+    </section>
+
 <!-- 全屏走势图：移动端点图表放大看（canvas 挪进来，重绘后还原位置） -->
 
 <div class="ao-fs" id="aoFs" hidden>
@@ -722,9 +767,10 @@
       <button data-ao-fs-tab="asset">资产走势</button>
     </div>
     <div class="ao-fs__ranges" id="aoFsRanges">
-      <button data-ao-range="1w" class="is-active">近1周</button>
-      <button data-ao-range="1m">近1月</button>
-      <button data-ao-range="ytd">年初至今</button>
+      <button data-ao-range="1m" class="is-active">近1月</button>
+      <button data-ao-range="3m">近3月</button>
+      <button data-ao-range="ytd">今年以来</button>
+      <button data-ao-range="all">自始以来</button>
     </div>
     <button class="icon-btn icon-btn--sm" id="aoFsClose" title="关闭"><svg viewBox="0 0 24 24" class="ic"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
   </div>
@@ -733,6 +779,6 @@
 </div>
 </div>
 </div>
-<script src="app.js?v=20261004h"></script>
+<script src="app.js?v=20261007q"></script>
 </body>
 </html>

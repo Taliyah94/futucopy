@@ -74,6 +74,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 import datetime as _dt
@@ -691,6 +692,110 @@ def merge_qqq_daily(old, fresh):
 
 
 # ---------------------------------------------------------------------------
+# 美元/离岸人民币（USDCNH）日频汇率
+#
+# 数据源：frankfurter（欧洲央行每日参考价 base=USD&symbols=CNY），**只有日频、没有分时**。
+# 为什么也落成文件、前端只读不拉：
+#   ① 浏览器直连 api.frankfurter.dev 在部分网络下会 `ERR_CERT_COMMON_NAME_INVALID`
+#      （HTTPS 中间人拦截），fetch 静默失败 → 自选行拿不到价、K 线直接画不出来；
+#   ② 与 qqq_daily 一样「每天拉一次、前端只读最新」，请求数恒定、行为可预期。
+# 口径注意：这是 **ECB 在岸 CNY 参考价**，不是离岸 CNH 现货 —— 两者有几十个基点价差，
+#   但日线级别走势一致；周末与 ECB 假日不更新（停在上一个交易日）。
+# 起点与 qqq_daily 对齐；合并语义与 QQQ 相同（旧历史保留，旧末日及之后以新抓取为准）。
+FRANKFURTER_URL = "https://api.frankfurter.dev/v1/{start}..{end}?base=USD&symbols=CNY"
+FX_DAILY_KEY = "usdcnh_daily"     # 顶层键名（非 6 位基金代码，前端遍历基金时会忽略）
+FX_SERIES_START = "2025-01-02"    # 与 fund_holdings.json 里 qqq_daily 的首日一致
+
+
+def _norm_fx_rows(rates):
+    """{"2026-10-02": {"CNY": 6.7046}} -> [{"d": "YYYY-MM-DD", "c": 汇率}, ...]（升序）。
+
+    保留 4 位小数：ECB 给的就是 4 位，USDCNH 在这个量级上 4 位足够（1e-4 ≈ 0.0015%）。
+    """
+    if not isinstance(rates, dict):
+        return []
+    out = []
+    for d, v in rates.items():
+        if not isinstance(v, dict) or v.get("CNY") is None:
+            continue
+        try:
+            c = float(v["CNY"])
+        except (ValueError, TypeError):
+            continue
+        if c > 0:
+            out.append({"d": str(d), "c": round(c, 4)})
+    out.sort(key=lambda x: x["d"])
+    return out
+
+
+def fetch_fx_daily(start=FX_SERIES_START, retries=3, timeout=30):
+    """抓 USD->CNY 日频收盘，返回升序列表；失败返回 None（不阻断主流程）。
+
+    curl 优先、urllib 兜底：部分 Windows 环境有 HTTPS 中间人代理，Python 校验证书会报
+    `certificate is not valid for 'api.frankfurter.dev'`，而 curl 走系统证书链能过。
+    GitHub Actions 没有这层拦截，curl 同样可用，所以统一先走 curl。
+    """
+    end = _dt.date.today().isoformat()
+    url = FRANKFURTER_URL.format(start=start, end=end)
+    last_err = None
+    for attempt in range(1, retries + 1):
+        try:
+            raw = subprocess.run(["curl", "-sS", "--max-time", str(timeout), url],
+                                 capture_output=True, timeout=timeout + 5)
+            if raw.returncode == 0 and raw.stdout.strip():
+                got = _norm_fx_rows(json.loads(raw.stdout.decode("utf-8", "ignore")).get("rates"))
+                if got:
+                    return got
+                last_err = ValueError("empty rates")
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+            obj = json.loads(urllib.request.urlopen(req, timeout=timeout).read().decode("utf-8", "ignore"))
+            got = _norm_fx_rows(obj.get("rates"))
+            if got:
+                return got
+            last_err = ValueError("empty rates")
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+        if attempt < retries:
+            time.sleep(2 * attempt)
+    sys.stderr.write("  [FX] 抓取失败: %s\n" % last_err)
+    return None
+
+
+def load_existing_fx(path):
+    """读取已存盘 JSON 里的 usdcnh_daily，作为增量追加的基底。"""
+    if not (path and os.path.exists(path)):
+        return []
+    try:
+        with open(path, encoding="utf-8") as f:
+            obj = json.load(f)
+    except Exception as e:  # noqa: BLE001 - 旧文件损坏则当空，退回全量
+        sys.stderr.write("  [FX] 读取旧文件失败，本次全量重抓：%s\n" % e)
+        return []
+    return _norm_fx_rows(obj.get(FX_DAILY_KEY))
+
+
+def merge_fx_daily(old, fresh):
+    """增量合并（与 merge_qqq_daily 同语义）：
+    - 旧历史（< 旧数据最后一天）原样保留，防止源端截断抹掉已有历史；
+    - 旧数据最后一天及之后以新抓取为准（刷新当日 + 追加新交易日）。
+    任一侧为空则直接返回另一侧（**fresh 为空时返回 old**，所以抓失败不会丢历史）。"""
+    if not old:
+        return fresh or []
+    if not fresh:
+        return old
+    last_d = old[-1]["d"]
+    by_d = {r["d"]: r for r in old}
+    for r in fresh:
+        if r["d"] >= last_d:
+            by_d[r["d"]] = r
+    return sorted(by_d.values(), key=lambda x: x["d"])
+
+
+
+# ---------------------------------------------------------------------------
 # 主流程
 # ---------------------------------------------------------------------------
 def load_config(path):
@@ -885,6 +990,8 @@ def main(argv=None):
                     help="跳过日股/韩股行情快照抓取")
     ap.add_argument("--no-qqq", action="store_true",
                     help="跳过 QQQ 日线抓取（曲线图基准对比用）")
+    ap.add_argument("--no-fx", action="store_true",
+                    help="跳过美元/离岸人民币汇率日线抓取（自选行与 K 线用）")
     ap.add_argument("--snapshot-days", type=int, default=SNAPSHOT_DAYS,
                     help="行情快照保留天数（默认 %d）" % SNAPSHOT_DAYS)
     args = ap.parse_args(argv)
@@ -934,6 +1041,27 @@ def main(argv=None):
         elif not args.quiet:
             sys.stderr.write("  [QQQ] 未取得日线，跳过\n")
 
+    # 美元/离岸人民币日频汇率（自选行 + K 线）：与 QQQ 同样的增量合并
+    if not args.no_fx:
+        fx_old = load_existing_fx(args.output)
+        # 起点跟着 qqq_daily 走（「和 QQQ 一样」）：文件里已有 QQQ 历史就取它的首日
+        start = FX_SERIES_START
+        _qqq_hist = load_existing_qqq(args.output)
+        if _qqq_hist:
+            start = min(start, _qqq_hist[0]["d"])
+        fx = fetch_fx_daily(start=start, retries=args.retries)
+        fx_merged = merge_fx_daily(fx_old, fx)
+        # ⚠️ 必须无条件写回：result 是全新 dict，fetch 失败时 merge 返回旧数据，
+        #    不写就等于把已有汇率历史抹掉。
+        if fx_merged:
+            result[FX_DAILY_KEY] = fx_merged
+            if not args.quiet:
+                _n_new = len(fx_merged) - len(fx_old) if fx_old else len(fx_merged)
+                sys.stderr.write("  [FX] 汇率日线 %d 条（%s ~ %s，新增 %d 条）\n" % (
+                    len(fx_merged), fx_merged[0]["d"], fx_merged[-1]["d"], _n_new))
+        elif not args.quiet:
+            sys.stderr.write("  [FX] 未取得汇率日线\n")
+
     # 增量合并：与存盘文件取并集（同日新覆盖旧），抓取失败的部分沿用旧数据
     if not args.no_merge:
         merge_with_existing(result, args.output, codes, quiet=args.quiet)
@@ -960,7 +1088,7 @@ def main(argv=None):
             sys.stderr.write("写文件失败：%s\n上方 JSON 仍可直接复制使用\n" % e)
 
     # 统计：成功（含代理）与失败（无 items）。跳过顶层非基金键（qqq_daily / _daily_quotes）
-    NON_FUND_KEYS = (SNAPSHOT_KEY, "qqq_daily")
+    NON_FUND_KEYS = (SNAPSHOT_KEY, "qqq_daily", FX_DAILY_KEY)
     ok = sum(1 for k, v in result.items()
              if k not in NON_FUND_KEYS and isinstance(v, dict) and v.get("items"))
     failed = len([c for c in codes if c not in result or not result[c].get("items")])

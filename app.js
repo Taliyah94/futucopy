@@ -41,8 +41,8 @@
     //   - 带 txCode 的行：实时，腾讯行情（A股指数，上证=sh000001）
     //   - 不带 instId/txCode 的行：静态占位（OKX 无对应品种：美元离岸/10Y 国债）
     //   - price/pct 为主显示，extPrice/extPct 为次级「盘前」显示
-    /* 自选列表。cat = 分类归属（对应顶部 全部/美股/沪深/期货/加密货币 五个 tab）：
-       us=美股  cn=A股/沪深  fut=期货  ccy=加密货币  fx=外汇(归入期货)  bond=债券(归入期货)
+    /* 自选列表。cat = 分类归属（对应顶部 全部/美股/沪深/期货/加密币 五个 tab）：
+       us=美股  cn=A股/沪深  fut=期货  ccy=加密币  fx=外汇(归入期货)  bond=债券(归入期货)
        market 字段仍保留原始交易所标识（沪深/外汇/NYMEX/CME/US/USDT 等）用于副行显示，两套不要混。 */
     watchlist: [
       // ⚠️ 前两行是**静态行**：无数据源（无 instId / txCode / fxCode），点进去也没有 K 线。
@@ -253,6 +253,35 @@
     return d.getHours() * 60 + d.getMinutes();
   }
 
+  /* 「nowTs 所在 ET 日期」再往前/后 dayOffset 天 + 当天 etMin 分钟 → UTC 时间戳。
+     用「猜偏移(-4/-5) → 构造 → toLocaleString 反查分钟」自校验，夏令时也不会算错。
+     抽出来是因为「1D 起点」和「各时段起点」都要用同一套换算，别各写一份。 */
+  function etTsOn(nowTs, dayOffset, etMin) {
+    for (const off of [-4, -5]) {
+      const loc = new Date(nowTs + off * 3600e3);
+      const d = new Date(Date.UTC(loc.getUTCFullYear(), loc.getUTCMonth(), loc.getUTCDate() + dayOffset));
+      const guess = d.getTime() - off * 3600e3 + etMin * 60000;
+      const back = new Date(new Date(guess).toLocaleString('en-US', { timeZone: 'America/New_York' }));
+      if (back.getHours() * 60 + back.getMinutes() === etMin) return guess;
+    }
+    return nowTs + dayOffset * 86400e3;                   // 兜底
+  }
+
+  /* 「**最近一个已过的 ET 20:00**」的时间戳 —— 1D（交易日）窗口的统一起点。
+     用户 2026-10-05 定稿：「美东 20:00 夜盘开始为 1D 的开始，到 24 小时后 20:00 盘后结束」，
+     窗口内顺序 = 夜盘 → 盘前 → 盘中 → 盘后。
+     ⚠️ **不要再用「从最新往回扫 m>=1200 的点」那种扫法**（自选页原先就是这么写的），
+        它在**当前不在夜盘时**（盘前/盘中/盘后，也就是绝大多数时间）会立刻 k=0，
+        然后走兜底退化成**滚动 24 小时** —— 起点变成「现在往前 24h」而不是 20:00，
+        正是用户报的「1d 取了 24h 的，不对」。 */
+  function etLast20Ts(nowTs) {
+    return etTsOn(nowTs, etMinutes(nowTs) >= 1200 ? 0 : -1, 1200);
+  }
+
+  /* 各时段的**起始 ET 分钟**（US_SESSIONS 的 match 区间的左端）。
+     用来判「当前属于今天还是昨天的这个时段」—— 见 assetSeries 里的窗口裁剪。 */
+  const SESS_START_MIN = { pre: 240, regular: 570, post: 960, night: 1200 };
+
   /* 翻页拉取原始 K 线（最新在前），拼够 total 根或源返回空为止（单页上限 300）。
      OKX 源最多回溯 1440 根/页链，1m = 24h，对「最近一个美东 20:00 → 现在」这个窗口足够。 */
   async function fetchRawCandles(instId, total, bar) {
@@ -302,14 +331,14 @@
             （夜盘跨零点），不是上一夜盘。必须用上面的 m < 240 判定来区分。
        兜底：数据不足 20:00（刚上市/源刚接上）→ 退回滚动 1440 根。 */
     if (sessionKey === 'all') {
-      const isNight = (m) => m >= 1200 || m < 240;         // 夜盘 ET [20:00, 次日04:00)
-      /* raw 最新在下标 0，下标越大越早。从 0 连续吃 isNight 的点，停在第一根非夜盘处 —— 
-         实测（ET 10-04 02:02）k=363，且 all[362] = 10-03 20:00 正是窗口起点、all[363] = 19:59 已越界。
-         所以窗口就是 **[0, k)** 这一段（**含** k-1 那根 20:00），反转后即「20:00 → 最新」。 */
-      let k = 0;
-      while (k < raw.length && isNight(etMinutes(+raw[k][0]))) k++;
-      if (k === 0) k = Math.min(raw.length, 1440);           // 兜底：当前不在夜盘（白天）→ 滚动 24h
-      const rows2 = raw.slice(0, k).reverse();               // 旧 -> 新
+      /* ⚠️ 2026-10-05 改用 `etLast20Ts()`：**从最新往回扫 isNight** 的老写法在
+         **当前不是夜盘时**（盘前/盘中/盘后 —— 一天里 16 小时都是这种）第一根就出局 → k=0
+         → 兜底退化成滚动 1440 根 = 24h，起点不是 20:00（用户报「1d 取了 24h 的，不对」）。
+         现在直接按时间戳切：**最近一个已过的 ET 20:00 → 最新一根**（天然 ≤ 24h，
+         顺序 = 夜盘 20:00-04:00 → 盘前 04:00-09:30 → 盘中 → 盘后 16:00-20:00）。 */
+      const start = etLast20Ts(Date.now());
+      const rows2 = raw.filter((r) => +r[0] >= start).reverse();   // 旧 -> 新
+      if (rows2.length < 2) return raw.slice(0, Math.min(raw.length, 1440)).reverse();  // 兜底
       return rows2.map((r) => {
         const d = new Date(new Date(+r[0]).toLocaleString('en-US', { timeZone: 'America/New_York' }));
         /* t 带**美东日期**前缀（"YYYY-MM-DD HH:mm"）：这个窗口会跨日界，只给 HH:MM 分不清哪天。
@@ -945,26 +974,37 @@
      与账户总资产差额 = 推算总资产 − 账户页 totalCny（账户页是**账面口径**：基金按官方净值 navL、
        证券按同一时刻实时价），所以它现在 ≈ 基金的实时估值增量（正常几厘到 1 个点），
        不再是恒 0；恒 0 会被「基金估值 vs 官方净值」的差吃掉，反而看不清。 */
+  /* 分时图是否正在页内展开（移动端）。汇总框据此隐藏：
+     用户 2026-10-05：「移动端点了分时走势后账户资产那些就隐藏吧，下面只留分时走势」。
+     ⚠️ 必须走这个状态位而不是在 open/close 里直接改 `tradeSum.hidden` ——
+        renderTradeSum 每次刷新都会 `box.hidden = false` 把它重新亮回来。 */
+  let assetSheetOpen = false;
+
   function renderTradeSum() {
     const box = document.getElementById('tradeSum');
     if (!box) return;
     if (!TRADE_POS.ready || TRADE_POS.totalCny == null) { box.hidden = true; return; }
-    box.hidden = false;
+    box.hidden = assetSheetOpen;   // 分时图展开时让位（收起后自动恢复）
+    /* 金额一律**取整**（用户 2026-10-05：「都保留到整数」）：几十万量级的小数点没有信息量，
+       还会把这一格撑宽、右侧美元/利息两行被挤到横滚区。
+       ⚠️ 先 Math.round(Math.abs(v)) 再自己拼符号：直接 Math.round(-0.5) 会得到 -0（显示成 "-0"）。 */
     const f2 = (v, sign) => {
       if (v == null || !isFinite(v)) return '--';
-      const s = Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      const s = Math.round(Math.abs(v)).toLocaleString('en-US');
       return (sign ? (v > 0 ? '+' : v < 0 ? '-' : '') : (v < 0 ? '-' : '')) + s;
     };
     const fx = TRADE_POS.fx || 1;
     /* 推算总资产 = **上面 8 行的市值求和 + 现金**（用户 2026-10-04 定稿）。
        市值取值必须与行内所见完全一致，否则「加起来」对不上：
-         证券 = tradeValueCny（腾讯价 × 数量），兜底 valueCny → 快照 posVal0
-         基金 = estAmount（无估值时回退官方净值市值 amount） */
+         证券 = tradeValueCny（OKX/腾讯价 × 数量），退到 valueCny（Alpaca 账面价）
+       ⚠️ 2026-10-05：这条链**不再兜底 IBKR 快照市值 posVal0**（用户：「市值合计也不用保留
+          ibkr 快照兜底，没有意义」）。没有实时价的行现在**不计入**，而不是拿旧快照充数 ——
+          充数会让「推算总资产」在 Alpaca 挂掉时显示一个看似正常的数，
+          与汇总框第一行的「账户资产」差额巨大却看不出原因。 */
     let stockNow = 0;
     TRADE_POS.stock.forEach((r) => {
       const v = r.tradeValueCny != null ? r.tradeValueCny
-        : (r.valueCny != null ? r.valueCny
-          : (r.h && r.h.posVal0 != null ? r.h.posVal0 * fx : null));
+        : (r.valueCny != null ? r.valueCny : null);
       if (v != null) stockNow += v;
     });
     let fundNow = 0;
@@ -972,6 +1012,20 @@
     const posSum = stockNow + fundNow;                    // 持仓市值合计（= 8 行求和）
     const cashSum = TRADE_POS.ibkrCashCny + TRADE_POS.cashCny;
     const estCny = posSum + cashSum;                      // 推算总资产
+    /* 给「推算总资产分时图」留一份同口径的拆解（见 assetSeries）。
+       ⚠️ 必须在 estCny 之后同步存，不能等下一次刷新 —— 绘图是异步的，
+          晚一步就会拿到上一轮的股数/基金值，曲线末点会和汇总对不上。 */
+    TRADE_POS.parts = {
+      fx,
+      /* 曲线基准 = **账户资产**（用户 2026-10-05：「涨跌幅基准应该是账户资产 1052275」）。
+         与下面第一行「账户资产」同源同刻，曲线末点的 % 与汇总框的「差额 %」因此对得上。
+         必须在 estCny 之后同步存 —— 绘图是异步的，晚一步会拿到上一轮的基准。 */
+      base: TRADE_POS.totalCny,
+      cash: cashSum,
+      fund: fundNow,                                                    // 当日基金估值（盘中无分钟级数据 → 常数）
+      fundPrev: TRADE_POS.fund.reduce((s, f) => s + (f.amount || 0), 0), // 昨收官方净值市值（基准之一）
+      stocks: TRADE_POS.stock.map((r) => ({ code: r.code, qty: r.qty, prev: r.prevClose })).filter((s) => s.qty),
+    };
     const total = TRADE_POS.totalCny;
     // 抹掉浮点残差：几十万量级的浮点求和易差 0.0001 → 会显示「+0.00」还挂涨色，0.005 元以下归零
     const diffRaw = estCny - total;
@@ -985,6 +1039,466 @@
     setTxt('tradeSumDiff', f2(diff, true), diff > 0 ? 'up' : diff < 0 ? 'down' : '');
     setTxt('tradeSumPct', pct == null ? '--' : (pct > 0 ? '+' : '') + pct.toFixed(2) + '%',
       pct > 0 ? 'up' : pct < 0 ? 'down' : '');
+
+    /* 下面是「推算总资产分时图」：汇总一旦有数就显示图表区（无持仓时整块隐藏）。
+       ⚠️ 这里只负责显隐与触发，K 线拉取在 refreshAssetChart 里节流（60s 一次）。 */
+    const ach = document.getElementById('assetChart');
+    if (ach) ach.hidden = !TRADE_POS.ready || !TRADE_POS.parts || !TRADE_POS.parts.stocks.length;
+    const want = assetPending; assetPending = false;
+    refreshAssetChart(want);          // 之前有过「数据没就绪被跳过」的历史 → 这次补画
+  }
+
+  /* ===================================================================
+     持仓「推算总资产」分时图（2026-10-05 新增，仿富途时段下拉）
+     ------------------------------------------------------------------
+     曲线口径与上面的「推算总资产」**完全同源**：
+         总资产(t) = Σ(股数_i × 该股分钟价_i(t)) × FX + 基金 + 现金
+     基金只有日频净值（盘中无分钟级数据）、现金不动、汇率日频 → 这三项在一天内
+     视作**常数**（只抬曲线高度，不影响形状）；时段按美东切，口径与自选页分时一致。
+       盘前 04:00-09:30 / 盘中 09:30-16:00 / 盘后 16:00-20:00
+       夜盘 20:00-次日 04:00（跨零点）/ 24h（滚动 24 小时）/ 全天（最近一个美东 20:00 起的交易日窗口）
+     ⚠️ 源里没数据的时段（休市、或该源根本没这根 K 线）就画空白 ——
+        绝不伪造数据、也不加「暂无数据」文案（与自选分时图同一约定）。
+     ⚠️ 分钟价取自 **OKX 股票永续 1m**（与全站美股行情主源一致，见 fetchRawCandles）；
+        它 7x24 连续，与真实美股盘前/盘后的时段划分靠 `etMinutes` 自己切。 */
+  let assetChartData = null;        // 最近一次算出的序列（定时刷新时复用，不重复拉 K 线）
+  const ASSET_SESS = {
+    pre:     { label: '盘前', icon: '<rect x="1.5" y="4" width="4.6" height="8" rx="1" fill="#c9cedb"/><rect x="7.9" y="4" width="4.6" height="8" rx="1" fill="#2b3245"/>' },
+    regular: { label: '盘中', icon: '<rect x="2" y="1.5" width="4" height="13" rx="1" fill="#2b3245"/><rect x="8" y="1.5" width="4" height="13" rx="1" fill="#2b3245"/>' },
+    post:    { label: '盘后', icon: '<rect x="2" y="1.5" width="4" height="13" rx="1" fill="#c9cedb"/><rect x="8" y="1.5" width="4" height="13" rx="1" fill="#2b3245"/>' },
+    night:   { label: '夜盘', icon: BOX_ICON('24', 7) },
+    h24:     { label: '24h',  icon: BOX_ICON('24', 7) },
+    all:     { label: '全天', icon: BOX_ICON('1D', 6.4) },
+  };
+  function BOX_ICON(txt, size) {
+    return '<rect x="1" y="1" width="12" height="14" rx="2.6" fill="none" stroke="#2b3245" stroke-width="1.4"/>'
+      + '<text x="7" y="11.4" text-anchor="middle" font-size="' + size + '" font-weight="700" fill="#2b3245"'
+      + ' font-family="Helvetica,Arial,sans-serif">' + txt + '</text>';
+  }
+  const assetIconSvg = (key) => '<svg viewBox="0 0 14 16" aria-hidden="true">' + (ASSET_SESS[key] ? ASSET_SESS[key].icon : '') + '</svg>';
+  /* 默认时段 = 当前进行中的美东时段（与自选页分时同款规则：夜盘看夜盘、盘前看盘前） */
+  let assetSessSel = currentSessionKey();
+
+  /* 取「该时段内」的持仓总资产分钟序列。
+     返回 null = 数据不足/没持仓，调用方直接画空白。 */
+  async function assetSeries(sess) {
+    const p = TRADE_POS.parts;
+    if (!p || !p.stocks || !p.stocks.length) return null;
+    const key = ASSET_SESS[sess] ? sess : 'regular';
+    const sessDef = (key === 'h24') ? null : (US_SESSIONS[key] || US_SESSIONS.regular);
+
+    /* 各股分钟线并行拉（OKX 1m，最多回溯 1440 根 ≈ 24h，够覆盖所有时段）。
+       ⚠️ instId 拼接规则见 okxInst（OKX_ALIAS：GOOG 复用 GOOGL）；这里持仓都是正股，直接拼。 */
+    const legs = await Promise.all(p.stocks.map(async (s) => {
+      try {
+        const raw = await fetchRawCandles(s.code + '-USDT-SWAP', 1440, '1m');  // 最新在前
+        if (!raw || !raw.length) return { s, pts: [] };
+        const asc = raw.slice().map((r) => ({ ts: +r[0], price: +r[4] })).sort((a, b) => a.ts - b.ts);
+        return { s, pts: asc };
+      } catch (e) { return { s, pts: [] }; }
+    }));
+
+    const nowTs = Date.now();
+    /* 时间轴 = 所有股该时段内的 ts 并集（升序）。
+       24h 时段不按 ET 时段 match，直接取滚动 24 小时窗口。 */
+    const tsSet = new Set();
+    const target = Number.isFinite(p.fx) ? p.fx : 1;
+    const fund = p.fund || 0, cash = p.cash || 0;
+    /* 每只股在该时段的首点之前的空档，用**昨收**顶上（= 基准价），
+       这样窗口一开始曲线就在昨收位置，不会掉到 0 或者 NaN。 */
+    const prevOf = {};
+    p.stocks.forEach((s) => { prevOf[s.code] = (s.prev > 0 ? s.prev : null); });
+
+    for (const leg of legs) {
+      for (const pt of leg.pts) {
+        const m = etMinutes(pt.ts);
+        if (key === 'h24') {
+          if (pt.ts >= nowTs - 24 * 3600 * 1000) tsSet.add(pt.ts);
+        } else if (key === 'all') {
+          tsSet.add(pt.ts);
+        } else if (sessDef && sessDef.match(m)) {
+          tsSet.add(pt.ts);
+        }
+      }
+    }
+    let axis = Array.from(tsSet).sort((a, b) => a - b);
+    if (axis.length < 2) return null;
+
+    /* ⚠️⚠️ **窗口裁剪**（用户 2026-10-05：「推算总资产曲线图横坐标不太对吧」）。
+       上面 tsSet 只是「按 match 过滤 24h 全量」，**没有取「最近一个该时段窗口」**，
+       于是 24h 里的两段同名时段会一起进 axis：
+         · 盘前 = 昨天 04:00~09:30 + 今天 04:00~09:30 都被 match 命中 → 画出一整天
+           （截图里 X 轴 04:14 → 06:04 → 07:53 → 04:13，跨了一天多）；
+         · all（1D）更离谱：match 恒真 → 整 24h 全进 → 起点是「现在往前 24h」，
+           而不是「最近一个美东 20:00」。
+       口径与自选页 `fetchUsSessionSeries` 完全一致（那边是降序 raw、这边是升序 axis，故方向相反）：
+         ① all = **交易日窗口**：最近一个 ET 20:00（夜盘开盘 = 新交易日起点）→ 最新一根。
+            用 `etLast20Ts()` 直接算时间戳，**不要**写成「从最新往前扫 m>=1200」——
+            当前不是夜盘时（一天里 16 小时都是）那种扫法永远扫不到，裁剪会被跳过、退化成 24h。
+         ② 其他时段 = **最近一个该时段窗口**：从最新往回找第一根 match（head），
+            再向更早延伸直到遇见非本时段（tail），取 [tail, head]。
+         ③ h24 保持滚动 24 小时（它本来就是「24h」语义，不裁）。 */
+    if (key === 'all') {
+      /* 交易日窗口：**最近一个已过的 ET 20:00 → 最新一根**（与自选页同一个工具，
+         口径必然一致）。原来这里写的是「从末尾往前扫第一个 m>=1200」，
+         在当前不是夜盘时扫不到 → 整个裁剪步骤被跳过 → 退化成滚动 24h。 */
+      const start = etLast20Ts(Date.now());
+      const cut = axis.filter((t) => t >= start);
+      if (cut.length >= 2) axis = cut;
+    } else if (sessDef) {
+      /* ⚠️⚠️ 这里**不能**用自选页那套「从 head 往更早延伸、遇非 match 就停」——
+         那套成立的前提是 raw **连续**（每分钟都有点，所以自然会撞到时段边界）。
+         而这里的 axis 是 tsSet 去重后的集合，**只含匹配时段的 ts**：
+         昨天盘前 05:21…09:30 与今天盘前 04:00…05:20 在数组里是**紧挨着的**
+         （中间 18 小时的非盘前时段根本没进数组），延伸会一路走到下标 0，
+         结果窗口跨了一整天（实测 pre = 330 点、05:21 → 次日 05:20）。
+         正解：先判断「当前属于今天还是昨天的这个时段」——
+           now 的 ET 分钟 >= 该时段起始 → 今天，否则昨天（今天这个还没开始）。
+         再按时间戳起点裁剪，天然只留一段。 */
+      const nowTs = Date.now();
+      const sMin = SESS_START_MIN[key];
+      if (sMin != null) {
+        const start = etTsOn(nowTs, etMinutes(nowTs) >= sMin ? 0 : -1, sMin);
+        const cut = axis.filter((t) => t >= start);
+        if (cut.length >= 2) axis = cut;
+        else return null;                 // 该时段尚无数据 → 交给上层自动 fallback 换时段
+      }
+    }
+
+    /* 合成：每个时间点上，每只股取「该时刻及之前最近一根」的价格（前值填充），
+       没有任何历史点的用昨收；再换成 CNY 加常数项。 */
+    const out = [];
+    for (const ts of axis) {
+      let equityUsd = 0;
+      for (const leg of legs) {
+        const s = leg.s;
+        let price = prevOf[s.code];
+        for (const pt of leg.pts) { if (pt.ts > ts) break; if (pt.price > 0) price = pt.price; }
+        if (price == null) continue;
+        equityUsd += (s.qty || 0) * price;
+      }
+      out.push({ ts, price: equityUsd * target + fund + cash });
+    }
+    /* 基准 = **账户资产**（用户 2026-10-05：「推算总资产曲线涨跌幅基准应该是账户资产 1052275 吧，
+       +1.1% 左右」）。也就是持仓页汇总框第一行那个数（IBKR 账面口径：证券权益 + 基金 + 现金），
+       与「推算总资产」的差额 = 曲线当前点相对它的偏离 —— 语义上正是这张图要看的东西。
+       ⚠️ 原来的基准是「昨收口径」（Σ股数×昨收×FX + 基金昨收净值 + 现金），
+          那是个**虚构的、与页面任何数字都对不上**的起点（实测同一时刻 1,062,xxx vs 账户 1,052,275），
+          于是「+1.97%」跟汇总框里的「差额 +11,074 / +1.05%」对不上号，很别扭。
+       ⚠️ base 由 `renderTradeSum()` 写进 `parts.base`（它同时刷新 TRADE_POS.totalCny），
+          两者同源同刻，不会出现「曲线用旧基准、汇总用新基准」。
+       取不到时（账户页还没跑完）退回原昨收口径，别让整张图空掉。 */
+    let base = Number(p.base) > 0 ? p.base : 0;
+    if (!base) {
+      base = (p.fundPrev || 0) + (p.cash || 0);
+      p.stocks.forEach((s) => { if (s.prev > 0) base += (s.qty || 0) * s.prev * target; });
+    }
+    if (!base) return null;
+
+    return {
+      base,
+      pts: out.map((d) => ({
+        t: etHHMM(d.ts),
+        day: etMD(d.ts),        // 'MM/DD'：1D 窗口跨日界时要靠它画竖线（见 drawAssetChart）
+        ts: d.ts,
+        v: d.price,
+        pct: (d.price / base - 1) * 100,
+      })),
+    };
+  }
+  function etHHMM(ts) {
+    const d = new Date(new Date(ts).toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  }
+  /* 美东日期 'MM/DD' —— 只给「1D（20:00 → 次日 20:00）」那种跨日窗口区分哪天用 */
+  function etMD(ts) {
+    const d = new Date(new Date(ts).toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    return String(d.getMonth() + 1).padStart(2, '0') + '/' + String(d.getDate()).padStart(2, '0');
+  }
+
+  /* 画持仓总资产分时（左=金额 CNY，右=相对**账户资产**的百分比，褐色虚线=账户资产基准线）。
+     ⚠️ 别再写回「昨收」：基准 2026-10-05 起是 `parts.base` = 账户资产（TRADE_POS.totalCny）。 */
+  function drawAssetChart(data) {
+    const canvas = document.getElementById('assetCanvas');
+    const stage = document.getElementById('assetChartStage');
+    if (!canvas || !stage) return;
+    /* 无数据：重置画布尺寸即清空，仅留空白背景（与自选分时图同一约定） */
+    const clear = () => {
+      canvas.width = Math.round(stage.clientWidth * (window.devicePixelRatio || 1));
+      canvas.height = Math.round(stage.clientHeight * (window.devicePixelRatio || 1));
+    };
+    if (!data || !data.pts || data.pts.length < 2) { clear(); return; }
+
+    const dpr = window.devicePixelRatio || 1;
+    const W = stage.clientWidth, H = stage.clientHeight;
+    if (!W || !H) return;
+    canvas.width = Math.round(W * dpr);
+    canvas.height = Math.round(H * dpr);
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+
+    const narrow = W < 460;
+    const padL = narrow ? 52 : 62, padR = narrow ? 44 : 50, padT = 10, padB = 20;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    const pts = data.pts, base = data.base;
+    /* ⚠️ lo/hi 必须 `let`：下面 for 循环要往里夹最新极值（实时末端可能越界），
+       写成 const 会在运行时抛 `Assignment to constant variable`，整张图静默变空白。
+       ⚠️ **Y 轴上下值只由「横坐标范围内的数据」决定，不再把 base 夹进极值**（用户 2026-10-05：
+       「这个图基准线如果太低就标在最下面就行了，纵坐标不用管这个基准线」）。
+       之前 `Math.min(pts[0].v, base)` 会把基准强行拉进范围：日内只涨 1% 时，
+       基准线远在画面之外 → 整张图为了迁就它压扁成一条横线（截图里就是这样）。
+       现在基准线照画，但**夹到绘图区底部**表示，不影响刻度。 */
+    let lo = Infinity, hi = -Infinity;
+    for (const d of pts) { if (d.v < lo) lo = d.v; if (d.v > hi) hi = d.v; }
+    if (!isFinite(lo) || !isFinite(hi)) { clear(); return; }
+    const sp = (hi - lo) || Math.max(1, Math.abs(base) * 1e-4);
+    const yMin = lo - sp * 0.12, yMax = hi + sp * 0.12;
+    const X = (i) => padL + (i / (pts.length - 1)) * plotW;
+    const Y = (v) => padT + (1 - (v - yMin) / (yMax - yMin)) * plotH;
+    /* 基准线的纵坐标：落在范围内就按真实位置画；低于下界就**贴到绘图区底部**，
+       高于上界同理贴顶。clamp 后它只是一条位置指示线，不参与刻度计算。 */
+    const baseY = Math.min(Math.max(Y(base), padT), padT + plotH);
+
+    const money = (v) => Math.round(v).toLocaleString('en-US');
+    ctx.font = '10px "PingFang SC", "Microsoft YaHei", sans-serif';
+    ctx.textBaseline = 'middle';
+    const GRID = 4;
+    for (let i = 0; i <= GRID; i++) {
+      const y = padT + (i / GRID) * plotH;
+      const v = yMax - (i / GRID) * (yMax - yMin);
+      const pct = (v / base - 1) * 100;
+      ctx.strokeStyle = THEME.grid;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 4]);
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + plotW, y); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = THEME.axisText;
+      ctx.textAlign = 'right';
+      ctx.fillText(money(v), padL - 6, y);
+      const pc = pct > 0.0001 ? THEME.up : pct < -0.0001 ? THEME.down : THEME.flat;
+      ctx.fillStyle = pc;
+      ctx.textAlign = 'left';
+      ctx.fillText((pct > 0 ? '+' : '') + pct.toFixed(2) + '%', padL + plotW + 6, y);
+    }
+
+    /* 基准线（账户资产 = 0% 的那条）：baseY 已在上面 clamp 到绘图区内。
+       ⚠️ 2026-10-05 用户要求：
+         · 颜色改**褐色**（原来灰色虚线太弱，看着像网格线）→ #8B4513，线宽 1.2、虚线更疏；
+         · **删掉**「基准 1,052,275」那行小字 —— 头部右上角已经有一个「账户资产 1,052,275」，
+           同一个数在图里出现两次是重复。 */
+    ctx.strokeStyle = '#8B4513';
+    ctx.lineWidth = 1.2;
+    ctx.setLineDash([5, 3]);
+    ctx.beginPath(); ctx.moveTo(padL, baseY); ctx.lineTo(padL + plotW, baseY); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.lineWidth = 1;
+
+    /* 面积 + 折线 */
+    const up = pts[pts.length - 1].pct >= 0;
+    const lineColor = up ? THEME.up : THEME.down;
+    const grad = ctx.createLinearGradient(0, padT, 0, padT + plotH);
+    grad.addColorStop(0, up ? 'rgba(0,168,107,0.18)' : 'rgba(234,59,59,0.18)');
+    grad.addColorStop(1, 'rgba(46,107,255,0.01)');
+    ctx.beginPath();
+    ctx.moveTo(X(0), Y(pts[0].v));
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(X(i), Y(pts[i].v));
+    const path = new Path2D();
+    for (let i = 0; i < pts.length; i++) {
+      if (i === 0) path.moveTo(X(i), Y(pts[i].v)); else path.lineTo(X(i), Y(pts[i].v));
+    }
+    ctx.save();
+    ctx.lineTo(X(pts.length - 1), padT + plotH);
+    ctx.lineTo(X(0), padT + plotH);
+    ctx.closePath();
+    ctx.fillStyle = grad; ctx.fill();
+    ctx.restore();
+    ctx.strokeStyle = lineColor;
+    ctx.lineWidth = 1.4;
+    ctx.lineJoin = 'round';
+    ctx.stroke(path);
+
+    /* 最新点：水平虚线 + 两端色块标签（左=金额、右=百分比） */
+    const last = pts[pts.length - 1];
+    const lastY = Y(last.v);
+    ctx.strokeStyle = up ? 'rgba(0,168,107,0.8)' : 'rgba(234,59,59,0.8)';
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath(); ctx.moveTo(padL, lastY); ctx.lineTo(padL + plotW, lastY); ctx.stroke();
+    ctx.setLineDash([]);
+    const tagH = 15;
+    const tagY = clamp(lastY, padT + tagH / 2, padT + plotH - tagH / 2);
+    const drawTag = (x, w, text) => {
+      const r = 3, yy = tagY - tagH / 2;
+      ctx.fillStyle = lineColor;
+      ctx.beginPath();
+      ctx.moveTo(x + r, yy);
+      ctx.arcTo(x + w, yy, x + w, yy + tagH, r);
+      ctx.arcTo(x + w, yy + tagH, x, yy + tagH, r);
+      ctx.arcTo(x, yy + tagH, x, yy, r);
+      ctx.arcTo(x, yy, x + w, yy, r);
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 10px "PingFang SC", "Microsoft YaHei", sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(text, x + w / 2, tagY);
+      ctx.font = '10px "PingFang SC", "Microsoft YaHei", sans-serif';
+    };
+    drawTag(padL - (padL - 4), padL - 6, money(last.v));
+    drawTag(padL + plotW + 2, padR - 4, (last.pct > 0 ? '+' : '') + last.pct.toFixed(2) + '%');
+
+    /* 时间轴（美东） */
+    ctx.fillStyle = THEME.axisText;
+    ctx.textAlign = 'center';
+    const ticks = narrow ? 4 : 6;
+    for (let i = 0; i < ticks; i++) {
+      const idx = Math.round((i / (ticks - 1)) * (pts.length - 1));
+      ctx.fillText(pts[idx].t, X(idx), H - padB / 2 - 2);
+    }
+    /* ⚠️ 跨交易日时补一条日界竖线 + MM/DD 标注：
+       「1D」窗口 = 最近一个 ET 20:00 → 24h 后 ET 20:00，**必然跨日界**，
+       而刻度只画 HH:MM → 会出现两个 "20:00" 谁也分不清是谁天。
+       （与自选页 all 的做法一致：跨日处画竖线 + 日期。） */
+    for (let i = 1; i < pts.length; i++) {
+      if (pts[i].day === pts[i - 1].day) continue;
+      const x = X(i);
+      ctx.save();
+      ctx.strokeStyle = 'rgba(148,154,171,0.45)';
+      ctx.setLineDash([2, 3]);
+      ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + plotH); ctx.stroke();
+      ctx.restore();
+      ctx.fillStyle = THEME.axisText;
+      ctx.textAlign = 'left';
+      ctx.fillText(pts[i].day, Math.min(x + 4, padL + plotW - 28), padT + 8);
+      ctx.textAlign = 'center';
+    }
+  }
+
+  /* ---- 分时图的两处落点：**同一个节点**搬家 ----
+     桌面（>680px）：放进右侧主区 `#assetChartHolder`，常驻显示；
+     移动端（≤680px）：放进 **页内块** `#assetSheetBody`（#assetSheet 排在 #tradeSum 之后），
+     点「推算总资产」那个汇总框展开/收起（2026-10-05 定稿：**不是浮层**，下方列表照旧能滚）。
+     ⚠️ 只搬这**一个**节点，绝不复制两份 canvas —— 复制的话 drawAssetChart 只会更新一处。
+     ⚠️ 断点用 matchMedia 而不是 window.innerWidth：必须与 CSS 里
+        `@media (max-width:680px) { .trade-view .trade-main{display:none!important} }` 完全对齐。 */
+  const AC_MQ = window.matchMedia('(max-width: 680px)');
+  function placeAssetChart() {
+    const chart = document.getElementById('assetChart');
+    if (!chart) return AC_MQ.matches;
+    const dst = AC_MQ.matches ? document.getElementById('assetSheetBody')
+                              : document.getElementById('assetChartHolder');
+    if (dst && chart.parentNode !== dst) dst.appendChild(chart);
+    return AC_MQ.matches;
+  }
+  /* ---- 移动端分时图：**页内展开/收起**（2026-10-05 用户定稿）
+      ⚠️ 它**不是浮层**：`#assetSheet` 就排在 `#tradeSum` 之后（.watchlist--trade 里），
+         与上方的持仓列表同属一个纵向流 —— 展开时 `.wl__list`（flex:1）自动变矮、
+         照旧可以上下滚；收起又变回原样。所以这里**不锁任何滚动、不加遮罩、不 preventDefault**，
+         历史版本试过「全屏浮层 + 锁 scroll + touchmove」那套，正好是用户否掉的效果。 */
+  function openAssetSheet() {
+    if (!AC_MQ.matches) return;
+    placeAssetChart();
+    const sheet = document.getElementById('assetSheet');
+    if (!sheet) return;
+    sheet.hidden = false;
+    /* 汇总框让位：账户资产/推算总资产/差额三行 + 「分时走势」入口一起收掉，
+       展开后这一屏只剩分时走势（用户 2026-10-05）。
+       ⚠️ 收起靠图卡右上角的 ×（#assetSheetClose），汇总框里的入口这时是隐藏的。 */
+    assetSheetOpen = true;
+    const sum = document.getElementById('tradeSum');
+    if (sum) sum.hidden = true;
+    /* 数据一旦就绪就把图显出来，别展开出来是个空壳（head 先显示 --） */
+    const chart = document.getElementById('assetChart');
+    if (chart && TRADE_POS.ready && TRADE_POS.parts) chart.hidden = false;
+    refreshAssetChart(true);      // 刚展开，canvas 才首次量到尺寸 → 强制重拉一次
+  }
+  function closeAssetSheet() {
+    const sheet = document.getElementById('assetSheet');
+    if (!sheet || sheet.hidden) return;
+    sheet.hidden = true;
+    assetSheetOpen = false;
+    /* 汇总框恢复显示交给 renderTradeSum（它每轮刷新都会按 assetSheetOpen 重算 hidden），
+       这里立刻同步一次，避免收起后要等下一轮才出现。 */
+    const sum = document.getElementById('tradeSum');
+    if (sum && TRADE_POS.ready && TRADE_POS.totalCny != null) sum.hidden = false;
+  }
+
+  /* 拉数据 + 画 + 更新头部数字（节流：盘中定时刷新很密，60s 才真正重拉一次 K 线） */
+  let assetChartTs = 0;
+  let assetPending = false;   // 数据没就绪时被跳过 → 下一次汇总就绪时补画
+  /* 外部请求重画（2026-10-05）：持仓侧栏收起/展开后主区宽度变了，canvas 要按新尺寸重画，
+     但那个按钮在**另一个闭包**（initPanelCollapse）里，直接调 `refreshAssetChart` 会 ReferenceError。
+     走 window 自定义事件跨闭包通信，比挂 window 属性干净。 */
+  window.addEventListener('asset-chart-repaint', () => { refreshAssetChart(true); });
+  async function refreshAssetChart(force) {
+    const box = document.getElementById('assetChart');
+    const stage = document.getElementById('assetChartStage');
+    if (!box || !stage) return;
+    /* 数据就绪就把它显出来（移动端在浮层里，只有打开时才量得到画布尺寸） */
+    if (TRADE_POS.ready && TRADE_POS.parts && TRADE_POS.parts.stocks.length) box.hidden = false;
+    /* ⚠️ 画布量到 0 宽 = 视图整块被切走了（.trade-view hidden）。这种时候**不拉 K 线**：
+       一次要两只股各 5 页 1m，白给。切回来时由下面的 rail 点击事件 force 触发。 */
+    if (box.hidden || document.hidden || !stage.clientWidth) return;
+    /* ⚠️ 持仓数据还没就绪时**不白跑**：打一个 `assetPending` 标记，
+       等 renderTradeSum 那次拿到 parts 时顺势 force 一次（见下方 tradeSum 末尾）——
+       否则切视图那一下（parts 尚未就绪）就浪费了，用户要干等到下一个 15s tick。 */
+    if (!TRADE_POS.ready || !TRADE_POS.parts) { assetPending = true; return; }
+    const stale = Date.now() - assetChartTs > 60000;
+    if (!force && !stale) { drawAssetChart(assetChartData); return; }
+    assetChartTs = Date.now();
+    try {
+      assetChartData = await assetSeries(assetSessSel);
+    } catch (e) { assetChartData = null; }
+    /* 时段窗口里一根 K 线都没有时（典型：周末/休市，当前时段本就无成交），
+       自动退到「最近有数据」的窗口，避免开屏就是一片空白被当成没画出来。
+       ⚠️ 只在这种**空结果**下改选中的时段，用户手动选过之后不再覆盖。 */
+    if (!assetChartData || assetChartData.pts.length < 2) {
+      for (const k of ['all', 'regular', 'h24', 'night']) {
+        if (k === assetSessSel) continue;
+        try {
+          const d = await assetSeries(k);
+          if (d && d.pts.length >= 2) { assetChartData = d; assetSessSel = k; syncAssetSessUi(); break; }
+        } catch (e2) { /* 换下一个 */ }
+      }
+    }
+    paintAssetHead();
+    drawAssetChart(assetChartData);
+  }
+  function paintAssetHead() {
+    const pctEl = document.getElementById('assetChartPct');
+    const valEl = document.getElementById('assetChartVal');
+    const acctEl = document.getElementById('assetChartAcct');
+    const d = assetChartData && assetChartData.pts && assetChartData.pts.length
+      ? assetChartData.pts[assetChartData.pts.length - 1] : null;
+    const upDown = d ? (d.pct > 0 ? 'up' : d.pct < 0 ? 'down' : '') : '';
+    /* 金额一律取整（用户 2026-10-05：「都保留到整数」）—— 几十万量级的小数点没信息量，
+       还把这一格撑宽。百分比保持两位（那是有意义的精度）。 */
+    if (valEl) {
+      valEl.textContent = d ? Math.round(d.v).toLocaleString('en-US') : '--';
+      /* 大数字也带涨跌色（用户：「分时走势1063923带颜色」）—— 之前只有旁边的百分比有色，
+         金额恒黑，看着像「没涨」。基准线是 base（= 昨收口径），与 pct 同源。 */
+      valEl.className = 'num ' + upDown;
+    }
+    if (pctEl) {
+      pctEl.textContent = d ? ((d.pct > 0 ? '+' : '') + d.pct.toFixed(2) + '%') : '--';
+      pctEl.className = 'num asset-chart__pct ' + upDown;
+    }
+    /* 账户资产（IBKR 账面口径，= 汇总框第一行）也取整显示在时段下拉左侧 */
+    if (acctEl) {
+      const t = TRADE_POS.totalCny;
+      acctEl.textContent = t == null || !isFinite(t) ? '--' : Math.round(t).toLocaleString('en-US');
+    }
+  }
+  function syncAssetSessUi() {
+    const def = ASSET_SESS[assetSessSel] || ASSET_SESS.regular;
+    const label = document.getElementById('assetSessLabel');
+    const icon = document.getElementById('assetSessIcon');
+    if (label) label.textContent = def.label;
+    if (icon) icon.innerHTML = assetIconSvg(assetSessSel);
+    document.querySelectorAll('#assetSessMenu [data-asset-sess]').forEach((b) => {
+      b.classList.toggle('is-active', b.dataset.assetSess === assetSessSel);
+    });
   }
 
   /* 交易页持仓名称缩写：去掉「(QDII)」「ETF」「发起联接」三类**品类/产品形态后缀**。
@@ -1023,10 +1537,10 @@
          涨跌幅 = (腾讯现价 − **账户页那个现价**) ÷ 账户现价（tradePct 是小数，fmtPct 要百分数）。 */
       price: r.pTrade != null ? r.pTrade : r.price, cur: 'USD',
       pct: r.tradePct != null ? r.tradePct * 100 : null,
-      // 市值按交易页的腾讯价算（= 现价 × 份额），与「现价」列自洽
+      // 市值按交易页的 OKX 价算（= 现价 × 份额），与「现价」列自洽；
+      // 取不到就空着（2026-10-05 起不再用 IBKR 快照市值 posVal0 兜底）
       value: r.tradeValueCny != null ? r.tradeValueCny
-          : (r.valueCny != null ? r.valueCny
-            : (r.h && r.h.posVal0 != null ? r.h.posVal0 * fx : null)),
+          : (r.valueCny != null ? r.valueCny : null),
       // 「较基准」盈亏 = (腾讯现价 − 账户现价) × 数量 × 汇率
       pnl: r.tradeChgCny != null ? r.tradeChgCny : null,
       decimals: (r.mult === 100 ? 3 : 2),
@@ -1662,7 +2176,7 @@
         loadInstrument(APP_DATA.quote.code);
       }
 
-      // 自选分类切换：全部 / 美股 / 沪深 / 期货 / 加密货币
+      // 自选分类切换：全部 / 美股 / 沪深 / 期货 / 加密币
       const wcat = btn.dataset.wlCat;
       if (wcat && wcat !== wlCat) {
         wlCat = wcat;
@@ -1916,13 +2430,38 @@
          之前用「430px 宽但桌面 UA」量，拿到的是 284，真机（iPhone 15 Pro Max）就裁偏了。
          画布高度 = min(视口高 − 329, 924)（2,961 只票单列排完就封顶），故padY 取 329。 */
       narrow: { x: 23, y: 308, padX: 46, padY: 329 },
-      /* 窄屏仪表盘：单列，x=12 y=76（同样只在 iPhone UA 下才是这个值） */
-      narrowMarket: { x: 12, y: 76, padX: 18, padY: 76, fixedScale: 1 / 1.35 },
+      /* 窄屏仪表盘（用户 2026-10-05 定稿：「移动端不用分三栏，就用 tickers 这种下拉到底的」）：
+         **不缩放**（去掉 fixedScale → s=1），站点按面板真实宽度（430+18=448）排版 = 单列长图，
+         与窄屏热力图一个路子；之前的 1/1.35 会让站点按 1.35 倍视口排版，挤成多栏小表。
+         ⚠️ x/y/padX 是在 **iPhone 15 Pro Max UA + 448 宽 iframe** 下实测的：
+            窄屏 appbar（.dev-appbar）高 **79**，第一张卡片（stage）从 y=60 起 ——
+            两者重叠 19px（appbar 悬浮盖在卡片上），所以裁 **y=79** 正好把 appbar 整条切掉，
+            又不会多吃卡片内容（被吃掉的那 19px 本来就被 appbar 遮着看不见）。
+            ⚠️ 别再用缩放态量的 76，也别用 60（会漏出 appbar 底部那条 App Store 按钮）。
+         `fullH`：下拉到底就停在**自选最后一格（XRT / 最后一个 tile）**，再往下全裁掉 ——
+         站点自己的「About this page」区和页脚 © 2026 TickerTiles 一条都不露
+         （用户 2026-10-05：「就到 xrt 就行，下面 about this page 以下都不要了」）。
+         ⚠️ **fullH 同时决定站点渲染多少卡片**（站点按 iframe 视口懒渲染，切掉下面就真的没了）：
+            给 2620 时 XRT 那个 tile 干脆不渲染，要 ≥ tile 底那一档才出来。
+         ⚠️ 2026-10-05 量法（iPhone UA + 466 宽 × fullH 高视口，分段滚到底触发懒渲染后再回到顶部量）：
+            Thematic ETFs 整节（含 XRT 最后一行）底 = **2754**；页脚 Terms 链接顶 = **2845**。
+         ⚠️ 单看「内容底 2754」会取 2775，但**实测 2775 时底下那条「About this page ▸」折叠条又露出来**
+            （它是卡片底边的收起把手，2757 起就露头）—— 真正干净的档位是 **2756**
+            （截图验证：XRT 整行含底边线完整、下面 About 一丝不露；2757/2760/2766/2775 都会露出 About）。
+            所以这里取「内容底 + 2px」而不是「内容底 + 20px」，⚠️ 别为了「多留点余量」往上加。
+         ⚠️ 之前按估的「tile 底 ≈ 2675 / About 顶 ≈ 2695」给 2710，**XRT 被切掉 44px**
+            （用户同日截图反馈「xrt 被截断了」）—— 估低的根因是站点懒渲染让卡片长高，
+            量的时候没滚到底。别再按估数给，按上面实测的 2754/2845 档。
+         ⚠️ 别按 `documentElement.scrollHeight`（2974，含页脚）给，也别给到 2845 以上，
+            否则下拉到底会看到 About 标题 + 页脚链接。
+         内部不再有滚动条，长图交给外层 `.screen-body` 竖向滚动（见 fitHeatmap 里的 narrowScroll）。 */
+      narrowMarket: { x: 12, y: 79, padX: 18, padY: 79, fullH: 2756 },
       /* 「市场」视图 = Tickertiles 仪表盘（winners/losers/各市场表现/板块/因子）。
          实测 1800×1200 视口下：`.dashboard-stage` 内容区起点 x=276, y=59，宽 = 视口 − 292。
          缩放：站点按 **1.35 倍**视口排版，再用 `scale(1/1.35)` 缩回面板
          （用户 2026-10-05：「桌面端热力图市场改成先 1.35 倍，再 scale」）——
-         一屏能看到比面板原生布局多 35% 的内容，卡片里的表格行不会被裁掉。 */
+         一屏能看到比面板原生布局多 35% 的内容，卡片里的表格行不会被裁掉。
+         ⚠️ 这个 1.35 **只用于桌面**：移动端要单列下拉，见上面的 narrowMarket。 */
       market: { x: 276, y: 59, padX: 292, padY: 59, fixedScale: 1 / 1.35 },
     };
     /* 站点布局画布 = 面板 × hmZoom，再由 CSS `transform: scale(1/hmZoom)` 缩回面板大小。
@@ -1954,17 +2493,29 @@
       const mobile = typeof isMobile === 'function' && isMobile();
       /* `s` = **显示缩放**（<1 表示站点按更大视口排版再缩回）。
          热力图：s = 1/hmZoom（站点画布 = 面板 × hmZoom）；
-         市场仪表盘：s = 0.8 固定（用户要求「乘 80%」）；
-         窄屏：s = 1（单列长图，缩了更看不清）。 */
+         市场仪表盘：桌面固定 1/1.35（HM_CHROME.market.fixedScale），窄屏 s = 1 单列；
+         窄屏热力图：s = 1（单列长图，缩了更看不清）。 */
       const c = mobile
         ? (isMarketView() ? HM_CHROME.narrowMarket : HM_CHROME.narrow)
         : (isMarketView() ? HM_CHROME.market : HM_CHROME.wide);
       const s = c.fixedScale != null ? c.fixedScale : (mobile ? 1 : 1 / hmZoom);
+      /* 窄屏「下拉到底」：`.screen-body` 默认 overflow:hidden（热力图靠 iframe 内部滚动），
+         市场单列要整张长图交给外层滚，所以这里把 iframe 高度设成 `c.fullH`（站点单列全高）
+         并给容器开竖向滚动。热力图那边 fullH 为空 → 保持原样（内部滚），互不影响。 */
+      const narrowScroll = mobile && isMarketView() && c.fullH;
+      if (narrowScroll) {
+        body.style.overflowY = 'auto';
+        body.style.overflowX = 'hidden';
+        /* 容器高度由 flex 决定（不变），只有 iframe 变高 → 容器 scrollHeight 随之变大。 */
+      } else {
+        body.style.overflowY = '';
+        body.style.overflowX = '';
+      }
       /* iframe 按「面板 ÷ s + 边距」给尺寸，再用 transform 缩回并把内容区左上角对到面板左上角：
          `translate(tx,ty) scale(s)` 是先 scale 再 translate，所以要让内容区原点(c.x,c.y) 落到 (0,0)，
          需要 tx = −s·c.x、ty = −s·c.y（transform-origin 必须是 0 0）。 */
       screenFrame.style.width = Math.round(r.width / s + c.padX) + 'px';
-      screenFrame.style.height = Math.round(r.height / s + c.padY) + 'px';
+      screenFrame.style.height = (narrowScroll ? c.fullH : Math.round(r.height / s + c.padY)) + 'px';
       screenFrame.style.left = '0px';
       screenFrame.style.top = '0px';
       screenFrame.style.transformOrigin = '0 0';
@@ -2087,7 +2638,16 @@
       if (!accountView.hidden) {
         if (accLoading) return;
         accLoading = true;
-        Promise.resolve(initAccountData()).finally(() => { accLoading = false; });
+        /* ⚠️ 账户视图里走**增量刷新**（就是 15s 定时器那套 `TRADE_POS.refresh`），
+           不再整页 `initAccountData()` 重跑一遍 —— 后者要把 Asset_parsed / 基金东财脚本 /
+           Alpaca 分页全拉一遍（实测 4~8s），点一下刷新就卡住半分钟，用户看到的就是
+           「点刷新之后证券半天出不来」。行情没就绪（还没加载过账户数据）时才退回全量初始化。 */
+        const inc = TRADE_POS && TRADE_POS.refresh;
+        if (typeof inc === 'function') {
+          Promise.resolve(inc()).finally(() => { accLoading = false; });
+        } else {
+          Promise.resolve(initAccountData()).finally(() => { accLoading = false; });
+        }
       } else {
         fetchWatchlist();
         fetchTxWatch();
@@ -2167,6 +2727,34 @@
       cpExpand.hidden = true;
       redraw();
     });
+
+    /* ---- 持仓侧栏收起/展开（2026-10-05 用户：「桌面端这里右边加个自选一样的收起箭头」）----
+       复用自选那套 `.is-collapsed` + `.panel-expand--l`，但多一步：
+       收起后**右侧主区变宽 430px**，「推算总资产」分时图是按宽度画 canvas 的
+       （`drawAssetChart` 里量 `stage.clientWidth`），不重绘就会保持旧宽度、右侧留白。
+       ⚠️ 这里**不能直接调 `refreshAssetChart`** —— 它在另一个闭包里，`typeof` 判断会静默跳过
+       （实测侧栏收起了、canvas 仍是 1070px）。改走 window 自定义事件，由那个闭包自己监听。 */
+    const tradeSide = document.querySelector('.watchlist--trade');
+    const tradeCollapse = $('#tradeCollapse'), tradeExpand = $('#tradeExpand');
+    if (tradeSide && tradeCollapse && tradeExpand) {
+      /* 布局过渡 250ms 前后各请求一次：起始一帧让画布先跟上，过渡完再按最终宽度重画。 */
+      const repaintAsset = () => {
+        window.dispatchEvent(new CustomEvent('asset-chart-repaint'));
+        setTimeout(() => window.dispatchEvent(new CustomEvent('asset-chart-repaint')), 280);
+      };
+      tradeCollapse.addEventListener('click', () => {
+        if (isMobile()) return;          // 移动端按钮被 CSS 隐藏，这里再挡一道
+        tradeSide.classList.add('is-collapsed');
+        tradeExpand.hidden = false;
+        repaintAsset();
+      });
+      tradeExpand.addEventListener('click', () => {
+        if (isMobile()) return;
+        tradeSide.classList.remove('is-collapsed');
+        tradeExpand.hidden = true;
+        repaintAsset();
+      });
+    }
 
     // 打开页面时资讯面板默认收起（首帧不播收起动画）
     cp.style.transition = 'none';
@@ -2264,17 +2852,25 @@
     const foldBar = document.querySelector('.acc-side__foldbar');
     const sumEl = document.getElementById('accSideSum');
     const KEY = 'futu_acc_side_folded';
+    /* 顶栏：展开态下「箭头往上一直到页面顶」的热区挂在这里（见下面 click 委托）。
+       账户页折叠条在窄屏是贴在顶栏下沿的，所以顶栏空白就是用户说的「箭头往上到页面顶」。 */
+    const topbar = document.querySelector('.topbar');
+    const accountView = document.getElementById('accountView');
+    const isNarrow = () => AC_MQ.matches;
     if (side && foldBtn) {
       const apply = (folded) => {
         side.classList.toggle('is-folded', folded);
         foldBtn.setAttribute('aria-expanded', folded ? 'false' : 'true');
+        // 展开态给顶栏一个 pointer 光标（表示这整条能点收起）；折叠态撤掉
+        if (topbar) topbar.classList.toggle('is-foldable', !folded && isNarrow());
         // 高度变了，侧栏迷你走势图和总览页图表都要按新尺寸重画
         requestAnimationFrame(() => { drawAccSpark(); drawAoChart(); renderAoDist(); });
       };
       // 默认展开（未存过）；只有显式存了 '1' 才折叠
       apply(localStorage.getItem(KEY) === '1');
-      const toggle = () => {
-        const folded = !side.classList.contains('is-folded');
+      /** force 传 true = 强制收起、false = 强制展开、省略 = 反转 */
+      const toggle = (force) => {
+        const folded = force === undefined ? !side.classList.contains('is-folded') : !!force;
         apply(folded);
         try { localStorage.setItem(KEY, folded ? '1' : '0'); } catch (e) { /* 隐私模式忽略 */ }
       };
@@ -2293,6 +2889,23 @@
           toggle();
         });
         foldBar.style.cursor = 'pointer';
+      }
+
+      /* ---- 展开态：热区从箭头往上「一直到页面顶」（顶栏整条）都能点收起 ----
+         用户 2026-10-05：「这个收起点击范围太小，从箭头往上一直到页面顶都可以点击收起」。
+         ⚠️ **不要**用 `position:fixed` 透明遮罩去盖住顶栏 —— 遮住之后顶栏的
+         返回/前进/刷新按钮和搜索框也一起点不动了。改成在 .topbar 上做 click 委托：
+         命中交互控件（button/a/input…）一律放行，剩下的空白与品牌文字都当成「收起」。
+         ⚠️ 只在 **展开态 + 窄屏 + 账户视图可见** 时生效（回调里逐条守卫），否则在
+         自选 / 资讯 / 选股视图点顶栏空白也会把账户侧栏莫名收起来。
+         ⚠️ 折叠态不绑：那时点横条整条是「展开」，顶栏不该有第二种语义。 */
+      if (topbar && accountView) {
+        topbar.addEventListener('click', (e) => {
+          if (accountView.hidden) return;                          // 不在账户视图
+          if (!isNarrow() || side.classList.contains('is-folded')) return;
+          if (e.target.closest('button, a, input, select, textarea, label')) return;
+          toggle(true);                                            // 只收起，不反转（避免再点又展开）
+        });
       }
     }
 
@@ -2399,8 +3012,86 @@
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeFs(); });
   })();
 
-  window.addEventListener('resize', () => { drawChart(); drawAoChart(); drawAccSpark(); });
+  /* ⚠️ 顺序必须先 placeAssetChart() 再 draw —— 节点换了容器，canvas 尺寸才跟着变；
+     跨断点（桌面 ↔ 移动端）时还要 force 一次（浮层里是 88dvh、主区里是 300px，高度完全不同）。 */
+  window.addEventListener('resize', () => {
+    const wasMobile = AC_MQ.matches;
+    placeAssetChart();
+    drawChart(); drawAoChart(); drawAccSpark(); drawAssetChart(assetChartData);
+    if (AC_MQ.matches !== wasMobile) refreshAssetChart(true);
+  });
   document.addEventListener('DOMContentLoaded', renderAll);
+
+  /* ---- 资产分时图的时段下拉（盘前/盘中/盘后/夜盘/24h/全天） ---- */
+  (function initAssetSess() {
+    const menu = document.getElementById('assetSessMenu');
+    const btn = document.getElementById('assetSessBtn');
+    const wrap = document.getElementById('assetSess');
+    if (!menu || !btn || !wrap) return;
+    menu.innerHTML = Object.keys(ASSET_SESS).map((k) => (
+      '<button class="asset-sess__item" type="button" role="option" data-asset-sess="' + k + '" aria-selected="false">'
+      + '<span class="ico">' + assetIconSvg(k) + '</span>'
+      + '<span>' + ASSET_SESS[k].label + '</span>'
+      + '<span class="asset-sess__tick"></span></button>'
+    )).join('');
+    const close = () => { menu.hidden = true; btn.setAttribute('aria-expanded', 'false'); };
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const open = menu.hidden;
+      menu.hidden = !open;
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+    /* 点空白处收起（下拉是绝对定位浮层，不关会挡住下面的列表） */
+    document.addEventListener('click', (e) => { if (!wrap.contains(e.target)) close(); });
+    menu.addEventListener('click', (e) => {
+      const item = e.target.closest('[data-asset-sess]');
+      if (!item) return;
+      assetSessSel = item.dataset.assetSess;
+      close();
+      syncAssetSessUi();
+      refreshAssetChart(true);           // 换时段必须强制重拉（不同时段窗口完全不同）
+    });
+    syncAssetSessUi();
+
+    /* 切视图后画布才有尺寸 —— 立刻补一次（否则要等下一个 15s tick 才画出来）。 */
+    document.querySelectorAll('.rail__item[data-view], [data-tab]').forEach((el) => {
+      el.addEventListener('click', () => setTimeout(() => refreshAssetChart(true), 350));
+    });
+  })();
+
+  /* ---- 移动端分时图交互：点「推算总资产」汇总框 **展开/收起**（页内块，不是浮层） ---- */
+  (function initAssetSheet() {
+    const sum = document.getElementById('tradeSum');
+    const sheet = document.getElementById('assetSheet');
+    if (!sum || !sheet) return;
+    placeAssetChart();          // 初始落点：移动端先把节点搬进 #assetSheetBody（sheet 默认 hidden）
+    /* 收起只切 `hidden`（页内块收起后 .wl__list 自动长回来）；
+       ⚠️ 历史版本额外加了「锁背后滚动」那套，已按用户 2026-10-05 定稿删掉 ——
+          现在要的就是「图表在下面、上面的列表能上下滚」，锁反而锁没了。 */
+    const close = () => { if (!sheet.hidden) closeAssetSheet(); };
+    /* ⚠️ 它是页面内的一块，切走视图会自动收起（hidden 元素里的 canvas 量不到尺寸） */
+    document.querySelectorAll('.rail__item[data-view], [data-tab]').forEach((el) => {
+      el.addEventListener('click', close);
+    });
+    /* 整块汇总框都可点：展开（再点一次收起）。
+       ⚠️ 移动端汇总框里没有别的控件，不用排除目标；桌面端 AC_MQ 不匹配时直接 no-op。
+       ⚠️ 但**来自图内部的点击必须忽略**：点「收起」按钮时事件先命中 closeBtn（收起），
+          再冒泡到 sum 就被当成「又点了一次」重新展开 —— 结果就是永远关不掉
+          （2026-10-05 实测复现）。closeBtn 在 #assetSheet 里，所以按这一点拦。 */
+    sum.addEventListener('click', (e) => {
+      if (!AC_MQ.matches) return;
+      const t = e.target;
+      if (t && t.closest && t.closest('#assetSheet')) return;
+      if (sheet.hidden) openAssetSheet(); else closeAssetSheet();
+    });
+    const closeBtn = document.getElementById('assetSheetClose');
+    if (closeBtn) closeBtn.addEventListener('click', close);
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+    /* 断点跨过 680 时（比如桌面窗口拉窄/拉宽）把展开态复位 ——
+       否则桌面端会残留一个挂在 aside 里的空容器（图表那时应该在右侧主区）。 */
+    const onMq = () => { if (!AC_MQ.matches && !sheet.hidden) closeAssetSheet(); };
+    if (AC_MQ.addEventListener) AC_MQ.addEventListener('change', onMq);
+  })();
 
   // 打开页面默认选中 ORCL，立即拉其报价与分时（不等自选行情返回）
   loadInstrument('ORCL');
@@ -2977,18 +3668,19 @@
     else aoStatDefault();
   }
 
-  /* 顶部统计行默认（未悬停）：区间累计收益 / 收益率 */
+  /* 顶部统计行：恒显区间累计收益 / 区间收益率（跟随末点，与光标位置无关）。
+     ⚠️ 原先还有一套「悬停时把统计行换成 日期 + 资产净值 / 当日收益」（aoSetStat 的 point/dayGain 分支
+      + `.ao-stats.is-hover` CSS + `.ao-stat--hover` 节点），2026-10-05 按用户要求整套删除，
+     读数口径固定，勿再加回来。 */
   function aoStatDefault() {
-    const stats = document.getElementById('aoStats');
-    if (stats) stats.classList.remove('is-hover');   // 无光标 → 回到区间统计
     const d = aoGeo.data;
     if (!d || d.length < 2) return;
     const gain = d[d.length - 1].cny - aoGeo.first;
     const pctV = aoGeo.first ? gain / aoGeo.first * 100 : 0;
-    aoSetStat(gain, pctV, d[d.length - 1], null);
+    aoSetStat(gain, pctV);
   }
 
-  function aoSetStat(gain, pctV, point, dayGain) {
+  function aoSetStat(gain, pctV) {
     const setT = (id, txt, trend) => {
       const el = document.getElementById(id);
       if (!el) return;
@@ -2998,19 +3690,6 @@
     };
     setT('aoStatVal', (gain > 0 ? '+' : '') + gain.toFixed(2), gain);
     setT('aoStatPct', (pctV > 0 ? '+' : '') + pctV.toFixed(2) + '%', pctV);
-    // 悬停时顶部显示该日净值与当日收益（富途口径）
-    const d = aoGeo.data;
-    const i = point && point.__i;
-    if (d && i != null && dayGain != null) {
-      const dt = document.getElementById('aoStatDate');
-      const nm = document.getElementById('aoStatName');
-      const pc = document.getElementById('aoStatPoint');
-      const dg = document.getElementById('aoStatDay');
-      if (dt) dt.textContent = aoFormatDate(point.date);
-      if (nm) nm.textContent = '资产净值 · CNY';
-      if (pc) pc.textContent = point.cny.toFixed(2);
-      if (dg) { dg.textContent = (dayGain > 0 ? '+' : '') + dayGain.toFixed(2); dg.classList.remove('up', 'down'); if (dayGain > 0) dg.classList.add('up'); else if (dayGain < 0) dg.classList.add('down'); }
-    }
   }
 
   /* 十字光标层：竖线（日期）+ 横线（数值）+ 底部日期胶囊 + 右侧数值胶囊 + 交点圆点 */
@@ -3069,15 +3748,9 @@
     ctx.fillText(vtxt, vx + vw / 2, vy + 7.5, vw - 4);
     ctx.restore();
 
-    // 顶部统计行同步（悬停时显示该日净值/当日收益，未悬停显示区间累计）
-    const stats = document.getElementById('aoStats');
-    if (stats) stats.classList.toggle('is-hover', aoState.hover != null);
-    if (aoState.hover == null) { aoStatDefault(); return; }
-    const gain = d[idx].cny - first;
-    const pctV = first ? gain / first * 100 : 0;
-    const prev = idx > 0 ? d[idx - 1].cny : null;
-    const pt = Object.assign({}, d[idx], { __i: idx });
-    aoSetStat(gain, pctV, pt, prev == null ? 0 : d[idx].cny - prev);
+    /* 顶部统计行固定在区间口径，**不跟随光标**（用户 2026-10-05 删掉悬停切换那套）。
+       只在没有光标时写一次，避免每帧 move 都重设文本/颜色类。 */
+    if (aoState.hover == null) aoStatDefault();
   }
 
   /* 绑定鼠标/触摸交互：横向取最近数据点，显示横纵坐标引线
@@ -4393,10 +5066,20 @@
        ⚠️ **不是被限流**：实测每轮 `X-Ratelimit-Remaining: 199`（上限 200/分钟），
        请求量远低于阈值。**别再用补拉的方式绕分页**。
        本函数：自动翻页合并，`key` 是响应里的数据字段名（bars / snapshots）。 */
-    async function alpacaPaged(urlBase, key, maxPages) {
+    async function alpacaPaged(urlBase, key, maxPages, budgetMs) {
       const out = {};
       let token = null;
+      /* ⚠️ 整批翻页的**总预算**（默认 8s）。原来每页各自重试 2 次、每次 accJson 兜 8s，
+         3 页最坏能磨十几秒，而这整批是 `await` 在渲染前面的 —— 用户 2026-10-05 报
+         「账户里基金现金都秒出，证券非常慢甚至出不来」，成因就在这里。
+         超预算就带**已取到的部分**返回，缺的由 computeRow 按「腾讯 → IBKR 快照 markPrice」补。 */
+      const budget = budgetMs || 8000;
+      const t0 = Date.now();
       for (let i = 0; i < (maxPages || 5); i++) {
+        if (Date.now() - t0 > budget) {
+          console.warn('[alpaca] 翻页超预算 %dms，保留已取到的 %d 个代码', Date.now() - t0, Object.keys(out).length);
+          break;
+        }
         const url = urlBase + (token ? '&page_token=' + encodeURIComponent(token) : '');
         /* 每页重试 1 次：`accJson` 内部 8s 超时返回 null，某一页超时若直接 break，
            **整批数据就都没了**（实测偶发，表现是所有成分股突然退化成 QQQ 兜底）。
@@ -4560,6 +5243,18 @@
                items: (fundH && fundH[f.code] && fundH[f.code].items) || [],
                alloc: (fundH && fundH[f.code] && fundH[f.code].alloc) || null };
     });
+    /* ⚠️ TQQQ 全区间日线（总资产曲线要用）**提前起**，不排在后面 await：
+       它只是一条 Alpaca 请求，但国内慢网实测能拖十几秒；排在基金那批后面就变成
+       「6s 预算 + 4s 预算」串行叠加，整页白等十几秒。提前起 → 跟基金那条并行跑，
+       下面那次 race 只是「万一还没回来」的兜底。 */
+    /* TQQQ 全区间日线：**只发不收**是原来漏 TQQQ 的第二层原因 ——
+       它属于最慢梯队（可能要十几秒），到货时环形图早就画完了。
+       这里接上：日线一落地就重建环形图（TQQQ 现价的首选来源就是它，
+       比等 Alpaca 正股那一梯队更早到），顺带刷新走势图末点。 */
+    const pTqqq = accTqqqDaily().then(() => {
+      if (typeof rebuildAoDist === 'function') rebuildAoDist();
+      if (typeof refreshAoTail === 'function') refreshAoTail();
+    }).catch(() => {});
     /* 6 只基金的 pingzhongdata 并行拉取 —— 原来串行时每只不可达要等 8s 超时，
        6×8=48s，导致「总资产」要半分钟才出数（基金/现金反而是齐的）。
        并行后总耗时 = 最慢的那一只。 */
@@ -4581,16 +5276,43 @@
     {
       const usBase = funds.find((f) => f.navDate) ? funds.find((f) => f.navDate).navDate : null;
       const back = new Date(Date.now() - 40 * 86400e3).toISOString().slice(0, 10);
-      // 汇率序列只在开关打开时才拉（frankfurter 本机不可达，关着就省掉一次 6s 空等）
-      await Promise.all([
-        loadUsQuotesAlpaca(usBase),        // Alpaca：只取净值日那天的**基准收盘**
-        loadOkxTradeQuotes(usComponentCodes(), { nowOnly: true }),   // OKX：全部美股成分的**实时价**
-        loadUsQuotes(usBase),
-        FX_IN_VAL ? loadFxSeries(back) : Promise.resolve(),
+      /* ⚠️ 上面这台 Promise.all 里 **Alpaca 是最慢的一路**（国内慢网实测 8~16s 甚至直接挂住），
+         而它是整个账户页的必经 `await` —— Alpaca 一挂，页面三块（基金/现金/证券）会一起空等
+         20s+（用户报的「账户里基金现金都很快，证券非常慢甚至出不来」，慢网时连基金也一起卡）。
+         给这一批 **6s 预算**：到点还没拿到就**先按「官方净值 + QQQ 兜底」把账户页画出来**
+         （基金表本身只看官方净值，不受影响），慢的两路（Alpaca 基准 / 腾讯基准）在后台继续跑，
+         到手再补一次估值 + 汇总。页面从此「先出数 → 再升级」，不再被单个源按住。 */
+      const compo = usComponentCodes();
+      const baseReady = () => !compo.length || compo.some((c) => {
+        const r = VAL.txUs[c]; return r && r.base != null;
+      });
+      const pBase = loadUsQuotesAlpaca(usBase);        // Alpaca：只取净值日那天的**基准收盘**
+      await Promise.race([
+        Promise.all([
+          pBase,
+          loadOkxTradeQuotes(compo, { nowOnly: true }),   // OKX：全部美股成分的**实时价**
+          loadUsQuotes(usBase),                           // 腾讯基准（慢，可能被预算截断）
+          FX_IN_VAL ? loadFxSeries(back) : Promise.resolve(),
+        ]),
+        new Promise((r) => setTimeout(r, 6000)),
       ]);
+      if (!baseReady()) {
+        /* 慢网兜底：先出数；这几路谁跑完谁补一次估值（见 estimateAllFunds 的注释）。 */
+        Promise.resolve(Promise.all([
+          pBase,
+          loadOkxTradeQuotes(compo, { nowOnly: true }),
+          loadUsQuotes(usBase),
+          FX_IN_VAL ? loadFxSeries(back) : Promise.resolve(),
+        ])).then(() => { if (baseReady()) { estimateAllFunds(); paintFundSummary(); } }).catch(() => {});
+      }
     }
+    /* 逐只基金算估值并累加汇总（fundAmount / fundYesterday / fundCum）。
+       ⚠️ 抽成函数是因为慢网时被 6s 预算截断过一次，Alpaca 基准到手后要**补算一遍**
+          （否则基金估值永远停在 QQQ 兜底上）。 */
     let fundAmount = 0, fundYesterday = 0, fundCum = 0;
-    funds.forEach((f) => {
+    function estimateAllFunds() {
+      fundAmount = 0; fundYesterday = 0; fundCum = 0;
+      funds.forEach((f) => {
       f.amount = f.shares * (f.navL || 0);
       f.yest = f.navP != null ? f.shares * (f.navL - f.navP) : null;
       f.cum = f.cost ? f.shares * (f.navL - f.cost) : null;
@@ -4615,6 +5337,8 @@
       if (f.yest != null) fundYesterday += f.yest;
       if (f.cum != null) fundCum += f.cum;
     });
+    }
+    estimateAllFunds();
     const fundTbody = $id('fundTbody');
     if (fundTbody) {
       // 排序键挂到行对象上：funds 已带 name/code/amount/shares/yest/cum
@@ -4636,21 +5360,25 @@
       };
       accRender('fund');
     }
-    setTxt('fundMYest', f2(fundYesterday, true), fundYesterday);
-    setTxt('fundMCum', f2(fundCum, true), fundCum);
-    /* 净值更新日期不再集中显示（用户 2026-10-04：上方汇总行删除，改为**表格里每只基金各写一列**，
-       QDII 各基金滞后天数不同，集中取「最旧」那个会掩盖差异）。见 fund 渲染器里的 td-navdate。 */
-    setTxt('accFundVal', f2(fundAmount));
-    setTxt('accFundNote', f2(fundYesterday, true), fundYesterday);
-    // 昨日涨跌幅 = 昨日收益 ÷ 昨日市值（今日市值 − 昨日收益）
-    const fundYestBase = fundAmount - fundYesterday;
-    setTxt('accFundNotePct', fundYestBase ? pctS(fundYesterday / fundYestBase) : '--', fundYesterday);
-    setTxt('accFundCum', f2(fundCum, true), fundCum);
-    // 累计涨跌幅 = 累计收益 ÷ 成本（今日市值 − 累计收益）
-    const fundCumBase = fundAmount - fundCum;
-    setTxt('accFundCumPct', fundCumBase > 0 ? pctS(fundCum / fundCumBase) : '--', fundCum);
-    // 注：汇总行不再放比例（用户要求比例只出现在**表格列**里 → 昨日涨跌 / 持仓涨跌），
-    // 侧栏那两处 accFundNotePct / accFundCumPct 保留。
+    /* 基金侧栏/汇总那几行（抽成函数：慢网兜底补算估值后要跟着重写一次） */
+    function paintFundSummary() {
+      setTxt('fundMYest', f2(fundYesterday, true), fundYesterday);
+      setTxt('fundMCum', f2(fundCum, true), fundCum);
+      /* 净值更新日期不再集中显示（用户 2026-10-04：上方汇总行删除，改为**表格里每只基金各写一列**，
+         QDII 各基金滞后天数不同，集中取「最旧」那个会掩盖差异）。见 fund 渲染器里的 td-navdate。 */
+      setTxt('accFundVal', f2(fundAmount));
+      setTxt('accFundNote', f2(fundYesterday, true), fundYesterday);
+      // 昨日涨跌幅 = 昨日收益 ÷ 昨日市值（今日市值 − 昨日收益）
+      const fundYestBase = fundAmount - fundYesterday;
+      setTxt('accFundNotePct', fundYestBase ? pctS(fundYesterday / fundYestBase) : '--', fundYesterday);
+      setTxt('accFundCum', f2(fundCum, true), fundCum);
+      // 累计涨跌幅 = 累计收益 ÷ 成本（今日市值 − 累计收益）
+      const fundCumBase = fundAmount - fundCum;
+      setTxt('accFundCumPct', fundCumBase > 0 ? pctS(fundCum / fundCumBase) : '--', fundCum);
+      // 注：汇总行不再放比例（用户要求比例只出现在**表格列**里 → 昨日涨跌 / 持仓涨跌），
+      // 侧栏那两处 accFundNotePct / accFundCumPct 保留。
+    }
+    paintFundSummary();
 
     /* ---- 历史·订单（仅 seed.pa_funds 申购记录）
        注：TQQQ 属于证券持仓，已在证券页「历史·成交」中列示，这里不再重复。 */
@@ -4668,9 +5396,11 @@
     const fundHistBody = $id('fundHistBody');
     if (fundHistBody) {
       ACC_RENDERERS.fundH = () => {
+        /* ⚠️ 列序必须与 index.html 里基金历史表的 `<thead>` 一致（项目名称 → 交易类型 → 金额/份额 …），
+           表头与 tbody 错位不会报错，只会整列显示成 `--`（记忆里的老坑）。 */
         fundHistBody.innerHTML = accSorted('fundH', fundOrders).map((r) =>
-          `<tr><td>${r.type} <span class="td-code">已完成</span></td>` +
-          `<td>${r.name}</td>` +
+          `<tr><td>${r.name}</td>` +
+          `<td>${r.type} <span class="td-code">已完成</span></td>` +
           `<td class="num">${f2(r.amount)} / ${r.shares}</td>` +
           `<td>${r.cur}</td><td class="num">${r.date}</td><td>${r.source}</td><td>${r.detail}</td></tr>`
         ).join('');
@@ -4751,6 +5481,11 @@
         const m = flat.match(/^([A-Z]+)(\d{6})([CP])(\d{8})$/);
         if (m) name = `${m[1]} ${m[2]} ${parseInt(m[4], 10) / 1000} ${m[3] === 'C' ? 'call' : 'put'}`;
       }
+      /* ⚠️ `mark0`(IBKR 快照 markPrice) 与 `posVal0`(快照市值) **已不再参与任何取价/汇总** ——
+         2026-10-05 用户要求「账户里只用 Alpaca 实时报价」「市值合计也不用保留 IBKR 快照兜底」。
+         保留这两个字段只是为了映射完整、方便日后查 JSON；别再拿它们当兜底用。
+         TQQQ 那行它们恒为 0（TQQQ 不在 IBKR 持仓里），这正是当初「ORCL 有价、TQQK 没价」
+         那种不一致的根源。 */
       return { raw: h.symbol.trim(), occ: flat, opt: isOpt, name, code, pos: h.position, cost: h.costBasisPrice, mark0: h.markPrice, posVal0: h.positionValue };
     });
     const tqqq = (seed.pa_us && seed.pa_us[0]) || null;
@@ -4758,8 +5493,15 @@
 
     const stockSyms = holdings.filter((h) => !h.opt).map((h) => h.code);
     const optSyms = holdings.filter((h) => h.opt).map((h) => h.occ);
-    const q = await accAlpacaQuotes(stockSyms, optSyms);
-    await accTqqqDaily();        // TQQQ 全区间日线（总资产曲线要用）
+    /* ⚠️ 这里**不再** await 证券行情：Alpaca 分页 + 重试 + 弱网最坏能磨几十秒，
+       而下面所有汇总/表格都排在这条 await 后面 —— 一慢就整页证券开天窗（用户 2026-10-05）。
+       改成「先拿本地快照画一版 → 行情到手再原地升级」，见下方 paintStock。 */
+    /* TQQQ 全区间日线：上面已经提前起了，这里只等一个短预算（提前起通常早就回来了），
+       没回来就**先出数**（历史曲线暂时缺 TQQQ 那段），日线到手后整体重算一次。 */
+    await Promise.race([pTqqq, new Promise((r) => setTimeout(r, 2500))]);
+    if (!Object.keys(tqqqBars).length) {
+      pTqqq.then(() => { if (Object.keys(tqqqBars).length) rebuildAoSeries(); });
+    }
 
     /* IBKR 现金：优先用 cashDaily 里 IBKR 直接给的余额，
        别用「最近净值 − 持仓市值」推算 ——
@@ -4807,30 +5549,25 @@
         pAcct = s.price; prevClose = s.prevClose;
         qty = h.pos; cost = h.cost;
       }
-      /* ① 账户页现价 pAcct：Alpaca → 腾讯 → IBKR 快照 markPrice。
-         ⚠️ Alpaca 已有价时**不覆盖**：它是真实正股报价，休市日就停在上一个收盘（正确的行为）。
-         ⚠️ 以前这条链**只给 TQQQ 留了兜底**（`tqqq.price`），ORCL 什么都没有 ——
-            于是 Alpaca + 腾讯同时失败时，ORCL 直接渲染 `--`、市值也空，
-            而同一张表里 TQQQ 还有 71.69 的快照价看着「正常」，很像只有一只股票出问题。
-            `h.mark0` 就是 IBKR 每日快照里的 markPrice（ORCL = 142.30，正常交易日它就等于收盘价），
-            拿它兜底比开空行强得多。
-         ⚠️⚠️ **不要**把 `seed.pa_us[0].price`（= 71.69）当兜底（用户 2026-10-04 明确要求撤掉）：
-            那是**建仓当时记下的旧价**，与真实价差得远（TQQQ 10-02 真实收盘 81.01）。
-            用它兜底会算出**看着正常但完全错误**的数字 —— 市值 26,435（真实 30,020）、
-            累计盈亏 +44.65%（真实 +63.46%），比显示 `--` 危险得多。
-            TQQQ 不在 IBKR 持仓里（`mark0` 恒为 0），所以它没有快照兜底：
-            两个源都挂时就显示 `--`，这是诚实的结果。 */
+      /* ① 账户页现价 pAcct：**只认 Alpaca 实时报价**（QBOX 累积盒，由 accAlpacaQuotes 写入）。
+         用户 2026-10-05：「账户里面的证券不要 IBKR 先写，因为 TQQQ IBKR 里根本没有，抓一个 ORCL 也没用。
+         就用 Alpaca 实时报价，也不用腾讯 gtimg 兜底，Alpaca 挂了就挂了。」
+         —— 原来那三级兜底（Alpaca → 腾讯 → IBKR 快照 markPrice）的问题正是**不一致**：
+           `mark0` 只有真在 IBKR 持仓里的行有（ORCL 有，TQQQ 的 mark0 恒为 0），
+           于是 Alpaca 一挂，同一张表里 ORCL 仍显示 142.30 看着"正常"、TQQQ 直接 `--`，
+           看着像只有一只股票出问题。统一成「只有 Alpaca」后，全挂就整列 `--`，语义一致。
+         ⚠️ 保留 prevClose 也只来自 Alpaca（今日盈亏/今日涨跌靠它），拿不到就一起空。
+         ⚠️ 绝不能把 `seed.pa_us[0].price`（= 71.69，建仓当时的旧价）当兜底 ——
+            那会算出「看着正常但完全错误」的数字（TQQQ 真实 81.01，市值差 3,585）。 */
       const k = String(h.code || '').toUpperCase();
-      const tx = VAL.txUs[k];
-      if (pAcct == null || !(pAcct > 0)) {
-        if (tx && tx.now) { pAcct = tx.now; src = '腾讯'; if (!(prevClose > 0)) prevClose = tx.prevClose != null ? tx.prevClose : prevClose; }
-        else if (h.mark0 > 0) { pAcct = h.mark0; src = '快照'; }
-      }
+      if (pAcct > 0) src = 'Alpaca';
       /* ② 持仓页现价 pTrade：**OKX 永续优先**（用户 2026-10-04 定稿：
          「持仓里面 orcl 和 tqqq 的现价应该用 okx 的」）。
          OKX 永续 7×24 连续报价，盘中/周末都在动，反映当下真实价格；
-         账户页那个是 IBKR/Alpaca 的账面收盘价（休市日停在 142.30）。
-         取不到时依次回落腾讯 → 账户价，保证不出现空行。 */
+         账户页那个是 Alpaca 的账面收盘价（休市日停在上一收盘）。
+         取不到时回落腾讯 → 账户价，保证持仓页不出现空行（这条链**没动**，
+         用户这次只要求账户页只用 Alpaca）。 */
+      const tx = VAL.txUs[k];
       const ok = VAL_OKX[k];
       const pTrade = (ok && ok.now) ? ok.now : ((tx && tx.now) ? tx.now : pAcct);
       const value = pAcct != null ? qty * pAcct * mult : null;          // 账户页市值（账面口径）
@@ -4855,29 +5592,44 @@
         tradeValueCny: cny(tradeValue), tradeChgCny: cny(tradeChgUsd),
       };
     };
-    /* 持仓股拉两路行情：
-       ① loadUsQuotes（腾讯）—— 给**账户页**现价兜底（Alpaca 限流时用）；
-       ② loadOkxTradeQuotes（OKX 永续）—— 给**持仓页**现价（用户 2026-10-04 定稿）。
-       两路并行，腾讯失败不影响持仓页、OKX 失败不影响账户页。
-       holdings 在这里才声明完，所以补拉放在 forEach 之前。 */
-    const heldCodes = holdings.filter((h) => !h.opt).map((h) => h.code).filter(Boolean);
-    await Promise.all([
-      loadUsQuotesAlpaca(null),      // Alpaca 兜底现价（base 已在初始化时锚定；现价主力是 OKX）
-      loadUsQuotes(null, heldCodes),
-      loadOkxTradeQuotes(heldCodes),
-      /* 基金成分股的实时价也走 OKX（用户 2026-10-04 定稿：持仓里所有最新价格都用 OKX）。
-         heldCodes 与成分股代码合并去重，一次拉完；只要现价不拉日线，省一半请求。 */
-      loadOkxTradeQuotes([...heldCodes, ...usComponentCodes()], { nowOnly: true }),
-    ]);
-    holdings.forEach((h) => {
-      const r = computeRow(h, q);
-      if (r.value != null) rtPosVal += r.value;
-      else if (h.posVal0 != null) rtPosVal += h.posVal0;   // 取不到实时价 → 用 JSON 快照市值兜底
-      if (r.todayPnl != null) todayPnlUsd += r.todayPnl;
-      rows.push(r);
-    });
-
-    if (stockTbody) {
+    /* ---- 证券表「画一遍」抽成函数，一共画两遍：
+           ① 先拿**本地快照价**（IBKR 每日 markPrice / positionValue）画 —— 不等任何网络，
+              证券立刻就有数、不会空表；
+           ② 行情（Alpaca / 腾讯 / OKX）到手后再 `paintStock(q)` **原地升级**。
+         为什么必须两遍（用户 2026-10-05 报「账户里基金现金都很快，证券非常慢甚至出不来」）：
+           Alpaca 那几路是**分页 + 重试**的（stocks/bars / 期权 snapshots / 期权 bars 三端点），
+           任何一路慢下来都会把整块结算压住；同一时间基金（东财脚本 + 本地 nav）与
+           现金（纯本地 JSON）早算完了，看上去就只剩证券卡着。
+         ⚠️ 两遍画必须**复用同一个行对象**（`rowByH` + Object.assign）：
+           ACC_RENDERERS.stock、TRADE_POS.stock 都持有 rows 里的对象引用，
+           第二遍若 push 新对象，交易页那份列表会停在旧价上（就是以前「刷新价格不动」的坑）。 */
+    const rowByH = new Map();
+    /* ⚠️ 行情**累积盒** QBOX：每一路行情（Alpaca / 腾讯 / OKX 之后的重画）都往里
+       `Object.assign` 增量合并，而不是「整批替换」—— 与 VAL.fx 那个坑同源：
+       整批替换会让先到的一路结果被后到（或空）的那一路抹掉。
+       `stagePaint(patch)` 不传 patch 时表示「本地缓存已更新，按现有累积数据重画」。 */
+    const QBOX = { stock: {}, opt: {} };
+    const mergeQ = (p) => {
+      if (!p) return;
+      if (p.stock) Object.assign(QBOX.stock, p.stock);
+      if (p.opt) Object.assign(QBOX.opt, p.opt);
+    };
+    function paintStock(q) {
+      mergeQ(q);
+      rtPosVal = 0; todayPnlUsd = 0;
+      holdings.forEach((h) => {
+        const next = computeRow(h, QBOX);
+        let r = rowByH.get(h);
+        if (!r) { r = next; rowByH.set(h, r); rows.push(r); }
+        else Object.assign(r, next);
+        if (r.value != null) rtPosVal += r.value;
+        /* ⚠️ 2026-10-05：这里原来还有 `else if (h.posVal0 != null) rtPosVal += h.posVal0`
+           —— 用 IBKR 每日快照市值兜底。用户要求去掉（「市值合计也不用保留 ibkr 快照兜底，
+           没有意义」）：没有实时价就不计入，市值曲线/总资产会如实偏低，
+           而不是拿一份旧快照充数让人看不出「行情没到」。 */
+        if (r.todayPnl != null) todayPnlUsd += r.todayPnl;
+      });
+      if (!stockTbody) return;
       // 排序键 code/name/valueCny/pnlCny/todayCny 已由 computeRow 一并写入
       ACC_RENDERERS.stock = () => {
         stockTbody.innerHTML = accSorted('stock', rows).map((r) => {
@@ -4898,11 +5650,51 @@
         if (empty) empty.hidden = true;
       };
       accRender('stock');
+      renderStockSum();          // 侧栏「证券 / 今日盈亏 / 累计盈亏」随第一行一起落定
     }
+    /* ① 第一遍：快照价，零等待 —— 证券表与侧栏证券值秒出，不再空表 + `--` */
+    paintStock({ stock: {}, opt: {} });
+
+    /* ---- 持仓股行情：**分梯队「谁先到先画」，不再 `await` 一个四路 Promise.all ----
+       ⚠️ 为什么（用户 2026-10-05 报「账户里基金和现金刷新都很快，证券的数据就非常慢，甚至出不来」）：
+       基金 = 东财脚本 + 本地 nav、现金 = 纯本地 JSON，**都没有慢网络**，所以永远秒出；
+       证券却要过 Alpaca（分页三端点 + 重试，慢时 8s+）、腾讯（辰慢且易撞 WAF，实测单次 19s）
+       与 OKX。原写法把这四路塞进同一个 `Promise.all` 之后才画第二遍 → **谁最慢谁决定整块
+       什么时候出数**，而基金/现金早算完，看上去就只剩证券卡着；Alpaca 那边一挂（超时/被墙），
+       `paintStock` 那次重画被拖掉，表里就停在快照值甚至出不来。
+       现在改成：OKX 到手先画 → 腾讯到手再画 → Alpaca 最后画，各自带硬超时封顶，
+       任何一路慢/失败都不再压住整块（证券永远「先出快照值 → 逐路升级」）。
+       holdings 在这里才声明完，所以补拉放在这里。 */
+    const heldCodes = holdings.filter((h) => !h.opt).map((h) => h.code).filter(Boolean);
+    const withCap = (p, ms) => Promise.race([
+      Promise.resolve(p), new Promise((r) => setTimeout(() => r(null), ms)),
+    ]);
+    /* 每一路到手就画一次：patch 省略 = 缓存已更新、按现有累积数据重画。 */
+    const stagePaint = (patch) => { if (patch) mergeQ(patch); paintStock(); recalcStockTotals(); };
+
+    /* 第 1 梯队：OKX 永续（7×24、最快，<1s）—— 持仓页现价立刻有数。
+       ⚠️ 这第一下是**同步**的，此时 `totalCny` / `nv` 那些底下才声明的 const 还在 TDZ，
+       所以只用 `paintStock()` 画表（跟以前第一遍一致），汇总/总资产交给下面的异步梯队去 `recalcStockTotals()`。 */
+    paintStock();
+    withCap(loadOkxTradeQuotes(heldCodes), 6000).then(() => stagePaint());
+    /* 基金成分股的实时价也走 OKX（用户 2026-10-04 定稿：持仓里所有最新价格都用 OKX）。
+       heldCodes 与成分股代码合并去重，一次拉完；只要现价不拉日线，省一半请求。 */
+    withCap(loadOkxTradeQuotes([...heldCodes, ...usComponentCodes()], { nowOnly: true }), 6000)
+      .then(() => stagePaint());
+    /* 第 2 梯队：腾讯 —— 账户页现价的第二级兜底（Alpaca 挂掉时靠它），慢但不阻塞前面 */
+    withCap(loadUsQuotes(null, heldCodes), 8000).then(() => stagePaint());
+    /* 第 3 梯队：Alpaca —— 账户页现价主力（base 已在初始化时锚定，这里只补现价） */
+    withCap(loadUsQuotesAlpaca(null), 8000).then(() => stagePaint());
+    withCap(accAlpacaQuotes(stockSyms, optSyms), 9000).then((patch) => {
+      stagePaint(patch);
+      /* 全部梯队收工后再兜一次底：补画走势图末点（init 那条曲线用的是第一梯队之前的快照价） */
+      refreshAoTail();
+    });
+
     /* 证券口径的全部汇总 DOM。抽成函数是为了让 15s 定时刷新能重画
        （原来这些 setTxt 只在初始化跑一次，行情变了数字不动）。 */
     function renderStockSum() {
-      const posVal = () => rows.reduce((s, r) => s + (r.value != null ? r.value : (r.h.posVal0 || 0)), 0);
+      const posVal = () => rows.reduce((s, r) => s + (r.value != null ? r.value : 0), 0)   // 2026-10-05 起不再兜 IBKR 快照市值;
       const longVal = () => rows.filter((r) => r.value != null && r.qty > 0).reduce((s, r) => s + r.value, 0);
       const shortVal = () => rows.filter((r) => r.value != null && r.qty < 0).reduce((s, r) => s + r.value, 0);
       const todayUsd = () => rows.reduce((s, r) => s + (r.todayPnl || 0), 0);
@@ -4932,7 +5724,13 @@
             否则与「总资产」里的证券口径（用 totalNetValueDaily）差 7.93 USD。
             右侧括注美元原值并**备注利息**，让「现金为负」这件事看得懂。 */
       setTxt('mCashCny', f2(ibkrCashAll * FX));
-      setTxt('mCashUsd', f2(ibkrCashAll) + ' USD（含利息 ' + f2(ibkrInterest) + '）');
+      /* ⚠️ 美元原值**别**把「（含利息 …）」拼进来（2026-10-05 用户：「这个含利息另起一行
+         自动居右，现在这个表错行了很难看」）—— 拼在同一个 <i> 里，nowrap 长文本会把整行挤歪。
+         现在由 #mCashInterest 单独一行、右对齐（见 .m-note-r / .m-int）。 */
+      setTxt('mCashUsd', f2(ibkrCashAll) + ' USD');
+      /* 利息为 0 时留空，别留一行孤零零的「含利息 0.00」 */
+      const intEl = $id('mCashInterest');
+      if (intEl) intEl.textContent = ibkrInterest ? '含利息 ' + f2(ibkrInterest) : '';
       setTxt('accStockVal', f2(stockEquityCny));
       setTxt('accStockNote', f2(stockTodayCny, true), stockTodayCny);
       setTxt('accStockPct', stockEquityCny - stockTodayCny ? pctS(stockTodayCny / (stockEquityCny - stockTodayCny)) : '--', stockTodayCny);
@@ -4941,10 +5739,32 @@
       setTxt('accStockCumPct', pctS(stockCumCny / 167600), stockCumCny);
     }
     renderStockSum();
-    const stockEquityCny = (ibkrCashAll + rtPosVal) * FX;   // ↓ 供下方总资产/曲线沿用
-    const stockTodayCny = todayPnlUsd * FX;
-    const stockPnlCny = rows.reduce((s, r) => s + (r.pnl || 0), 0) * FX;
-    const stockCumCny = (ibkrCashAll + rtPosVal) * FX - 167600;
+    /* ⚠️ 下面四个口径改成 `let`：分梯队刷新时每个梯队都要**重算**一遍
+       （原来只在 init 里算一次，证券行情到了之后总资产/曲线还停在快照价上）。
+       `recalcStockTotals()` 就是「证券表画完 → 侧栏 + 总资产 + 走势末点」这一串的后处理。 */
+    let stockEquityCny = (ibkrCashAll + rtPosVal) * FX;   // ↓ 供下方总资产/曲线沿用
+    let stockTodayCny = todayPnlUsd * FX;
+    let stockPnlCny = rows.reduce((s, r) => s + (r.pnl || 0), 0) * FX;
+    let stockCumCny = (ibkrCashAll + rtPosVal) * FX - 167600;
+    function recalcStockTotals() {
+      stockEquityCny = (ibkrCashAll + rtPosVal) * FX;
+      stockTodayCny = todayPnlUsd * FX;
+      stockPnlCny = rows.reduce((s, r) => s + (r.pnl || 0), 0) * FX;
+      stockCumCny = stockEquityCny - 167600;
+      renderStockSum();               // 侧栏「证券 / 今日盈亏 / 累计盈亏」+ 资产卡
+      refreshAoTail();                // 走势图末点（今天）= 实时正股价外推，跟着行情走
+      totalCny = renderAccTotal();    // 账户页总资产 + 累计（函数声明已提升）
+      TRADE_POS.totalCny = totalCny;
+      /* ⚠️ 交易页那一列也要跟着重画：`renderTradeList()` 内部会调 `renderTradeSum()`
+         （持仓页「推算总资产 / 差额」）并顺带触发分时图重画（内部 60s 节流）。
+         漏掉这一步的症状：账户页数字都对了，**持仓页还是快照价 + 空图**（OKX 那一梯队白拉了）。 */
+      if (typeof renderTradeList === 'function') renderTradeList();
+      /* 环形图（个人净资产分布）也要重建 —— 它的数据里有 TQQQ，现价来自 Alpaca 日线，
+         而 Alpaca 属于**最慢那一梯队**。不跟着重算的话，环形图永远定格在
+         「Alpaca 到达前」那一版：TQQQ 那一项缺失、中心总额偏低约 2.9 万
+         （用户 2026-10-05 报的「这个图没算tqqq啊」）。函数声明已提升，可安全后调。 */
+      if (typeof rebuildAoDist === 'function') rebuildAoDist();
+    }
 
     /* ---- 历史·成交（Asset_parsed.trades 88 条 + TQQQ 手动买入） ---- */
     // 证券持仓表已有名称映射，复用它把期权 symbol 拆成「名称 + 代码」
@@ -4953,15 +5773,21 @@
     const tradeRows = (asset.trades || []).map((t) => {
       const flat = String(t.symbol || '').replace(/\s+/g, '');
       const isOpt = /\d{6}[CP]\d{8}$/.test(flat);
-      let name = flat, code = flat, mult = 1;
+      let name = flat, code = flat, mult = 1, sub = null;
       if (isOpt) {
         const m = flat.match(/^([A-Z]+)(\d{6})([CP])(\d{8})$/);
-        if (m) { name = `${m[1]} ${m[2]} ${parseInt(m[4], 10) / 1000} ${m[3] === 'C' ? 'call' : 'put'}`; code = m[1]; mult = 100; }
+        /* ⚠️ 期权名**不把 call/put 拼进 name**（原来是 `ORCL 261002 143 call`）：
+           首列是 table-layout:auto，`white-space:normal` 也压不下 max-content，
+           多 3 个字符就是 +34px 列宽。改成「第一行 `ORCL 261002 143` +
+           第二行灰小字 `call`」（CSS 里 .td-code 是 block），列宽直接降到 ~165px。 */
+        if (m) { name = `${m[1]} ${m[2]} ${parseInt(m[4], 10) / 1000}`; sub = m[3] === 'C' ? 'call' : 'put'; code = m[1]; mult = 100; }
       } else if (nameOf[flat]) { name = nameOf[flat]; }
       const qty = Math.abs(t.quantity || 0);
       const isSell = /^SELL/i.test(t.buySell || '');
+      /* 代码已被名称吃掉就不再渲染第二行（期权：name 已以 code 开头；未映射中文名的正股：name===code） */
+      const dupCode = !sub && name.trim().toUpperCase() === code.toUpperCase();
       return {
-        name, code, side: isSell ? '卖出' : '买入',
+        name, code, sub, dupCode, side: isSell ? '卖出' : '买入',
         price: t.price,
         amount: qty * (t.price || 0) * mult,              // 成交金额按原币（USD），与「币种」列一致
         amountCny: qty * (t.price || 0) * mult * FX,      // 成交金额（CNY），头部汇总行已删，留给明细用
@@ -4977,7 +5803,8 @@
       const isSell = /^sell/i.test(t.type || '');
       const amt = qty * (t.price || 0);
       tradeRows.push({
-        name: u.name || u.symbol, code: u.symbol, side: isSell ? '卖出' : '买入',
+        name: u.name || u.symbol, code: u.symbol, dupCode: (u.name || u.symbol) === u.symbol,
+        side: isSell ? '卖出' : '买入',
         price: t.price, amount: amt, amountCny: amt * FX, realized: null, qty,
         date: t.date, market: '美股', cur: 'USD', decimals: 2,
         _sortSide: isSell ? 1 : 0,
@@ -4987,7 +5814,13 @@
     if (stockHistBody) {
       ACC_RENDERERS.stockH = () => {
         stockHistBody.innerHTML = accSorted('stockH', tradeRows).map((r) =>
-          `<tr><td>${r.name} <span class="td-code">${r.code}</span></td>` +
+          /* ⚠️ 首列「名称/代码」两行：名称在上，灰色小字**换行**在下（CSS 里 .td-code 是 block）：
+             期权第二行是 call/put，正股第二行是代码。第二行重复（期权 name 已含 ORCL、未映射的正股
+             name===code）就不渲染。
+             ⚠️ 别把 call/put 拼进第一行 —— auto 布局下列宽不会小于内容 max-content，
+                多 3 个字符就 +34px（实测首列 250.5px → 212px → 165px 的三段优化全靠这个拆分）。 */
+          `<tr><td>${r.name}${r.sub ? `<span class="td-code">${r.sub}</span>`
+            : (r.dupCode ? '' : `<span class="td-code">${r.code}</span>`)}</td>` +
           `<td class="${r._sortSide ? 'down' : 'up'}">${r.side}</td>` +
           `<td class="num">${r.price == null ? '--' : r.price.toFixed(r.decimals)}</td>` +
           `<td class="num">${f2(r.amount)} / ${r.qty}</td>` +
@@ -5007,7 +5840,7 @@
        抽成函数：15s 刷新时证券实时价会变，总资产/今日盈亏/累计盈亏都得跟着重算，
        否则账户页「证券表在跳、总资产不动」。基金按官方净值（fundAmount）不随盘中变。 */
     function renderAccTotal() {
-      const rtVal = rows.reduce((s, r) => s + (r.value != null ? r.value : (r.h.posVal0 || 0)), 0);
+      const rtVal = rows.reduce((s, r) => s + (r.value != null ? r.value : 0), 0)   // 2026-10-05 起不再兜 IBKR 快照市值;
       const eqCny = (ibkrCashAll + rtVal) * FX;
       const todayCny = rows.reduce((s, r) => s + (r.todayPnl || 0), 0) * FX + fundYesterday;
       const tot = eqCny + fundAmount + cashCny;
@@ -5024,7 +5857,9 @@
       setTxt('accTotalCumPct', costBase > 0 ? pctS(cumCny / costBase) : '--', cumCny);
       return tot;
     }
-    const totalCny = renderAccTotal();
+    /* ⚠️ 必须是 `let`：分梯队刷新时 `recalcStockTotals()` 会重算总资产并回写这个值
+       （写成 const 会在异步梯队里抛 TypeError）。 */
+    let totalCny = renderAccTotal();
     const nv = asset.totalNetValueDaily || [];
     const tail = nv.slice(-80);
     ACC_SPARK.series = tail.map((p) => p.value);
@@ -5080,58 +5915,113 @@
     /* 图标查找：证券/基金用代码 → 现金用账户名 → 最后才按币种兜底。 */
     const iconOf = (code, cur) => ICON_MAP[code] || ICON_MAP['cash:' + String(cur || '').toUpperCase()] || '';
 
-    /* 「资产」视角：每个持仓一扇区（对齐富途「个人净资产分布」）。
-       数据源拼接：证券 rows（实时市值折 CNY）+ 基金逐只（份额×净值）+ 现金各账户。
-       ⚠️ 现金按**账户**分列（而不是笼统一个「现金」）—— 与富途一致，
-          IBKR 的 USD 现金和各 CNY 账户在「币种」维度上是不同的东西。
-       ⚠️ 证券市值优先用 rows 里的实时价折 CNY（valueCny）；取不到价时退回
-          Asset_parsed.json 的快照市值 posVal0×FX，别让该项整个消失。
-       `cat` 决定配色归属（红/黄/绿，同分类在资产视角下取同色系梯度）。 */
-    const assetItems = [];
-    rows.forEach((r) => {
-      const v = r.valueCny != null && r.valueCny > 0
-        ? r.valueCny
-        : (r.h && r.h.posVal0 != null ? r.h.posVal0 * FX : null);
-      if (v > 0) assetItems.push({
-        name: r.name || r.code, code: r.code || '', val: v,
-        cat: '证券', icon: iconOf(r.code),
+    /* 环形图数据重建：抽成函数（2026-10-05）。
+       ⚠️ 原来这段是 init 里**一次性**执行的直线代码，于是「TQQQ 市值取不到」就永远定格：
+          TQQQ 现价来自 Alpaca 日线（tqqqBars / VAL.txUs.TQQQ），而账户页是**分梯队**加载的，
+          环形图往往在 Alpaca 到达前就画完了 → TQQQ 那一项永远缺失、中心总额偏低约 2.9 万
+          （用户 2026-10-05：「这个图没算tqqq啊」）。
+       改法同 rebuildAoSeries：函数声明会被提升，所以既能在这里调、也能在
+       recalcStockTotals()（梯队重算链）里调，后到的数据会自动补上。 */
+    function rebuildAoDist() {
+      /* 「资产」视角：每个持仓一扇区（对齐富途「个人净资产分布」）。
+         数据源拼接：证券 rows（实时市值折 CNY）+ 基金逐只（份额×净值）+ 现金各账户。
+         ⚠️ 现金按**账户**分列（而不是笼统一个「现金」）—— 与富途一致，
+            IBKR 的 USD 现金和各 CNY 账户在「币种」维度上是不同的东西。
+         ⚠️ 证券市值 = rows 里的实时价折 CNY（valueCny），**没有实时价就不进环**
+            （2026-10-05 起不再退回 Asset_parsed.json 的快照市值 posVal0×FX）。
+         `cat` 决定配色归属（红/黄/绿，同分类在资产视角下取同色系梯度）。 */
+      const assetItems = [];
+      rows.forEach((r) => {
+        // 2026-10-05：不再用 IBKR 快照市值 posVal0 兜底 —— 没有实时价就不进环
+        const v = r.valueCny != null && r.valueCny > 0 ? r.valueCny : null;
+        if (v > 0) assetItems.push({
+          name: r.name || r.code, code: r.code || '', val: v,
+          cat: '证券', icon: iconOf(r.code),
+        });
       });
-    });
-    funds.forEach((f) => {
-      const amt = f.shares > 0 && f.navL != null ? f.shares * f.navL : 0;
-      if (amt > 0) assetItems.push({
-        name: f.name, code: f.code, val: amt, cat: '基金', icon: iconOf(f.code),
+      funds.forEach((f) => {
+        const amt = f.shares > 0 && f.navL != null ? f.shares * f.navL : 0;
+        if (amt > 0) assetItems.push({
+          name: f.name, code: f.code, val: amt, cat: '基金', icon: iconOf(f.code),
+        });
       });
-    });
-    cashRows.forEach((c) => {
-      if (c.cny > 0) assetItems.push({
-        /* code 用**账户名**（广发银行/ 农业银行 / 汇丰中国…），不是币种。
-           用户 2026-10-04：「广发银行，农业银行不是写 CNY，就写广发银行，农业银行」。
-           账户名同时是 ICON_MAP 的键（见上面 ICON_MAP 的 note 建键），
-           所以环内/列表里都能拿到各银行自己的 logo。币种挪到 cur 字段备用。 */
-        name: c.note, code: c.note, val: c.cny, cat: '现金',
-        icon: iconOf(c.note, c.cur),
+      cashRows.forEach((c) => {
+        if (c.cny > 0) assetItems.push({
+          /* code 用**账户名**（广发银行/ 农业银行 / 汇丰中国…），不是币种。
+             用户 2026-10-04：「广发银行，农业银行不是写 CNY，就写广发银行，农业银行」。
+             账户名同时是 ICON_MAP 的键（见上面 ICON_MAP 的 note 建键），
+             所以环内/列表里都能拿到各银行自己的 logo。币种挪到 cur 字段备用。 */
+          name: c.note, code: c.note, val: c.cny, cat: '现金',
+          icon: iconOf(c.note, c.cur),
+        });
       });
-    });
 
-    const cnyPart = fundAmount + cashRows.filter((r) => r.cur !== 'USD').reduce((s, r) => s + r.bal, 0);
-    setAoDistData(assetItems, {
-      cat: [
-        { name: '现金', val: cashCny },
-        { name: '证券', val: stockEquityCny },
-        { name: '基金', val: fundAmount },
-      ],
-      cur: [
-        { name: '美元', val: totalCny - cnyPart },
-        { name: '人民币', val: cnyPart },
-      ],
-    }, totalCny);
+      /* ⚠️ **TQQQ 兜底**（用户 2026-10-05：「这个图没算tqqq啊」）。
+         根因不是「漏了他」，而是**他被过滤掉了**：TQQQ 在 app.js:5324 被 push 进 `holdings`，
+         所以 `rows` 里一直有这一行；但它的现价只能来自 Alpaca，而 Alpaca 多标的 bars
+         **按字母序分页**（只返回前 9~10 个，TQQQ 排在最后常被漏掉），
+         现价取不到时 `rows.forEach` 里那个 `if (v > 0)` 就把整项丢掉 ——
+         环上没这一扇区，`rtPosVal`/`totalCny` 也不含它（中心总额偏低约 2.9 万）。
+         所以这里只在 **rows 里那行拿不到价**时，用 TQQQ 自己的 Alpaca 日线补一项；
+         ⚠️ 千万别无条件 push —— rows 里已经有它时会变成两条 TQQQ、各占 2.8%，
+         扇区之和比中心总额多出整整一份（实测多 29,872.68）。
+         取价与 `rebuildAoSeries()` 同口径：股数 = tqqq.trades[0].shares
+         （⚠️ 不是 tqqq.tqqqShares，原始对象上没这字段）。 */
+      const tqqqSharesAo = (tqqq && tqqq.trades && tqqq.trades[0] && tqqq.trades[0].shares) || 0;
+      let tqqqCnyAo = 0;                      // 只在「需要兜底」时才非 0 → 各口径统一加这一份
+      // 只认实时市值（不再看快照 posVal0）：判断「rows 里 TQQQ 有没有价」
+      const tqqqInRows = rows.some((r) => /^TQQQ$/i.test(String(r.code || ''))
+        && r.valueCny != null && r.valueCny > 0);
+      if (!tqqqInRows && tqqqSharesAo) {
+        const todayBjAo = new Date().toLocaleDateString('sv-SE');
+        let pxAo = (VAL.txUs && VAL.txUs.TQQQ && VAL.txUs.TQQQ.now) || 0;
+        if (!(pxAo > 0) && tqqqBars) {
+          const keysAo = Object.keys(tqqqBars).sort();
+          let bestAo = null;
+          for (const k of keysAo) { if (k <= todayBjAo) bestAo = k; else break; }
+          if (bestAo) pxAo = tqqqBars[bestAo];
+        }
+        if (pxAo > 0) {
+          tqqqCnyAo = pxAo * tqqqSharesAo * FX;
+          assetItems.push({
+            name: tqqq.name || '三倍做多纳指ETF', code: 'TQQQ', val: tqqqCnyAo,
+            cat: '证券', icon: iconOf('TQQQ'),
+          });
+        } else {
+          console.warn('[环形图] TQQQ 现价未到（Alpaca 分页未覆盖 / 日线仍在路上），该项暂缺');
+        }
+      }
+
+      const cnyPart = fundAmount + cashRows.filter((r) => r.cur !== 'USD').reduce((s, r) => s + r.bal, 0);
+      /* 中心总额 / 分类 / 币种三处统一加上 `tqqqCnyAo`：
+         兜底 push 的那一项必须同时进总额，否则「各扇区之和 > 中心数字」、占比失真。
+         rows 里本来就有价时 `tqqqCnyAo === 0`，这三个口径一点不动。 */
+      const totalWithTqqq = totalCny + tqqqCnyAo;
+      setAoDistData(assetItems, {
+        cat: [
+          { name: '现金', val: cashCny },
+          { name: '证券', val: stockEquityCny + tqqqCnyAo },
+          { name: '基金', val: fundAmount },
+        ],
+        cur: [
+          { name: '美元', val: totalWithTqqq - cnyPart },
+          { name: '人民币', val: cnyPart },
+        ],
+      }, totalWithTqqq);
+    }
+
+    rebuildAoDist();
 
     /* 每日总资产 = IBKR 净值×FX + TQQQ 市值 + Σ基金份额×当日nav + 现金常数；
        末点替换/追加为实时总资产，与侧栏数字一致。
        ⚠️ TQQQ 必须在历史点里按日补上：IBKR 的 totalNetValueDaily 不含它（TQQQ 是 IBKR 之外
        手动买入的，存在 seed.pa_us），而侧栏 stockEquityCny 含它 —— 漏补会让所有历史点
-       整体偏低约 2.9 万 CNY，末点换成实时值时曲线末端假跳升。 */
+       整体偏低约 2.9 万 CNY，末点换成实时值时曲线末端假跳升。
+       ⚠️ 整段抽成 `rebuildAoSeries()`，两个原因：
+          ① 慢网时 TQQQ 全区间日线（Alpaca）晚到，要整体重算一次（否则历史点永远缺 TQQQ 那段）；
+          ② 分梯队刷新后证券现价会变，曲线末端必须跟着重算（原来只在 init 跑一次，
+             表现就是「证券表在跳、曲线末端不动」）。 */
+    function rebuildAoSeries() {
     const todayBj = new Date().toLocaleDateString('sv-SE');
     // ⚠️ tqqq 是 seed.pa_us[0] 原始对象，股数在 tqqq.trades[0].shares（不是 tqqq.tqqqShares，
     //    那个字段只存在于上面 holdings 里的副本上，写错会让 TQQQ 市值恒为 0）。
@@ -5181,6 +6071,17 @@
       }
     }
     aoState.series = aoSeries;
+    return aoSeries;
+    }
+    rebuildAoSeries();
+    /* `recalcStockTotals()` 每个行情梯队都会调一次：重算曲线 + 重画。
+       （口径见上面注释：末点只叠加正股相对文件快照的变动，不含期权——
+        期权临近到期时 Alpaca 报价会剧烈跳动，放进去会让曲线末端假跳升。） */
+    function refreshAoTail() {
+      if (!aoState.series || !aoState.series.length) return;
+      rebuildAoSeries();
+      drawAoChart();
+    }
 
     /* ---- 交易视图用：把证券 / 基金持仓发布出去 ----
        交易页那份列表要显示「市值 / 盈亏」和持仓汇总，只有持仓才有这些数（自选列表没有仓位概念），
@@ -5199,64 +6100,93 @@
        Alpaca 最后成交就是 10-02 收盘的 142.41，价格本就不该动；但盘中开着不动也必须会动。
        ⚠️ 基金估值只更新现价部分：`loadUsQuotes(baseDate=null)` 会刷 `now` 而**保留** `base`
           （估值基准仍是各基金自己的 navDate），然后重跑 estimateFund。 */
-    TRADE_POS.refresh = async () => {
-      if (document.hidden) return;                 // 页面不可见时省一次请求
-      try {
-        const q2 = await accAlpacaQuotes(stockSyms, optSyms);
-        const held2 = holdings.filter((h) => !h.opt).map((h) => h.code).filter(Boolean);
-        /* 基金成分股也要每轮刷新现价（base 保持不变，见 loadUsQuotesAlpaca 注释）。
-           `baseDate` 传 null → 只更新 now，估值基准仍锚在各基金自己的 navDate 上。 */
-        await Promise.all([
-          loadUsQuotesAlpaca(null),
-          loadUsQuotes(null, held2),
-          loadOkxTradeQuotes(held2),
-          loadOkxTradeQuotes([...held2, ...usComponentCodes()], { nowOnly: true }),
-        ]);
-        rows.forEach((r) => {
-          const prevAcct = r.pAcct;                  // 记住本轮之前的账户价（Alpaca 口径）
-          const next = computeRow(r.h, q2);
+    /* 本轮行情到手 → 重算并重画**一趟**。patch = 本轮新到的那批行情（Alpaca 那路），
+       其余（腾讯 / OKX）只更新了本地缓存，靠 `refreshPaint` 以空 patch 再画一遍。
+       ⚠️ 要走分梯队调用（下面 `pFast` / `pTx` / `pAlp`），不能整轮等齐：
+          「谁先到先画」是这套账户页「证券秒出」的关键，见 boot 处那段的说明。 */
+    let refreshing = false;
+    function refreshPaint(patch) {
+      mergeQ(patch);                               // 增量合并进累积盒（别整批替换，会抹掉先到一路的结果）
+      rows.forEach((r) => {
+        const prevAcct = r.pAcct;                    // 记住本轮之前的账户价（Alpaca 口径）
+        /* ⚠️ 传 QBOX 而不是本轮那批：分梯队刷新时先到的结果要留着，
+           后到的一趟只是再算一遍全量（行对象仍是原地更新，引用不变）。 */
+        const next = computeRow(r.h, QBOX);
         /* 抗闪跳（用户 2026-10-04：「现价一直跳，142.30 / 142.41」）：
            若这一轮 **Alpaca 本身**没取到价（弱网/限流），computeRow 会按设计退到腾讯兜底 →
            现价从 142.41 变成腾讯的 142.30，下个周期 Alpaca 恢复又跳回来。
              这里沿用上一轮的账户价：只有 Alpaca 真给到新价才更新。
              「取不到数据」应表现为「数字不动」，而不是「数字乱跳」—— 前者正常，后者像坏了。
              ⚠️ 判断依据是 **Alpaca 有没有给价**，不能看 `next.pAcct > 0`（那时已被腾讯兜底填成 >0 了）。
+             ⚠️ 判据只看**本批 patch**（腾讯/OKX 那两趟 patch 为空 → 直接沿用旧价，不参与判断）；
              ⚠️ 只锁**账户页**口径（pAcct）；持仓页 pTrade 用 OKX 永续实时价，
                 本就该每轮都动，不受这段抗闪跳影响。 */
-          const kk = String(r.code || r.h.code || '').toUpperCase();
-          const alpacaOk = r.h.opt
-            ? !!(q2 && q2.opt && q2.opt[r.h.occ] && q2.opt[r.h.occ].price > 0)      // 期权走 snapshots
-            : !!(q2 && q2.stock && q2.stock[kk] && q2.stock[kk].price > 0);         // 正股/TQQQ 走 trades
-          if (!alpacaOk && prevAcct > 0) {
-            next.pAcct = prevAcct; next.price = prevAcct; next.src = r.src || '';
-            next.value = prevAcct * next.qty * next.mult;
-            next.tradeValue = next.pTrade != null ? next.pTrade * next.qty * next.mult : next.value;
-            next.pnl = (prevAcct - next.cost) * next.qty * next.mult;
-            next.pnlRatio = next.cost ? (prevAcct - next.cost) / next.cost : null;
-            next.todayPnl = next.prevClose != null ? (prevAcct - next.prevClose) * next.qty * next.mult : null;
-            next.todayPct = next.prevClose ? (prevAcct - next.prevClose) / next.prevClose : null;
-            const fx2 = next.value != null ? FX : 1;
-            next.valueCny = next.value != null ? next.value * fx2 : null;
-            next.pnlCny = next.pnl != null ? next.pnl * fx2 : null;
-            next.todayCny = next.todayPnl != null ? next.todayPnl * fx2 : null;
-            next.tradeValueCny = next.tradeValue != null ? next.tradeValue * fx2 : null;
-            next.tradeChgCny = next.tradeChgUsd != null ? next.tradeChgUsd * fx2 : null;
-          }
-          Object.assign(r, next);                   // 原地更新，引用不变
-        });
-        funds.forEach((f) => {
-          if (!(f.items && f.items.length && f.navDate)) return;
-          const est = estimateFund(f, f.navDate);
-          f.estChg = est.chg; f.estNav = est.navEst;
-          f.estAmount = est.navEst != null ? f.shares * est.navEst : null;
-          f.estDelta = f.estAmount != null ? f.estAmount - f.amount : null;
-          f.estParts = est.parts;
-        });
-        if (ACC_RENDERERS.stock) accRender('stock');
-        renderStockSum();
-        TRADE_POS.totalCny = renderAccTotal();     // 账户页总资产跟着现价走，别让两边脱节
-        if (typeof renderTradeList === 'function') renderTradeList();
+        const kk = String(r.code || r.h.code || '').toUpperCase();
+        const alpacaOk = patch
+          ? (r.h.opt
+            ? !!(patch.opt && patch.opt[r.h.occ] && patch.opt[r.h.occ].price > 0)    // 期权走 snapshots
+            : !!(patch.stock && patch.stock[kk] && patch.stock[kk].price > 0))       // 正股/TQQQ 走 bars
+          : false;
+        if (!alpacaOk && prevAcct > 0) {
+          next.pAcct = prevAcct; next.price = prevAcct; next.src = r.src || '';
+          next.value = prevAcct * next.qty * next.mult;
+          next.tradeValue = next.pTrade != null ? next.pTrade * next.qty * next.mult : next.value;
+          next.pnl = (prevAcct - next.cost) * next.qty * next.mult;
+          next.pnlRatio = next.cost ? (prevAcct - next.cost) / next.cost : null;
+          next.todayPnl = next.prevClose != null ? (prevAcct - next.prevClose) * next.qty * next.mult : null;
+          next.todayPct = next.prevClose ? (prevAcct - next.prevClose) / next.prevClose : null;
+          const fx2 = next.value != null ? FX : 1;
+          next.valueCny = next.value != null ? next.value * fx2 : null;
+          next.pnlCny = next.pnl != null ? next.pnl * fx2 : null;
+          next.todayCny = next.todayPnl != null ? next.todayPnl * fx2 : null;
+          next.tradeValueCny = next.tradeValue != null ? next.tradeValue * fx2 : null;
+          next.tradeChgCny = next.tradeChgUsd != null ? next.tradeChgUsd * fx2 : null;
+        }
+        Object.assign(r, next);                   // 原地更新，引用不变
+      });
+      funds.forEach((f) => {
+        if (!(f.items && f.items.length && f.navDate)) return;
+        const est = estimateFund(f, f.navDate);
+        f.estChg = est.chg; f.estNav = est.navEst;
+        f.estAmount = est.navEst != null ? f.shares * est.navEst : null;
+        f.estDelta = f.estAmount != null ? f.estAmount - f.amount : null;
+        f.estParts = est.parts;
+      });
+      if (ACC_RENDERERS.stock) accRender('stock');
+      renderStockSum();
+      refreshAoTail();                             // 曲线末端跟着现价走
+      totalCny = renderAccTotal();                 // 账户页总资产跟着现价走，别让两边脱节
+      TRADE_POS.totalCny = totalCny;
+      if (typeof renderTradeList === 'function') renderTradeList();
+      if (typeof rebuildAoDist === 'function') rebuildAoDist();   // 同上：环形图跟着现价重算
+    }
+    TRADE_POS.refresh = async () => {
+      if (document.hidden || refreshing) return;   // 页面不可见时省一次请求；上一轮没跑完不叠轮
+      refreshing = true;
+      try {
+        const held2 = holdings.filter((h) => !h.opt).map((h) => h.code).filter(Boolean);
+        /* 三路同时起，**不 await 整轮**：谁先到谁先画。
+           ⚠️ 原来是 `await accAlpacaQuotes(...)` 之后才拉另外三路 —— Alpaca 一慢（分页三端点 +
+           弱网，实测 8~9s）整轮 15s 刷新就压在那儿不动，用户看到的就是「证券一直不出数」。 */
+        /* ⚠️ 持仓代码那一路**单独起、单独画**：它只有一页、最快（<1s），
+           而基金成分股那一路（几十个代码 + 腾讯三后缀）能拖几秒 ——
+           塞进同一个 Promise.all 的话「先到」的 OKX 也会被拖成后到。
+           基金成分股刷新现价时 base 保持不变（见 loadUsQuotesAlpaca 注释；`baseDate` 传 null
+           → 只更新 now，估值基准仍锚在各基金自己的 navDate 上）。 */
+        const pOkx = loadOkxTradeQuotes(held2);
+        const pRest = Promise.all([
+          loadOkxTradeQuotes([...held2, ...usComponentCodes()], { nowOnly: true }),
+          loadUsQuotesAlpaca(null),
+        ]);
+        const pTx = withCap(loadUsQuotes(null, held2), 8000);
+        const pAlp = withCap(accAlpacaQuotes(stockSyms, optSyms), 9000);
+        pOkx.then(() => refreshPaint()).catch(() => {});
+        pRest.then(() => refreshPaint()).catch(() => {});
+        pTx.then(() => refreshPaint()).catch(() => {});
+        pAlp.then((patch) => refreshPaint(patch)).catch(() => {});
+        await Promise.all([pOkx, pRest, pTx, pAlp]);
       } catch (e) { /* 单次失败跳过，下个周期再试；页面仍显示上一轮的数据 */ }
+      refreshing = false;                         // 三路都收工才放行下一轮，避免叠轮
     };
     if (typeof renderTradeList === 'function') renderTradeList();
     aoState.ready = true;
@@ -5317,7 +6247,9 @@
     if (!Object.keys(CAL_FX_MAP).length) {
       console.warn('[日历] usdcnh_daily 缺失，逐日汇率退回当前汇率', FX);
     }
-    CAL_TQQQ_SHARES = tqqqShares;
+    /* TQQQ 股数在 rebuildAoSeries 里是局部变量，这里按同一口径再取一份给日历用
+       （⚠️ 别写 `tqqq.tqqqShares` —— 那是 holdings 副本上的字段，原始 tqqq 对象上没有）。 */
+    CAL_TQQQ_SHARES = (tqqq && tqqq.trades && tqqq.trades[0] && tqqq.trades[0].shares) || 0;
     /* ⚠️ 用 TQQQ 自己的收盘价，**不是** `qqq_daily`（QQQ ETF，价差 9 倍）。 */
     CAL_TQQQ_MAP = tqqqBars || {};
     if (!Object.keys(CAL_TQQQ_MAP).length) console.warn('[日历] TQQQ 日线缺失，TQQQ 市值按 0 计');

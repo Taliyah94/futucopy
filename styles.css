@@ -98,6 +98,10 @@ html, body {
   background: var(--panel);
   border-bottom: 1px solid var(--border);
 }
+/* 账户页侧栏**展开态**下，顶栏整条就是「收起」热区（app.js 在展开态给 .topbar 挂 is-foldable）。
+   ⚠️ 只在窄屏账户视图生效（JS 里按 AC_MQ 加/摘 class），别把桌面顶栏也变成假可点。 */
+.topbar.is-foldable { cursor: pointer; }
+.topbar.is-foldable .topbar__search input { cursor: text; }   /* 搜索框仍是输入光标 */
 .topbar__left { display: flex; gap: 2px; }
 
 .topbar__search {
@@ -172,24 +176,36 @@ html, body {
   border-right: 1px solid var(--border);
 }
 .watchlist__head {
-  display: flex; align-items: center; justify-content: space-between;
+  display: flex; align-items: center; gap: 12px;
   height: 38px; padding: 0 10px 0 14px;
 }
-.wl__title { font-size: 13px; font-weight: 600; }
-.wl__actions { display: flex; gap: 2px; }
+.wl__title { font-size: 13px; font-weight: 600; flex: none; }
+.wl__actions { display: flex; gap: 2px; flex: none; }
 
-/* tabs */
+/* tabs —— ⚠️ 2026-10-05 起 tab 行**并进了 .watchlist__head**（标题左、tab 右同一行）。
+   原来 tab 是 .watchlist 的独立子元素、带 `padding: 0 12px 8px`，现在那一套要改：
+     ① 外边距交给父级 gap/padding，自身不再有左右 padding；
+     ② 高度按行高对齐标题，`::after` 下划线的偏移从 bottom:-6px 收到 -4px
+        （父容器不再是独立块，原来那 6px 是为了躲开 8px 的下 padding）；
+     ③ tab 多的时候（自选 5 个）一行放不下 → 允许横向滚动并隐藏滚动条，
+        免得把右侧的收起按钮/标题挤出可视区。 */
 [data-tabs] { display: flex; }
-.wl__tabs { gap: 14px; padding: 0 12px 8px; }
+.wl__tabs {
+  flex: 1 1 auto; min-width: 0;
+  gap: 14px; padding: 0;
+  overflow-x: auto; scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.wl__tabs::-webkit-scrollbar { display: none; }
 .wl__tabs .tab {
-  position: relative;
+  position: relative; flex: none;
   border: none; background: transparent;
-  color: var(--text-2); font-size: 12px; cursor: pointer;
+  color: var(--text-2); font-size: 13px; cursor: pointer;
   padding: 2px 0;
 }
 .wl__tabs .tab.is-active { color: var(--text); font-weight: 600; }
 .wl__tabs .tab.is-active::after {
-  content: ""; position: absolute; left: 0; right: 0; bottom: -6px;
+  content: ""; position: absolute; left: 0; right: 0; bottom: -4px;
   height: 2px; background: var(--accent); border-radius: 2px;
 }
 
@@ -219,17 +235,24 @@ html, body {
 .wl__list--4 .wl-vp { text-align: right; }
 .wl__list--4 .wl-vp b,
 .wl__list--4 .wl-vp i { display: block; }
-.wl__list--4 .wl-vp b { font-size: 13px; font-weight: 600; color: var(--text); }
+.wl__list--4 .wl-vp b { font-size: 14px; font-weight: 600; color: var(--text); }
+/* 市值也要按涨跌上色（用户 2026-10-05：「市值也要和盈亏一样带颜色」）。
+   ⚠️ 上一条 `color: var(--text)` 会把行内模板挂的 `up`/`down` 类盖掉（两者 specificity 相同，
+   后写的赢）——所以必须在这里按 class 重新声明一遍，不能只靠模板里的 className。 */
+.wl__list--4 .wl-vp b.up { color: var(--up); }
+.wl__list--4 .wl-vp b.down { color: var(--down); }
+.wl__list--4 .wl-vp b.flat { color: var(--text); }
 .wl__list--4 .wl-vp i { font-style: normal; font-size: 11px; margin-top: 2px; }
 .wl__list--4 .wl-vp i.up { color: var(--up); }
 .wl__list--4 .wl-vp i.down { color: var(--down); }
 .wl__list--4 .wl-vp i:not(.up):not(.down) { color: var(--text-3); }
-/* 名称与副行都 ellipsis 禁折行；两端统一 13px / 10px（缩写后 13px 仍有 30px 余量） */
-.wl__list--4 .wl-name b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
-.wl__list--4 .wl-name span { font-size: 10px; }
+/* 名称与副行都 ellipsis 禁折行；两端统一 14px / 11px（2026-10-05 与自选同口径放大，
+   缩写后 13px 时有 30px 余量，14px 仍留约 20px） */
+.wl__list--4 .wl-name b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.wl__list--4 .wl-name span { font-size: 11px; }
 /* 现价 / 涨跌幅两列：数字列也放大到与名称匹配 */
 .wl__list--4 .wl-price,
-.wl__list--4 .wl-pct { font-size: 13px; }
+.wl__list--4 .wl-pct { font-size: 14px; }
 .wl__row--empty { color: var(--text-3); cursor: default; }
 .wl__row--empty .wl-name b { font-weight: 400; color: var(--text-3); }
 .ta-r { text-align: right; }
@@ -244,18 +267,120 @@ html, body {
 .trade-sum[hidden] { display: none; }
 .trade-sum__row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 2px 0; }
 .trade-sum__row span { font-size: 11px; color: var(--text-3); white-space: nowrap; }
-.trade-sum__row b { font-size: 13px; font-weight: 700; }
+.trade-sum__row b { font-size: 14px; font-weight: 700; }   /* 与持仓列表主字号同口径（13→14） */
 /* 主数字是「推算总资产」—— 用 id 精确指定，别用 :first-child，
    否则在上面插入「账户资产」行后会被抢走 15px。 */
 #tradeSumVal { font-size: 15px; }
 /* 差额行：金额 + 占比并排右对齐（各占固定宽度，数字上下不串位） */
 .trade-sum__pair { display: flex; justify-content: flex-end; gap: 10px; }
-.trade-sum__pair b { font-size: 13px; font-weight: 700; text-align: right; }
+.trade-sum__pair b { font-size: 14px; font-weight: 700; text-align: right; }
 .trade-sum__pair b:first-child { min-width: 96px; }
 .trade-sum__pair b:last-child { min-width: 60px; }
+/* 「分时走势」入口：整块 .trade-sum 都可点（app.js 绑在它身上），这一行只是可见提示。
+   默认隐藏 —— 桌面端分时图就在右侧主区常驻，没有「打开」这一步。 */
+.trade-sum__open {
+  display: none;                 /* ≤680px 才放开（见下方媒体查询） */
+  align-items: center; gap: 5px;
+  width: 100%; margin-top: 3px;
+  padding: 4px 0 2px;
+  border: none; background: none;
+  cursor: pointer;
+  font-size: 11px; color: var(--text-3);
+}
+.trade-sum__open-ico { display: inline-flex; width: 12px; height: 14px; color: var(--text-3); }
+.trade-sum__open-ico svg { width: 12px; height: 14px; display: block; }
+.trade-sum__open-caret { width: 9px; height: 6px; color: var(--text-3); margin-left: auto; }
 /* 汇总只留三行（推算总资产 / 与账户总资产差额 / 差额占比）。
    曾有 `.trade-sum__part`（持仓市值合计、现金）与 `.trade-sum__cat`+`.trade-sum__pair`
    （证券/基金·较基准）四行，2026-10-04 按用户要求删除，勿再加回来。 */
+
+/* ---- 推算总资产「分时」图（含富途风格的时段下拉） ---- */
+.asset-chart {
+  flex: none;
+  border-top: 1px solid var(--border);
+  background: var(--panel-2);
+  padding: 6px 12px 8px;
+}
+.asset-chart[hidden] { display: none; }
+.asset-chart__head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.asset-chart__title { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.asset-chart__title b { font-size: 15px; font-weight: 700; }
+.asset-chart__pct { font-size: 13px; font-weight: 700; }
+.asset-chart__unit { font-size: 11px; color: var(--text-3); }
+/* 头部右侧：账户资产读数 + 时段下拉并排（用户 2026-10-05：「盘前前面加个账户资产」） */
+.asset-chart__right { display: flex; align-items: center; gap: 10px; flex: none; }
+.asset-chart__acct { font-size: 11px; color: var(--text-3); white-space: nowrap; }
+.asset-chart__acct b { font-size: 12px; font-weight: 700; color: var(--text-2); }
+
+/* 时段下拉：按钮 = 当前时段的「头像图标 + 文字」，展开是竖排列表（仿富途） */
+.asset-sess { position: relative; flex: none; }
+.asset-sess__btn {
+  display: flex; align-items: center; gap: 5px;
+  padding: 4px 7px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--panel); color: var(--text);
+  font-size: 12px; cursor: pointer; line-height: 1;
+}
+.asset-sess__btn:hover { border-color: var(--brand, #2e6bff); }
+.asset-sess__icon { display: inline-flex; width: 14px; height: 16px; }
+.asset-sess__icon svg { width: 14px; height: 16px; display: block; }
+.asset-sess__caret { width: 9px; height: 6px; color: var(--text-3); flex: none; }
+.asset-sess__menu {
+  position: absolute; right: 0; top: calc(100% + 4px); z-index: 40;
+  min-width: 116px; padding: 4px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.14);
+}
+.asset-sess__menu[hidden] { display: none; }
+.asset-sess__item {
+  display: flex; align-items: center; gap: 7px;
+  width: 100%; padding: 6px 7px; border: none; background: transparent;
+  font-size: 12px; color: var(--text); text-align: left; cursor: pointer; border-radius: 5px;
+}
+.asset-sess__item:hover { background: var(--panel-2); }
+.asset-sess__item.is-active { color: #ff7a18; }
+.asset-sess__item .ico { display: inline-flex; width: 14px; height: 16px; flex: none; }
+.asset-sess__item .ico svg { width: 14px; height: 16px; display: block; }
+.asset-sess__tick { margin-left: auto; font-size: 12px; color: #ff7a18; }
+
+.asset-chart__stage { position: relative; height: 168px; margin-top: 4px; }
+.asset-chart__stage canvas { display: block; width: 100%; height: 100%; }
+
+/* ---- 移动端分时图：**页面内的一块**（不是浮层，2026-10-05 用户定稿：
+       「点分时的时候不是弹出页面，而是应该显示在下面，这时候上面的每个证券基金应该改成能上下滚动」）----
+   ⚠️ 三条铁律，别再改回浮层：
+      ① 不 `position:fixed`、没有遮罩、不锁滚动 —— 图表排在 #tradeSum 之后、跟持仓列表同属一个纵向流，
+         上面 `.wl__list`（flex:1 + overflow-y:auto）自动变矮并照旧上下滚（这才是「上面的列表能滚」）；
+      ② 展开/收起只靠 `#assetSheet[hidden]`，JS 侧不做任何 overflow 改写；
+      ③ 承载的 .asset-chart 与桌面**是同一个 DOM 节点**（app.js 的 placeAssetChart 搬家），
+         所以这里只写「卡片化」的覆盖样式，画布高度沿用基础 `.asset-chart__stage`。 */
+.asset-sheet { display: block; }
+.asset-sheet[hidden] { display: none; }
+.asset-sheet__panel {
+  display: flex; flex-direction: column;
+  background: var(--panel-2);
+  border: 1px solid var(--border); border-radius: 8px;
+  margin: 8px 10px 10px; padding: 2px 0 0;
+}
+.asset-sheet__head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px 2px; }
+.asset-sheet__title { font-size: 13px; font-weight: 700; color: var(--text); }
+.asset-sheet__close {
+  flex: none; width: 26px; height: 26px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: none; background: transparent; border-radius: 6px; cursor: pointer;
+  color: var(--text-2);
+}
+.asset-sheet__close:active { background: var(--panel-2); }
+.asset-sheet__close svg { width: 15px; height: 15px; display: block; }
+/* 页内块：内容块流排版（不用 flex 撑满），只留一点内边距把画布卡片兜住 */
+.asset-sheet__body { padding: 0 6px 6px; }
+/* 嵌在卡片里：去掉 .asset-chart 自己的顶部分隔线与底色，跟卡片合成一张；
+   ⚠️ 高度**必须留在 .asset-chart__stage**（基础规则里的 168px），这里只压窄一点给列表留空间，
+      别写 height:auto —— 页面内块没有 flex 父级，画布会掉成 0 高、图直接空白。 */
+#assetSheetBody .asset-chart {
+  padding: 2px 4px 0;
+  background: transparent; border-top: none;
+}
+#assetSheetBody .asset-chart__stage { height: 152px; margin-top: 2px; }
 
 .wl__row {
   display: grid;
@@ -271,8 +396,10 @@ html, body {
 .wl__row.is-active { background: #fff6ec; border-left-color: var(--accent); }
 
 .wl-name { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.wl-name b { font-size: 13px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.wl-name span { font-size: 10px; color: var(--text-3); }
+/* 名称 14px / 副行 11px（2026-10-05 用户定稿：自选与持仓两端一致，主字号 13→14、附行 10→11）。
+   放大后仍走 ellipsis 禁折行，长名（如「三倍做多纳指ETF」）在窄屏会被截断，属预期。 */
+.wl-name b { font-size: 14px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wl-name span { font-size: 11px; color: var(--text-3); }
 /* 数据时间备注（只有无 K 线的静态行才有）：跟在副行末尾，浅灰更淡、带方括号区分 */
 .wl-asof { font-style: normal; opacity: .75; margin-left: 5px; }
 .wl-asof::before { content: '['; }
@@ -280,11 +407,11 @@ html, body {
 /* 交易页列表：副行「代码 · 证券/基金」也不折行（4 列布局下名称列只有约 96px） */
 .wl__list--4 .wl-name span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-/* 价格 / 涨跌幅：13px 与名称、交易页对齐（原来 12px 比名称小一号，看着偏小）。
-   副行 .wl-sub 保持 10px（那是次级信息：盘前价/涨跌幅小字）。 */
-.wl-price { text-align: right; font-size: 13px; font-weight: 700; }
-.wl-pct  { text-align: right; font-size: 13px; font-weight: 700; }
-.wl-sub  { display: block; text-align: right; font-size: 10px; font-style: normal; color: var(--text-3); }
+/* 价格 / 涨跌幅：14px 与名称、交易页对齐（原来 12px 比名称小一号，看着偏小）。
+   副行 .wl-sub 11px（次级信息：盘前价/涨跌幅小字，10→11）。 */
+.wl-price { text-align: right; font-size: 14px; font-weight: 700; }
+.wl-pct  { text-align: right; font-size: 14px; font-weight: 700; }
+.wl-sub  { display: block; text-align: right; font-size: 11px; font-style: normal; color: var(--text-3); }
 .brand__et { font-size: 12px; color: var(--text-2); margin-left: 4px; }
 .session-tag  {
   /* 时段标签（夜盘/盘前/盘中/盘后）：顶栏里唯一的「状态」信息，
@@ -680,6 +807,9 @@ html, body {
   }
   .trade-view .watchlist--trade > * { width: 100% !important; }
   .trade-view .wl__list--4 { flex: 1 1 auto; max-height: none; min-height: 120px; }
+  /* 移动端：整块汇总框可点开分时图（≤680px 主区隐藏，图只能进浮层）。
+     触屏没有 hover，所以不用 :hover 高亮，靠底部这条「分时走势 ›」提示告知可点。 */
+  .trade-sum__open { display: flex; }
   /* 名称字号已在基础规则统一 11px（两端一致），这里不用再覆盖 */
   /* 移动端不显示右侧主区，交易页就是「持仓列表 + 汇总」全宽一屏。
      桌面端保留占位（`.trade-empty`），那里右侧是空的、留个提示不突兀。 */
@@ -690,7 +820,9 @@ html, body {
   body.is-chart-mode .chart-area { display: flex !important; }
 
   .wl__title { font-size: 13px; }
-  .wl-name b { font-size: 13px; }              /* 触屏字号放大 */
+  /* ⚠️ 触屏放大：这里必须跟随主列表的 14px（2026-10-05 从 13 提上来），
+     否则 ≤680px 会以同选择器覆盖回 13px，手机上比桌面还小一号。 */
+  .wl-name b { font-size: 14px; }
   /* 行更紧凑：触屏行高不必像鼠标那样留太多空间，13 行能多露出几行 */
   .wl__row { padding: 5px 12px; }
   .wl__columns { padding: 5px 12px; }
@@ -890,7 +1022,9 @@ html, body {
   .acc-side__toTotal-sum { font-size: 15px; font-weight: 700; color: var(--text); white-space: nowrap; }
   /* 展开态：左侧总览入口与下方总资产卡重复，只留折叠箭头 —— 且居中（下面已经有个总资产大标题，不需要再写文字说明） */
   .acc-side:not(.is-folded) .acc-side__toTotal { display: none; }
-  .acc-side:not(.is-folded) .acc-side__fold { flex: 1 1 auto; justify-content: center; padding: 2px 0; }
+  /* 展开态：左侧总览入口隐藏，只剩居中箭头；整条撑到 34px 高（原来 22px，
+     用户 2026-10-05 反馈「收起点击范围太小」—— 加上顶栏那条热区才够手指点） */
+  .acc-side:not(.is-folded) .acc-side__fold { flex: 1 1 auto; justify-content: center; padding: 2px 0; min-height: 34px; }
 }
 
 /* ===================== 账户视图（仿富途账户页） ===================== */
@@ -991,17 +1125,90 @@ html, body {
    （以前这里用固定的 `margin-top:-136px` 硬裁顶栏，尺寸改由 fitHeatmap() 统一算，
      两条规则同时生效会互相打架，所以那条已删除。） */
 @media (max-width: 720px) {
-  .screen-head { padding: 8px 12px; gap: 8px; }
-  .screen-switch button { padding: 3px 8px; font-size: 11px; }
+  /* ⚠️ 单行规则（用户 2026-10-05：「刷新 60s 和上面的按钮放一行」）：
+     原来 `flex-wrap: wrap` 会把「刷新」挤到第二行（实测头部 77px 高：
+     第 1 行 = 标题 + 5 个视图按钮，第 2 行 = 刷新）。
+     现在强制一行，靠三件事让它在最窄的手机上也不换行：
+       ① 标题 `flex: 0 1 auto` + `min-width: 0` + 省略号 —— 空间不够先压标题（"美股热力…"）；
+       ② 按钮组 `flex-wrap: nowrap` + `overflow-x: auto` + `min-width: 0` —— 空间再不够就横向滚动，
+          绝不让按钮回落到第二行（注意 `min-width: 0` 缺了的话 flex item 撑得比内容还宽，不会滚）；
+       ③ 缩放下拉（.screen-zoom）在窄屏由 JS 的 syncZoomVisibility() 隐藏，这里不用管。 */
+  .screen-head { padding: 8px 12px; gap: 6px; flex-wrap: nowrap; }
+  /* ⚠️ 用户 2026-10-05 定稿：标题「美股热力图」与「刷新」两字标签**在 ≤720px 一律隐掉**
+     （原先分两档：标题 ≤480、标签 ≤420），不再按机型细分。
+     手机上标题是纯装饰（入口就是底部 tab「选股」，下面还有 .screen-note），
+     「刷新」的语义由 select 的 title 提示兜住 —— 隐掉后 按钮组 302 + 刷新下拉 62 = 364px，
+     最窄机型也稳稳一行，不必再靠标题省略号 / 按钮横滚兜底。 */
+  .screen-head__title { display: none; }
+  .screen-refresh__label { display: none; }
+  .screen-switch {
+    flex: 0 1 auto; min-width: 0;
+    flex-wrap: nowrap; overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;                 /* Firefox */
+  }
+  .screen-switch::-webkit-scrollbar { display: none; }
+  .screen-switch button { flex: 0 0 auto; padding: 3px 8px; font-size: 11px; }
+  .screen-zoom, .screen-refresh { flex: 0 0 auto; }
+  .screen-zoom { margin-left: auto; }
+  .screen-refresh { margin-left: 0; }
+  .screen-zoom select, .screen-refresh select { padding: 2px 4px; }
   .screen-note { padding: 5px 12px 6px; }
 }
+/* ⚠️ 「美股热力图」标题与「刷新」文字标签的隐藏已并入上面的 ≤720px 块
+   （2026-10-05 用户定稿「只要小于 720px 都做」），这里不再留 480 / 420 分档的重复规则。 */
 /* 交易页侧栏宽度：让名称列的可视宽度与移动端（430px 全宽）一致 ——
    移动端 430 - 24内边距 - 62现价 - 54涨跌 - 90市值 - 4×5间距 = 180px 给名称；
    桌面若只给 332px，名称只剩 82px，长基金名几乎全是省略号。 */
 .trade-view .watchlist--trade { flex: 0 0 430px; }
 .trade-view .watchlist--trade > * { width: 430px; }
-.trade-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; overflow-y: auto; }
+/* 桌面端收起/展开（用户 2026-10-05：「桌面端这里右边加个自选一样的收起箭头」） */
+.wl__actions { display: flex; gap: 2px; flex: none; }
+/* 收起态：⚠️ 必须比上面那条多一级 class（0,3,0 > 0,2,0）——
+   否则 `.trade-view .watchlist--trade { flex: 0 0 430px }`（写在后面）会盖掉
+   `.watchlist.is-collapsed { flex-basis: 0 }`，侧栏收不起来。 */
+.trade-view .watchlist--trade.is-collapsed {
+  flex-basis: 0;
+  opacity: 0;
+  border-right-width: 0;
+  pointer-events: none;
+}
+/* 收起按钮只在桌面端出现（移动端侧栏本来就是全宽，没有可收的空间）。
+   ⚠️ 基础规则写 `display:none` + **反向**媒体查询打开 —— 与 .acc-side__foldbar 同一个坑：
+   直接在 680px 媒体查询里写会被后面的基础规则（同 specificity）覆盖掉。 */
+.watchlist--trade .wl__actions { display: none; }
+@media (min-width: 681px) {
+  .watchlist--trade .wl__actions { display: flex; }
+}
+.trade-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; overflow-y: auto; position: relative; }  /* position:relative 给 .panel-expand--l 做参照 */
 .trade-empty { margin: auto; color: var(--text-3); font-size: 13px; }
+/* 桌面端（>680px）：分时图常驻右侧主区，做成一张卡片（原来是光秃秃的占位文案）。
+   2026-10-05 用户：「桌面端这个曲线把下面的空白也都占了吧」→ 卡片**填满剩余高度**，不再固定 300px。
+   ⚠️ `.trade-main` 是 `overflow-y:auto` 的 column flex 容器，要让高度真正被分配下去，
+      必须**三层一起**参与 flex，缺一层就还是被内容高度卡住：
+        .trade-main__chart(flex:1) → .asset-chart(flex:1) → .asset-chart__stage(flex:1)
+   ⚠️ 每层都要写 `min-height:0`：flex 子项默认 `min-height:auto`，不写会被内容顶出容器
+      （stage 尤其致命 —— 画布量到 0 高就静默空白，且不报错）。
+   ⚠️ 别退回「height:auto 但没有 flex 父级」的写法：那样画布量到 0，图直接空白。 */
+.trade-main__chart {
+  padding: 12px; min-width: 0;
+  flex: 1 1 auto; min-height: 260px;   /* 兜底高度：窗口很矮时也不会压成一条 */
+  display: flex; flex-direction: column;
+}
+#assetChartHolder .asset-chart {
+  flex: 1 1 auto; min-height: 0;       /* 原来是 height:300px 固定 */
+  display: flex; flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--border); border-radius: 10px;
+  padding: 8px 12px 10px;
+}
+#assetChartHolder .asset-chart__stage { height: auto; flex: 1 1 auto; min-height: 0; }
+/* 桌面端主区已被图表占满，占位文案去掉。
+   ⚠️ 用反向媒体查询（min-width: 681px）而不是在 680 块里写 display:none ——
+   同选择器若把基础规则写在媒体查询**之后**，会静默覆盖掉媒体查询的值（实测踩过）。 */
+@media (min-width: 681px) {
+  .trade-empty { display: none; }
+}
 
 /* 左侧资产摘要 */
 .acc-side {
@@ -1072,8 +1279,53 @@ html, body {
    手指横滑被 acc-main 吃掉，表格反而滚不动，右边几列怎么都滑不到。
    表格自己的横向滚动交给 .acc-table-wrap，这里必须禁止。 */
 .acc-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; overflow-x: hidden; overflow-y: auto; padding: 0 18px 18px; }
-/* 指标卡（现只存在于「资产」面板内） */
-.acc-metric { min-width: 0; }
+/* 指标卡（现只存在于「资产」面板内）
+   ⚠️ 这里用 **grid 三列**（标签 auto / 金额 1fr 右对齐 / 美元原值 auto），
+   而不是每行一个 flex + space-between：
+   那种写法每行的列宽各算各的 —— 金额右边线跟着数字长短漂（「0.00」和「316092.05」
+   右边缘差一大截），现金行更被 .m-note-r 整块挤到最右，整张表歪掉
+   （用户 2026-10-05：「中间的数要对齐啊」）。
+   grid 的列宽由**所有行里最宽的那个**决定，于是标签/金额/美元三条竖线全程对齐。 */
+.acc-metric {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  column-gap: 10px;
+  align-items: center;
+  font-size: 11px; color: var(--text-2);
+}
+.acc-metric h4 { grid-column: 1 / -1; }   /* 标题独占一整行，不参与三列 */
+.acc-metric .m-row { display: contents; }  /* 行本身退成透明的壳，列由父级 grid 统一分配 */
+/* ⚠️ 每个子元素必须**显式落列**。grid 默认是「自动流动」：子元素少的行会把后面的
+   标签/数字顺位填到下一列去 —— 实测基金页（无美元列）第 2 行的「累计收益」标签
+   串到第 3 列、数字被弹回第 1 列（bR 从 339 变成 96，整列歪掉）。 */
+.acc-metric .m-row > *:nth-child(1) { grid-column: 1; }
+.acc-metric .m-row > *:nth-child(2) { grid-column: 2; }
+.acc-metric .m-row > *:nth-child(3) { grid-column: 3; }
+/* 基金/现金页的指标卡没有美元原值列 → 只留两列。否则第三列 0 宽 + column-gap
+   会白白吃掉 10px，数字右边缘比有美元列的页面内缩一截。 */
+.acc-metric:not(:has(.m-usd)) { grid-template-columns: auto minmax(0, 1fr); }
+.acc-metric .m-row > * { margin: 5px 0; white-space: nowrap; }
+.acc-metric .m-row b { font-weight: 700; color: var(--text); text-align: right; }
+/* USD 原值括注（灰色小字，紧跟 CNY 金额） */
+.acc-metric .m-row .m-usd {
+  flex: none; min-width: 62px; text-align: right;
+  font-size: 10px; font-style: normal; color: var(--text-3);
+}
+/* ⚠️ 「现金总值」是**两行**结构（2026-10-05 用户：「含利息另起一行自动居右，
+   现在这个表错行了很难看」）—— 美元原值在上、含利息备注在下，竖排整体靠右。
+   以前把「（含利息 7.93）」拼进同一个 <i>，nowrap 长文本把整行挤歪（错行），别再拼回去。
+   grid 下这一行高两行，默认居中会让 CNY 金额掉到中间 → 改成顶部对齐。 */
+.acc-metric .m-row--cash > * { align-self: start; }
+.acc-metric .m-note-r {
+  flex: none;
+  display: flex; flex-direction: column; align-items: flex-end; gap: 1px;
+}
+/* 列宽由内容决定（不是写死 62px），两行才会上下同宽、右边缘齐平 */
+.acc-metric .m-note-r .m-usd { min-width: 0; }
+.acc-metric .m-note-r .m-int {
+  font-size: 10px; font-style: normal; color: var(--text-3); white-space: nowrap;
+}
 /* 「资产」面板：指标卡常驻其中，点 tab 就地显示 */
 .acc-asset {
   background: var(--panel);
@@ -1086,17 +1338,6 @@ html, body {
   margin: 0 0 8px; padding-bottom: 6px;
   font-size: 12px; font-weight: 700; color: var(--text);
   border-bottom: 1px solid var(--border);
-}
-.acc-metric .m-row {
-  display: flex; justify-content: space-between; align-items: center; gap: 8px;
-  margin: 5px 0; font-size: 11px; color: var(--text-2);
-  white-space: nowrap;
-}
-.acc-metric .m-row b { font-weight: 700; color: var(--text); }
-/* USD 原值括注（灰色小字，紧跟 CNY 金额） */
-.acc-metric .m-row .m-usd {
-  flex: none; min-width: 62px; text-align: right;
-  font-size: 10px; font-style: normal; color: var(--text-3);
 }
 /* 指标卡的盈亏数字同样绿涨红跌 */
 .acc-metric .m-row b.up { color: var(--up); }
@@ -1329,10 +1570,9 @@ html, body {
 /* 数值字号 20px 偏大（用户 2026-10-04：「字体小一半，太大了」）。
    这行是走势图上方的辅助读数，不是页面主标题，14px 与列表里的数字层级一致。 */
 .ao-stat b { font-size: 14px; font-weight: 700; }
-/* 统计行：默认显示区间统计，悬停时切换为该日净值/当日收益（类名由 JS 切到 .ao-stats.is-hover） */
-.ao-stat--hover { display: none; }
-.ao-stats.is-hover .ao-stat--hover { display: block; }
-.ao-stats.is-hover .ao-stat--range { display: none; }
+/* 统计行：恒显区间统计（累计收益 / 区间收益率），不随光标变化。
+   ⚠️ 原先还有一套悬停切换（`.ao-stat--hover` 隐藏 + `.is-hover` 时换成「日期 + 资产净值 / 当日收益」），
+   2026-10-05 按用户要求整套删除，勿再加回来 —— 光标移动只影响画布上的十字引线。 */
 .ao-chart-wrap { height: 300px; margin: 8px 12px 0; cursor: crosshair; position: relative; }
 /* ⚠️ `touch-action: pan-y` —— 手指横向拖动由脚本处理（画十字引线），
    纵向仍交给页面滚动。不写的话移动端浏览器会把手势全吞给页面/图表，拖不出引线。 */
@@ -1458,6 +1698,33 @@ html, body {
 .acc-history .acc-table th:nth-child(-n+2),
 .acc-history .acc-table td:nth-child(-n+2) { text-align: left; }
 .acc-table .td-code { color: var(--text-3); font-size: 10px; margin-left: 4px; }
+/* 基金历史表首列 = **产品名称**（用户 2026-10-05：「产品名称在第一列，固定产品名称」）。
+   基金名动辄 20+ 字（如 `嘉实纳斯达克100ETF发起联接(QDII)A人民币`），沿用全局 white-space:nowrap
+   会把它整串撑成一道墙、把后面的列全挤到横滚区。这里放开折行 + 行高压到 1.3，
+   最长两行收得住；sticky 由上面的 `:first-child` 规则统一接管，不必另写。 */
+.acc-history[data-hist="fund"] .acc-table th:first-child,
+.acc-history[data-hist="fund"] .acc-table td:first-child {
+  white-space: normal; line-height: 1.3; overflow-wrap: anywhere;
+}
+
+/* 「历史·成交」表首列「名称/代码」收窄（用户 2026-10-05：「名称代码窄一点，太宽了」）
+   ⚠️ 根因：`.acc-table td` 全局 `white-space:nowrap`，而期权名是 `ORCL 261002 143 call`
+      这种纯英文数字长串，尾部再并排挂一个灰色 `ORCL` ⇒ 实测首列被撑到 **250.5px**，
+      而手机视口只有 394px —— 光这一列就吃掉 2/3 宽度，后面 7 列全得横滚才看得见。
+   三处一起改（只限定证券成交表 `[data-hist="stock"]`，别波及基金/现金历史表的「已完成」标签）：
+     ① 首列放开 nowrap（th/td 都放），长期权名允许断成两行；
+     ② 首列 max-width 卡住上限，行高由 td 自己撑（最多两行，不会纵向爆炸）；
+     ③ `.td-code` 改成 `display:block` —— 灰色代码从「同行后缀」变成**第二行小灰字**，
+        列宽立刻回到「最长名称」那一档（≈160px），且视觉上名称/代码分层更清楚。 */
+.acc-history[data-hist="stock"] .acc-table th:first-child,
+.acc-history[data-hist="stock"] .acc-table td:first-child { white-space: normal; }
+.acc-history[data-hist="stock"] .acc-table td:first-child { max-width: 160px; }
+.acc-history[data-hist="stock"] .acc-table .td-code {
+  display: block; margin: 2px 0 0; overflow-wrap: anywhere;
+}
+/* 名称行本身最多两行、超出省略（td 是表格布局容器，line-clamp 要套在它自己的行内元素上，
+   所以这里给裸文本行兜底用 line-height 收一下，实际最长就是 `ORCL 261002 143 call` 一行） */
+.acc-history[data-hist="stock"] .acc-table td:first-child { line-height: 1.35; }
 
 /* 账户页「持仓/历史」切换：块级元素带 display 需强制覆盖 [hidden] */
 .acc-page [hidden] { display: none !important; }

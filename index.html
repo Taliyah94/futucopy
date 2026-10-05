@@ -15,7 +15,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="资产看板" />
-<link rel="stylesheet" href="styles.css?v=20261007q" />
+<link rel="stylesheet" href="styles.css?v=20261007zt" />
 </head>
 <body>
 <div class="app">
@@ -62,16 +62,20 @@
     <aside class="watchlist">
       <div class="watchlist__head">
         <span class="wl__title">自选</span>
+        <!-- 分类 tab 与标题**同一行**（用户 2026-10-05：「这两个下面的移上去，和自选、持仓在一行上」）。
+             ⚠️ tab 行从独立一块挪进 .watchlist__head，JS 只靠 [data-tabs] 委托，搬家不影响绑定；
+             但 CSS 里凡是假设「.wl__tabs 是 .watchlist 的直接子元素」的规则都要跟着改。 -->
+        <div class="wl__tabs" data-tabs="wl">
+          <button class="tab is-active" data-wl-cat="all">全部</button>
+          <button class="tab" data-wl-cat="us">美股</button>
+          <button class="tab" data-wl-cat="cn">沪深</button>
+          <button class="tab" data-wl-cat="fut">期货</button>
+          <!-- 文案按用户 2026-10-05 要求：「加密货币」→「加密币」（并进标题行后横向空间更紧） -->
+          <button class="tab" data-wl-cat="ccy">加密币</button>
+        </div>
         <div class="wl__actions">
           <button class="icon-btn icon-btn--sm" id="wlCollapse" title="收起自选"><svg viewBox="0 0 24 24" class="ic"><path d="M14 6l-6 6 6 6"/></svg></button>
 </div>
-</div>
-      <div class="wl__tabs" data-tabs="wl">
-        <button class="tab is-active" data-wl-cat="all">全部</button>
-        <button class="tab" data-wl-cat="us">美股</button>
-        <button class="tab" data-wl-cat="cn">沪深</button>
-        <button class="tab" data-wl-cat="fut">期货</button>
-        <button class="tab" data-wl-cat="ccy">加密货币</button>
 </div>
       <div class="wl__columns">
         <span>名称代码</span>
@@ -297,17 +301,11 @@
               </div>
             </div>
 
-            <!-- 悬停时：日期 + 资产净值 / 当日收益；未悬停：累计收益 / 区间收益率 -->
+            <!-- 走势图上方固定读数：区间累计收益 / 区间收益率。
+                 ⚠️ 这里**不做**跟随光标的切换（原先悬停时换成「日期 + 资产净值 / 当日收益」，
+                 2026-10-05 按用户要求整块删除——读数恒定是区间口径，光标只在画布上出十字引线）。 -->
 
             <div class="ao-stats" id="aoStats">
-              <div class="ao-stat ao-stat--hover">
-                <span id="aoStatDate">--</span>
-                <b class="num" id="aoStatPoint">--</b>
-              </div>
-              <div class="ao-stat ao-stat--hover">
-                <span id="aoStatName">当日收益</span>
-                <b class="num" id="aoStatDay">--</b>
-              </div>
               <div class="ao-stat ao-stat--range">
                 <span id="aoStatLabel">累计收益 · CNY</span>
                 <b class="num" id="aoStatVal">--</b>
@@ -446,7 +444,18 @@
             <div class="m-row"><span>证券市值</span><b class="num" id="mStockVal">--</b><i class="m-usd" id="mStockValUsd"></i></div>
             <div class="m-row"><span>· 多头市值</span><b class="num" id="mStockLong">--</b><i class="m-usd" id="mStockLongUsd"></i></div>
             <div class="m-row"><span>· 空头市值</span><b class="num" id="mStockShort">--</b><i class="m-usd" id="mStockShortUsd"></i></div>
-            <div class="m-row"><span>现金总值</span><b class="num" id="mCashCny">--</b><i class="m-usd" id="mCashUsd"></i></div>
+            <!-- ⚠️ 现金这一行是**两行结构**（2026-10-05 用户：「含利息另起一行自动居右」）：
+                 美元原值 + 含利息备注包在 .m-note-r 里竖排并自动靠右。
+                 以前把「（含利息 7.93）」拼进同一个 <i>，长文本把整行挤歪（错行）。
+                 其余行（证券市值/证券净值/累计收益…）是单行 .m-row，别照搬这个结构。 -->
+            <div class="m-row m-row--cash">
+              <span>现金总值</span>
+              <b class="num" id="mCashCny">--</b>
+              <span class="m-note-r">
+                <i class="m-usd" id="mCashUsd"></i>
+                <i class="m-int" id="mCashInterest"></i>
+              </span>
+            </div>
             <div class="m-row"><span>证券净值</span><b class="num" id="mStockEquity">--</b><i class="m-usd" id="mStockEquityUsd"></i></div>
             <div class="m-row"><span>累计收益</span><b class="num" id="mPnlTotal">--</b><i class="m-usd" id="mPnlTotalUsd"></i></div>
           </div>
@@ -504,8 +513,11 @@
               <table class="acc-table" data-sort-table="fundH">
                 <thead>
                 <tr>
-                  <th data-sort="type">交易类型/状态<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                  <!-- 第一列 = 产品名称：横向滚动时由 .acc-table th/td:first-child 的
+                       position:sticky;left:0 钉住（用户 2026-10-05：「产品名称在第一列，固定产品名称」），
+                       交易类型/状态退到第二列 -->
                   <th data-sort="name">产品名称<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                  <th data-sort="type">交易类型/状态<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
                   <th data-sort="amount">金额/份额<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
                   <th data-sort="cur">币种<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
                   <th data-sort="date">下单时间<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
@@ -651,11 +663,16 @@
       <aside class="watchlist watchlist--trade">
         <div class="watchlist__head">
           <span class="wl__title">持仓</span>
-        </div>
-        <div class="wl__tabs" data-tabs="wlTrade">
-          <button class="tab is-active" data-wl-trade-cat="all">全部</button>
-          <button class="tab" data-wl-trade-cat="us">证券</button>
-          <button class="tab" data-wl-trade-cat="fund">基金</button>
+          <!-- 同上：分类 tab 并进标题行 -->
+          <div class="wl__tabs" data-tabs="wlTrade">
+            <button class="tab is-active" data-wl-trade-cat="all">全部</button>
+            <button class="tab" data-wl-trade-cat="us">证券</button>
+            <button class="tab" data-wl-trade-cat="fund">基金</button>
+          </div>
+          <!-- 桌面端收起箭头（用户 2026-10-05：「桌面端这里右边加个自选一样的收起箭头」） -->
+          <div class="wl__actions">
+            <button class="icon-btn icon-btn--sm" id="tradeCollapse" title="收起持仓"><svg viewBox="0 0 24 24" class="ic"><path d="M14 6l-6 6 6 6"/></svg></button>
+          </div>
         </div>
         <div class="wl__columns wl__columns--4">
           <span>名称代码</span>
@@ -684,9 +701,87 @@
               <b class="num" id="tradeSumPct">--</b>
             </span>
           </div>
+        <!-- 打开资产分时图的入口：整块 .trade-sum 都可点（app.js 绑在它身上，
+             移动端切换展开/收起；桌面端 AC_MQ 不匹配直接 no-op）。
+             这一行只是**可见的提示**（桌面端图表就在右边主区里，这条隐藏掉）。 -->
+          <button class="trade-sum__open" id="tradeSumOpen" type="button" title="打开资产分时图">
+            <span class="trade-sum__open-ico">
+              <svg viewBox="0 0 14 16" aria-hidden="true">
+                <path d="M1 12.5l3.2-3.8 2.6 2.2L13 4" fill="none" stroke="currentColor"
+                      stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </span>
+            <span>分时走势</span>
+            <svg class="trade-sum__open-caret" viewBox="0 0 10 6" aria-hidden="true">
+              <path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.4"
+                    stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
         </div>
+
+        <!-- ⚠️ 分时图区（.asset-sheet）必须放在**汇总框（.trade-sum）之后、aside 之内**：
+             移动端 ≤680px 它是页面内的一块（不是浮层），落在持仓列表下面，
+             上面的 `.wl__list`（flex:1）自动变矮、照旧上下滚（用户 2026-10-05：「显示在下面，
+             上面的每个证券基金应该改成能上下滚动」）。
+             ⚠️ 不能塞进 .trade-sum 里面 —— 那样图会跑到「分时走势」入口上面，成了汇总框的一行。
+             桌面端 >680px 时 app.js 的 placeAssetChart() 会把同一个 .asset-chart 节点搬去右侧主区
+             #assetChartHolder，这里只是空壳容器（#assetSheetBody），不是第二份拷贝 —— 别复制 canvas。 -->
+        <div class="asset-sheet" id="assetSheet" hidden>
+          <div class="asset-sheet__panel">
+            <div class="asset-sheet__head">
+              <span class="asset-sheet__title">推算总资产 · 分时</span>
+              <button class="asset-sheet__close" id="assetSheetClose" type="button" aria-label="收起分时图">
+                <svg viewBox="0 0 16 16" aria-hidden="true">
+                  <path d="M3.5 3.5l9 9M12.5 3.5l-9 9" fill="none" stroke="currentColor"
+                        stroke-width="1.6" stroke-linecap="round"/>
+                </svg>
+              </button>
+            </div>
+            <div class="asset-sheet__body" id="assetSheetBody"></div>
+          </div>
+        </div>
+
       </aside>
       <main class="trade-main" id="tradeMain">
+        <!-- 持仓侧栏收起后的浮动展开按钮（桌面端；与自选页 #wlExpand 同一套样式）。
+             ⚠️ 挂在 .trade-main 里而不是 body：它是 `position:absolute`，父级需要 relative。 -->
+        <button class="panel-expand panel-expand--l trade-expand" id="tradeExpand" title="展开持仓" hidden><svg viewBox="0 0 24 24" class="ic"><path d="M10 6l6 6-6 6"/></svg></button>
+        <!-- 桌面端（>680px）：推算总资产分时图放进右侧主区（原先这里只有 `.trade-empty` 占位）。
+             移动端（≤680px）右侧主区被 CSS 隐藏、图也不能塞进列表，
+             所以这张图**同一个 DOM 节点**在「#assetChartHolder ↔ #assetSheetBody」之间搬家
+             （见 app.js 的 placeAssetChart）—— 别复制两份 canvas，否则只会画到其中一处。 -->
+        <div class="trade-main__chart" id="assetChartHolder">
+          <div class="asset-chart" id="assetChart" hidden>
+            <div class="asset-chart__head">
+              <div class="asset-chart__title">
+                <b class="num" id="assetChartVal">--</b>
+                <span class="num asset-chart__pct" id="assetChartPct">--</span>
+                <span class="asset-chart__unit">CNY</span>
+              </div>
+              <!-- 右侧：账户资产读数 + 时段下拉。
+                   ⚠️ 顺序别换：用户 2026-10-05 要求「盘前前面加个账户资产」，
+                   也就是账户资产排在时段下拉**左边**。 -->
+              <div class="asset-chart__right">
+                <span class="asset-chart__acct">账户资产 <b class="num" id="assetChartAcct">--</b></span>
+                <div class="asset-sess" id="assetSess">
+                  <button class="asset-sess__btn" id="assetSessBtn" type="button" aria-haspopup="listbox"
+                          aria-expanded="false" title="资产分时时段">
+                    <span class="asset-sess__icon" id="assetSessIcon"></span>
+                    <span id="assetSessLabel">盘中</span>
+                    <svg class="asset-sess__caret" viewBox="0 0 10 6" aria-hidden="true">
+                      <path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.4"
+                            stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                  </button>
+                  <div class="asset-sess__menu" id="assetSessMenu" role="listbox" hidden></div>
+                </div>
+              </div>
+            </div>
+            <div class="asset-chart__stage" id="assetChartStage">
+              <canvas id="assetCanvas"></canvas>
+            </div>
+          </div>
+        </div>
         <div class="trade-empty">在这里搭建交易功能（当前为自选列表的副本）</div>
       </main>
     </section>
@@ -713,7 +808,6 @@
         <div class="screen-switch" id="screenSwitch">
           <button data-screen-key="sp-500">S&amp;P 500</button>
           <button data-screen-key="nasdaq-100">Nasdaq 100</button>
-          <button data-screen-key="russell-2000">Russell 2000</button>
           <button class="is-active" data-screen-key="all-stocks">全部个股</button>
           <button data-screen-key="sectors">板块</button>
           <button data-screen-key="market" title="Winners / Losers / 各市场表现 / 板块 / 因子（Tickertiles 仪表盘）">市场</button>
@@ -779,6 +873,6 @@
 </div>
 </div>
 </div>
-<script src="app.js?v=20261007q"></script>
+<script src="app.js?v=20261007zt"></script>
 </body>
 </html>

@@ -15,7 +15,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="资产看板" />
-<link rel="stylesheet" href="styles.css?v=20261007zu" />
+<link rel="stylesheet" href="styles.css?v=20261007zz" />
 </head>
 <body>
 <div class="app">
@@ -120,7 +120,9 @@
 </div>
         </div>
 
-        <!-- 美股分时时段下拉（仿富途：盘前/盘中/盘后/夜盘/全天） -->
+        <!-- 分时时段下拉（仿富途：盘前/盘中/盘后/夜盘/全天）
+             美股(US) / 期货(CME·NYMEX) / 加密币(USDT) 三类 7x24 品种都用它，
+             「全天」窗口统一从**最近一个美东 20:00** 起算（见 app.js 的 SESSION_MARKETS） -->
 
         <ul class="session-menu" id="usSessionMenu" hidden>
           <li data-session="pre">
@@ -873,6 +875,6 @@
 </div>
 </div>
 </div>
-<script src="app.js?v=20261007zu"></script>
+<script src="app.js?v=20261007zz"></script>
 </body>
 </html>

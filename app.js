@@ -239,6 +239,20 @@
     night:   { label: '夜盘', match: (m) => m >= 1200 || m < 240 },  // 20:00-04:00（跨零点）
     all:     { label: '全天', match: () => true },                   // 最近 24h
   };
+
+  /* 2026-10-05 用户定稿：「期货和加密币也和美股一样分盘前盘中盘后夜盘吧，一天的起点也是美东
+     20:00，每天的收盘价和基准价也和美股一样的逻辑」——
+     - 支持时段下拉的品种 = 美股(US) + 期货(CME/NYMEX) + 加密币(USDT 现货)，
+       三者在 OKX 上都是 **7x24 连续**，所以能按美东钟点整段切（夜盘 20:00-04:00 /
+       盘前 04:00-09:30 / 盘中 09:30-16:00 / 盘后 16:00-20:00）。
+     - 「一天的起点 = 美东 20:00」对它们同样成立 → 时段里的 **「全天 / 1D」窗口 = 最近一个
+       美东 20:00 到现在**（见 etLast20Ts），不再是滚动 24h。
+     - 「收盘价/基准价」口径也统一：涨跌幅基准 = **前一日美东 15:00 那根小时的收盘**
+       （= 16:00 收盘，周末自动落周五），见 BASE_MARKETS / fetchPrevCloseET。
+     与 SESSION_MARKETS 保持一致的另一个集合是 BASE_MARKETS（见「涨跌幅基准」段）。 */
+  const SESSION_MARKETS = new Set(['US', 'CME', 'NYMEX', 'USDT']);
+  const hasSessions = (market) => SESSION_MARKETS.has(market);
+
   function currentSessionKey() {   // 默认显示「当前进行中」的美东时段（盘前看盘前、盘中看盘中，富途同款）
     const s = usSession();         // '盘前' | null(盘中) | '盘后' | '夜盘'
     if (s === '盘前') return 'pre';
@@ -305,8 +319,10 @@
     return pages.flat();                             // 最新在前
   }
 
-  /* 美股分时：拉取 -> 按美东时段过滤 -> 最近一个该时段窗口 -> 点序列 */
-  async function fetchUsSessionSeries(instId, sessionKey) {
+  /* 分时（美股 / 期货 / 加密币通用）：拉取 -> 按美东时段过滤 -> 最近一个该时段窗口 -> 点序列
+     ⚠️ 名字里的「Us」是历史命名，现在三类品种共用（期货 CME/NYMEX、加密币 USDT 现货都是
+        7x24 连续，同一个切分逻辑），别再单独写一套给期货/加密币用。 */
+  async function fetchSessionSeries(instId, sessionKey) {
     const sess = US_SESSIONS[sessionKey] || US_SESSIONS.regular;
     const raw = await fetchRawCandles(instId, 1800);      // 最新在前
 
@@ -389,10 +405,11 @@
       renderQuote(APP_DATA.quote);
     }
 
-    // 分时下拉入口仅美股 + 分时模式显示；其他周期一律收起
+    /* 分时下拉入口仅「美股 / 期货 / 加密币」+ 分时模式显示；其他周期一律收起
+       （2026-10-05：期货和加密币也按时段切，见 SESSION_MARKETS） */
     const pt = $('#periodTab');
     const menu = $('#usSessionMenu');
-    const showSessionCaret = !!(item && item.market === 'US' && chartMode === 'time');
+    const showSessionCaret = !!(item && hasSessions(item.market) && chartMode === 'time');
     if (pt) pt.classList.toggle('has-caret', showSessionCaret);
     if (menu && !showSessionCaret) menu.hidden = true;
 
@@ -421,9 +438,10 @@
           ? await fetchTxTimeSeries(item.txCode)
           : await fetchTxPeriodSeries(item.txCode, chartMode);
       } else if (chartMode === 'time') {
-        // 分时：美股按选中时段（盘前/盘中/盘后/夜盘/全天）切分；其余：最近 100 根 1m
-        series = (item.market === 'US')
-          ? await fetchUsSessionSeries(item.instId, usSessionSel)
+        /* 分时：美股/期货/加密币按选中时段（盘前/盘中/盘后/夜盘/全天）切分；
+           其余（A股指数等）仍是最近 100 根 1m。 */
+        series = hasSessions(item.market)
+          ? await fetchSessionSeries(item.instId, usSessionSel)
           : await fetchCandles(item.instId, 100, '1m');
       } else {
         // K 线周期：5日/日K/周K/月K/季K/年K（折线图，与分时同一渲染）
@@ -447,12 +465,17 @@
   const LIVE_INST_IDS = APP_DATA.watchlist.filter((x) => x.instId).map((x) => x.instId);
 
   /* -------------------------------------------------------------------
-     涨跌幅基准：美股/期货用「前一日美东收盘价」（16:00 ET），其余用 open24h
-     - 美东收盘价由小时线推算：最近一根 美东周五~周一 15:00-16:00 的已完结 K 线收盘
-       （15:00 那根的收盘时刻即 16:00，周末自然落到周五）
+     涨跌幅基准（「每天的收盘价 / 基准价」）：美股 + 期货 + 加密币统一走同一套，其余用 open24h
+     - 2026-10-05 用户定稿：「期货和加密币也和美股一样分盘前盘中盘后夜盘，每天的收盘价和
+       基准价也和美股一样的逻辑」→ 三类品种共用下面的 BASE_MARKETS。
+     - 美东收盘价由小时线推算：最近一根 **美东周一~周五 15:00 的已完结 K 线收盘**
+       （15:00 那根的收盘时刻即 16:00，周末自然落到周五/周四）
      - 缓存 10 分钟：收盘基准一天只变一次，没必要每轮刷新都拉
+     ⚠️ BASE_MARKETS 必须与上面的 SESSION_MARKETS **完全一致** ——
+        一个管图上时段切分、一个管涨跌幅基准，改动要一起动。
+     - 图上百分比轴基准沿用同一值（drawChart 取 quote.prevClose），保证「图上 0% = 报价头 0%」。
      ------------------------------------------------------------------- */
-  const BASE_MARKETS = new Set(['US', 'CME', 'NYMEX', 'USDT']);   // USDT = 加密货币，同样按美股口径
+  const BASE_MARKETS = new Set(['US', 'CME', 'NYMEX', 'USDT']);
   const BASE_TTL = 10 * 60 * 1000;
   const prevCloseCache = {};                       // instId -> { value, at }
 
@@ -525,9 +548,11 @@
         item.pct = +pct.toFixed(2);
         item.change = +(last - base).toFixed(last < 1 ? 6 : 2);
         item.prevClose = base;
-        // 美股：延长时段（盘前/盘后/夜盘）主行改显「昨收快照」——昨收价 + 昨收相对前收的涨跌幅，
-        // 现价与相对昨收的涨跌挪到副行小字（富途盘前样式）；prev2/prevDayPct 供渲染用
-        if (item.market === 'US') {
+        // 延长时段（盘前/盘后/夜盘）主行改显「昨收快照」——昨收价 + 昨收相对前收的涨跌幅，
+        // 现价与相对昨收的涨跌挪到副行小字（富途盘前样式）；prev2/prevDayPct 供渲染用。
+        // ⚠️ 用户 2026-10-05 定稿：期货(CME/NYMEX)与加密币(USDT)也按美股同一口径切主行/副行
+        //    —— hasSessions 与 BASE_MARKETS 是同一集合，改一处必须两处一起改。
+        if (hasSessions(item.market)) {
           const pc = prevCloseCache[instId] || {};
           item.prev2 = pc.prev2 || null;
           item.prevDayPct = (pc.prev && pc.prev2)
@@ -878,7 +903,7 @@
         row.pct = q.pct;
         row.change = q.change;
         row.prevClose = q.prevClose;
-        // A股没有盘前盘后，ext 恒空（渲染层只对 market==='US' 用 ext，这里保持一致）
+        // A股没有盘前盘后，ext 恒空（渲染层只对 hasSessions 品种用 ext，这里保持一致）
         row.extPrice = null;
         row.extPct = null;
         // ⚠️ 刻意**不写** asOf：asOf 是「无 K 线静态行」的数据时间备注（见 renderWatchlist）。
@@ -1131,7 +1156,7 @@
            （截图里 X 轴 04:14 → 06:04 → 07:53 → 04:13，跨了一天多）；
          · all（1D）更离谱：match 恒真 → 整 24h 全进 → 起点是「现在往前 24h」，
            而不是「最近一个美东 20:00」。
-       口径与自选页 `fetchUsSessionSeries` 完全一致（那边是降序 raw、这边是升序 axis，故方向相反）：
+       口径与自选页 `fetchSessionSeries` 完全一致（那边是降序 raw、这边是升序 axis，故方向相反）：
          ① all = **交易日窗口**：最近一个 ET 20:00（夜盘开盘 = 新交易日起点）→ 最新一根。
             用 `etLast20Ts()` 直接算时间戳，**不要**写成「从最新往前扫 m>=1200」——
             当前不是夜盘时（一天里 16 小时都是）那种扫法永远扫不到，裁剪会被跳过、退化成 24h。
@@ -1167,15 +1192,25 @@
 
     /* 合成：每个时间点上，每只股取「该时刻及之前最近一根」的价格（前值填充），
        没有任何历史点的用昨收；再换成 CNY 加常数项。 */
+    /* 合成：每个时间点上，每只股取「该时刻及之前最近一根」的价格（前值填充），
+       没有任何历史点的用昨收；再换成 CNY 加常数项。
+       ⚠️ 性能（2026-10-05 修）：原来内层是 `for (const pt of leg.pts) { if (pt.ts > ts) break; ... }`
+       —— **每个 ts 都把整条 1440 根的腿从头扫一遍**，总复杂度 O(轴长 × K线数)，
+       盘前 ~240 点 × 8 只股 × 1440 根 ≈ 2.8M 次迭代，空结果 fallback 时还会连跑 4 个时段（×4）。
+       因为 leg.pts 已升序，改成**每只股一个游标、单向推进**即可：总复杂度 O(轴长 + K线数)。 */
     const out = [];
+    const cursors = legs.map(() => 0);          // 每只股的下一个待消费的下标
     for (const ts of axis) {
       let equityUsd = 0;
-      for (const leg of legs) {
-        const s = leg.s;
-        let price = prevOf[s.code];
-        for (const pt of leg.pts) { if (pt.ts > ts) break; if (pt.price > 0) price = pt.price; }
+      for (let li = 0; li < legs.length; li++) {
+        const leg = legs[li];
+        let price = prevOf[leg.s.code];
+        const arr = leg.pts;
+        let i = cursors[li];
+        while (i < arr.length && arr[i].ts <= ts) { if (arr[i].price > 0) price = arr[i].price; i++; }
+        cursors[li] = i;                        // 已消费过的不再重扫
         if (price == null) continue;
-        equityUsd += (s.qty || 0) * price;
+        equityUsd += (leg.s.qty || 0) * price;
       }
       out.push({ ts, price: equityUsd * target + fund + cash });
     }
@@ -1445,7 +1480,7 @@
        否则切视图那一下（parts 尚未就绪）就浪费了，用户要干等到下一个 15s tick。 */
     if (!TRADE_POS.ready || !TRADE_POS.parts) { assetPending = true; return; }
     const stale = Date.now() - assetChartTs > 60000;
-    if (!force && !stale) { drawAssetChart(assetChartData); return; }
+    if (!force && !stale) { syncAssetBase(); paintAssetHead(); drawAssetChart(assetChartData); return; }
     assetChartTs = Date.now();
     try {
       assetChartData = await assetSeries(assetSessSel);
@@ -1462,9 +1497,30 @@
         } catch (e2) { /* 换下一个 */ }
       }
     }
+    syncAssetBase();
     paintAssetHead();
     drawAssetChart(assetChartData);
   }
+
+  /* ⚠️ 修一个真实的表现级 bug（2026-10-05 用户「加载也有点慢」顺手量的）：
+     `assetSeries` 每 60s 才跑一次（K 线节流），它算出来的 `series.base` 会被**冻结**在那一次。
+     而 `parts.base` = `TRADE_POS.totalCny`，这是个**分梯队逐步升级**的值：
+       第 1 梯队（5s 上下）totalCny 可能还是 0/昨收口径 → assetSeries 走 fallback 兜底算出 736,183；
+       第 2 梯队（9s 上下）totalCny 才是账户资产 1,052,275。
+     于是曲线上的百分比永远卡在「相对那个旧基准」的错值上（实测卡在 **+44.22%**，
+     而同一时刻汇总框已经是 +0.90%），要等下一个 60s 节流窗口过去才自己修正 —— 用户看着就是「数字不对」。
+     修法：`v`（各点金额）本身没错、也没依赖 base，所以**不需要重拉 K 线**，
+     只要 base 变了就按新 base 把每个点的 pct 重算一遍（免费，零网络）。
+     ⚠️ 必须在 paintAssetHead / drawAssetChart 之前调用，否则头部百分比还是旧的。 */
+  function syncAssetBase() {
+    const p = TRADE_POS.parts;
+    if (!assetChartData || !assetChartData.pts || !assetChartData.pts.length) return;
+    const nb = p && Number(p.base) > 0 ? p.base : assetChartData.base;
+    if (!nb || nb === assetChartData.base) return;
+    assetChartData.base = nb;
+    for (const d of assetChartData.pts) d.pct = (d.v / nb - 1) * 100;
+  }
+
   function paintAssetHead() {
     const pctEl = document.getElementById('assetChartPct');
     const valEl = document.getElementById('assetChartVal');
@@ -1632,10 +1688,10 @@
       const shown = cat === 'all' ? list : list.filter((x) => catOf(x) === cat);
       ul.innerHTML = shown.map((it) => {
       const active = it.code === activeCode ? ' is-active' : '';
-      const isUS = it.market === 'US';
-      // 美股延长时段（盘前/盘后/夜盘）：主行显示「昨日收盘快照」= 昨收价 + 昨收相对前收的涨跌幅，
-      // 现价与相对昨收的涨跌挪到副行小字（富途盘前样式）；盘中/非美股维持现价口径
-      const ext = isUS && !!session && it.prevDayPct != null && it.prevClose != null;
+      // 延长时段（盘前/盘后/夜盘）：主行显示「昨日收盘快照」= 昨收价 + 昨收相对前收的涨跌幅，
+      // 现价与相对昨收的涨跌挪到副行小字（富途盘前样式）；盘中 / 非 SESSION_MARKETS 品种维持现价口径。
+      // ⚠️ hasSessions 与 BASE_MARKETS 是同一集合（美股·期货·加密币），改一处必须两处一起改。
+      const ext = hasSessions(it.market) && !!session && it.prevDayPct != null && it.prevClose != null;
       const mainPrice = ext ? it.prevClose : it.price;
       const mainPct = ext ? it.prevDayPct : it.pct;
       const c = cls(mainPct);
@@ -2113,7 +2169,7 @@
       }
       /* 「全天 / 1D」会**跨美东日界**（窗口从最近一个 20:00 起算，最长跨两个日历日），
          只画 HH:MM 分不清哪天。在 ET 00:00 处画一条竖分隔线 + `MM/DD` 标注。
-         series[].t 在 all 模式下是 "YYYY-MM-DD HH:mm"（见 fetchUsSessionSeries）。
+         series[].t 在 all 模式下是 "YYYY-MM-DD HH:mm"（见 fetchSessionSeries）。
          ⚠️ 非美股标的（上证指数）的 t 只有 "HH:mm"，slice(0,10) 拿不到日期，
             会让每根的 day 都相同 —— 这里加长度门槛，t 太短直接跳过日界标注。 */
       if (chartMode === 'time' && usSessionSel === 'all' && String(series[0].t).length > 11) {
@@ -2230,7 +2286,8 @@
     if (!menu || !periodTab) return;
 
     periodTab.addEventListener('click', () => {
-      if (APP_DATA.quote.market !== 'US') return;    // 仅美股有此下拉
+      /* 仅「美股 / 期货 / 加密币」有此下拉（2026-10-05 起期货、加密币也按时段切） */
+      if (!hasSessions(APP_DATA.quote.market)) return;
       if (chartMode !== 'time') { chartMode = 'time'; loadInstrument(APP_DATA.quote.code); }
       if (chartMode === 'time') menu.hidden = !menu.hidden;
     });
@@ -2536,8 +2593,17 @@
       setTimeout(fitHeatmap, 400);
       /* 「市场」不是热力图，走仪表盘地址（带 sort / names 参数） */
       const want = isMarketView() ? MARKET_URL : HEATMAP_BASE + heatKey + '/';
-      if (screenFrame.getAttribute('src') !== want) {
-        screenFrame.setAttribute('src', want);
+      const cur = screenFrame.getAttribute('src') || '';
+      /* ⚠️ 必须与上面 setInterval 的守卫配对看：守卫让「非选股器视图」下 src 一直停在那儿，
+         这里若只比 `src !== want` 就会判定「已经最新」而不重载 —— 切回来看到的是旧图
+         （实测：切走 185s 再切回，0 次重载）。所以：
+           - 带时间戳的先剥掉再比，否则每次切回来都白刷一遍；
+           - 时间戳超过 30s（半个刷新周期）就算陈旧，强制补刷一次，
+             保证「切回选股器立刻看到新数据」，而不是干等下一个 60s。 */
+      const m = cur.match(/[?&]r=(\d+)/);
+      const stale = !!m && (Date.now() - Number(m[1]) > 30000);
+      if (cur.replace(/[?&]r=\d+/, '') !== want || stale) {
+        screenFrame.setAttribute('src', want + (/[?&]/.test(want) ? '&' : '?') + 'r=' + Date.now());
         if (screenLoading) { screenLoading.hidden = false; screenLoading.textContent = isMarketView() ? '市场页加载中…' : '热力图加载中…'; }
         /* 兜底：iframe 的 load 事件在「src 由 JS 设置 + 首次渲染」时序下可能早于监听器绑定，
            提示就永远撤不掉。这里再挂一个 12s 定时器，到点无条件收起
@@ -2584,7 +2650,13 @@
         refreshTimer = 0;
         if (ms > 0) {
           refreshTimer = setInterval(() => {
+            /* ⚠️ 必须同时判「当前视图」：切到自选/持仓/账户后 screenFrame 仍在 DOM 里
+               （switchView 只切 hidden，从不 clearInterval），改 src 就会真的发起一次
+               境外整页加载（tickertiles 是境外站、2961 只票，国内本来就不稳）。
+               原来的守卫只判 document.hidden（切标签页/最小化），判不出「视图藏没藏」。
+               副作用是安全的：切回选股器时 mountHeatmap 会照常重载一次，数据照样新。 */
             if (document.hidden || !screenFrame) return;         // 页面不可见时不折腾
+            if (screenView && screenView.hidden) return;         // 不在选股器视图时不折腾
             /* 加个时间戳绕过 HTTP 缓存，否则重载回来的可能还是旧页面 */
             screenFrame.setAttribute('src', (isMarketView() ? MARKET_URL : HEATMAP_BASE + heatKey + '/?z=' + hmZoom) + '&r=' + Date.now());
           }, ms);
@@ -3236,23 +3308,47 @@
      ⚠️ nav 行的时间戳是 **毫秒数字**（如 1765209600000），早前直接 String(row[0]).slice(0,10)
         当字符串比较（"1765209600" <= "2025-12-09" 恒为真）→ 永远返回最后一条，
         表现为「日变动恒为 0」。这里按数字/字符串分别归一化后再比较。 */
+  /* ⚠️ 性能关键（2026-10-05 定位）：这里原本是**线性全扫 + 每行一次 `new Date().toISOString()`**，
+     而调用方 `aoSeries`（nv.map → funds.reduce）会按「每个日期 × 每只基金」发动上万次，
+     实测量：22s 内 `toISOString` 被调用 **109 万次 / 1149ms**，主线程被连续长任务吃掉 ~1.5s → 页面卡顿。
+     净值历史（fund_holdings.json 的 nav）是**按 ms 升序**的（已实测确认，原 `for…else break`
+     的写法本就依赖这个前提），所以改成**二分查找**：O(n) → O(log n)，197 行只需 ~8 步。
+     配合下面 navOnDate 的 Map 缓存，toISOString 总量从 109 万次降到「历史里不同 ts 的个数」(=1101)。
+     ⚠️ 二分结果若有多条同日期，线性版取的是最后一条、二分取的是最右一条 —— 两者语义一致。 */
   function navOn(hist, date) {
     if (!hist || !hist.length) return null;
-    const key = (v) => (typeof v === 'number' ? navOnDate(v) : String(v).slice(0, 10));
-    let last = null;
-    for (const row of hist) {
-      if (key(row[0]) <= date) last = row[1];
-      else break;
+    if (typeof hist[0][0] !== 'number') {            // 字符串日期分支（罕见）：退回原线性扫描，保持旧语义
+      let last = null;
+      for (const row of hist) {
+        if (String(row[0]).slice(0, 10) <= date) last = row[1];
+        else break;
+      }
+      return last;
     }
-    return last;
+    let lo = 0, hi = hist.length - 1, ans = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (navOnDate(hist[mid][0]) <= date) { ans = mid; lo = mid + 1; }
+      else hi = mid - 1;
+    }
+    return ans < 0 ? null : hist[ans][1];
   }
 
   /* ms 时间戳 → 'YYYY-MM-DD'：按 UTC+8 取日。
      ⚠️ QDII 基金按**美东交易日**计净值，东财 pingzhongdata 的 x 是「北京时间零点的 UTC 值」，
      用 UTC 取日会整体少一天（实测嘉实 000043：东财标 2026-09-28 的 6.33，新浪标 2026-09-29 的 6.33，
      逐条比对 6.146/6.224/6.271/6.392/6.412/6.352/6.348/6.317/6.33 全部一致，仅日期差 1 天）。 */
+  /* ⚠️ 加了 Map 缓存：净值历史的 ts 种类只有 ~1100 个，但上面 navOn 的调用量是百万级，
+     缓存后 `new Date()/toISOString` 只对**真正没见过的 ts** 执行一次。
+     ⚠️ 缓存键是原始 ts，不存「ts+8h」的偏移结果 —— 函数语义（+8h 后取 UTC 日）不许被缓存改变。 */
+  const NAV_DAY_CACHE = new Map();
   function navOnDate(ts) {
-    return new Date(ts + 8 * 3600e3).toISOString().slice(0, 10);
+    let s = NAV_DAY_CACHE.get(ts);
+    if (s === undefined) {
+      s = new Date(ts + 8 * 3600e3).toISOString().slice(0, 10);
+      NAV_DAY_CACHE.set(ts, s);
+    }
+    return s;
   }
 
   /* -------------------------------------------------------------------

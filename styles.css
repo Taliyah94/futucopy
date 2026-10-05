@@ -303,6 +303,10 @@ html, body {
 }
 .asset-chart[hidden] { display: none; }
 .asset-chart__head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+/* 侧栏收起时左上角会出现展开按钮（.panel-expand--l：left 8px、宽 24px），会压住头部的大数字。
+   与自选页 `.chart-area.wl-collapsed .quote-head { padding-left: 42px }` 同一思路：
+   给头部补一段左内边距，让标题与百分比整体右移到按钮右边。 */
+.trade-view.is-side-collapsed .asset-chart__head { padding-left: 40px; }
 .asset-chart__title { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
 .asset-chart__title b { font-size: 15px; font-weight: 700; }
 .asset-chart__pct { font-size: 13px; font-weight: 700; }

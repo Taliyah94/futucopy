@@ -2746,12 +2746,19 @@
         if (isMobile()) return;          // 移动端按钮被 CSS 隐藏，这里再挡一道
         tradeSide.classList.add('is-collapsed');
         tradeExpand.hidden = false;
+        /* 给 .trade-view 挂个状态位：CSS 用它给分时图头部留出左边距，
+           否则左上角的展开按钮会压住大数字（用户 2026-10-05 报的遮挡）。
+           与自选页 `.chart-area.wl-collapsed .quote-head { padding-left: 42px }` 同一思路。 */
+        const tv = document.getElementById('tradeView');
+        if (tv) tv.classList.add('is-side-collapsed');
         repaintAsset();
       });
       tradeExpand.addEventListener('click', () => {
         if (isMobile()) return;
         tradeSide.classList.remove('is-collapsed');
         tradeExpand.hidden = true;
+        const tv = document.getElementById('tradeView');
+        if (tv) tv.classList.remove('is-side-collapsed');
         repaintAsset();
       });
     }

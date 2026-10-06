@@ -36,7 +36,7 @@
       <img class="brand__logo" src="brand-logo.png" alt="" width="20" height="20" />
       <span class="brand__name">资产看板</span>
       <span class="brand__et num" id="brandEt">美东 --:--:--</span>
-      <b class="session-tag" id="brandSession" hidden>盘前</b>
+      <b class="session-tag" id="brandSession" hidden>盘中</b>
 </div>
   </header>
 
@@ -272,6 +272,8 @@
                 <button data-ao-range="3m">近3月</button>
                 <button data-ao-range="ytd">今年以来</button>
                 <button data-ao-range="all">自始以来</button>
+                <!-- 对比基准：叠加「同期把同样的钱全买 QQQ」的走势（历史=本地日线，今日=OKX 永续实时价） -->
+                <button class="ao-ranges__bench" data-ao-bench="qqq" title="叠加 QQQ 同期收益对比">对比QQQ</button>
 </div>
 </div>
 
@@ -315,6 +317,11 @@
               <div class="ao-stat ao-stat--range">
                 <span id="aoStatLabel2">区间收益率</span>
                 <b class="num" id="aoStatPct">--</b>
+              </div>
+              <!-- 对比基准同期收益率：只在「对比QQQ」打开时显示 -->
+              <div class="ao-stat ao-stat--range" id="aoStatBenchBox" hidden>
+                <span>QQQ 同期</span>
+                <b class="num" id="aoStatBench">--</b>
               </div>
             </div>
 
@@ -784,6 +791,23 @@
             </div>
           </div>
         </div>
+
+        <!-- 桌面端（>1200px）持仓页资讯面板：图表曲线**右边**那一栏，与自选页右侧资讯同源
+             （「最新」= 东财股吧/雪球/Reddit 社区聚合，「推荐」= 金十快讯），可收起/展开。
+             ⚠️ 它和自选页 .comment-panel 是**两份独立 DOM**（列表 id 不同，一个节点只能挂一处），
+                但共用同一份数据与同一个 tab 状态 —— app.js 的 cpListEls() 统一渲染两处。
+             ⚠️ ≤1200px 由 CSS 整块隐藏（与自选页 .comment-panel 同一档），移动端 .trade-main 本就不显示。 -->
+        <aside class="trade-news" id="tradeNews">
+          <div class="cp__head trade-news__head" data-tabs="feedTrade">
+            <button class="cp-tab" data-cp-tab="latest">最新</button>
+            <button class="cp-tab is-active" data-cp-tab="news" title="金十数据快讯（默认）">推荐</button>
+            <button class="icon-btn icon-btn--sm trade-news__close" id="tradeNewsClose" title="收起资讯"><svg viewBox="0 0 24 24" class="ic"><path d="M9 5l7 7-7 7"/></svg></button>
+          </div>
+          <ul class="cp__list" id="tradeNewsList"></ul>
+        </aside>
+        <!-- 收起后的展开按钮：绝对定位在 .trade-main 右上角（父级自带 position:relative） -->
+        <button class="panel-expand panel-expand--tr" id="tradeNewsExpand" title="展开资讯" hidden><svg viewBox="0 0 24 24" class="ic"><path d="M14 6l-6 6 6 6"/></svg></button>
+
         <div class="trade-empty">在这里搭建交易功能（当前为自选列表的副本）</div>
       </main>
     </section>
@@ -867,6 +891,8 @@
       <button data-ao-range="3m">近3月</button>
       <button data-ao-range="ytd">今年以来</button>
       <button data-ao-range="all">自始以来</button>
+      <!-- 与非全屏那个共用 aoState.bench，点任一个两边同步高亮 -->
+      <button class="ao-fs__bench" data-ao-bench="qqq" title="叠加 QQQ 同期收益对比">对比QQQ</button>
     </div>
     <button class="icon-btn icon-btn--sm" id="aoFsClose" title="关闭"><svg viewBox="0 0 24 24" class="ic"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
   </div>

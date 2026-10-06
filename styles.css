@@ -425,6 +425,10 @@ html, body {
   font-size: 12px; font-weight: 700; line-height: 17px;
   color: var(--text); background: var(--panel-2); vertical-align: 1px;
 }
+/* ⚠️ display:inline-block 会盖掉 UA 的 [hidden]{display:none}：正常盘中时段
+   usSession() 返回 null、标签文字清空且置 hidden，但不加这条它仍渲染成
+   一个空的带边框小胶囊（时钟右边冒出一条小横杠，用户 2026-10-07 报告）。 */
+.session-tag[hidden] { display: none; }
 
 .up   { color: var(--up); }
 .down { color: var(--down); }
@@ -643,6 +647,51 @@ html, body {
 .cp__list[hidden] { display: none !important; }
 
 .cp__item { padding: 12px 14px; border-bottom: 1px solid var(--border); }
+
+/* ---- 「最新」tab：多站社区评论聚合（东财股吧 / 雪球 / Reddit via oanor）----
+   （新浪股吧与 SeekingAlpha 2026-10-06 实测不可达已弃；东财资讯新闻源与 Adanos
+   情绪卡 2026-10-07 按用户要求移除。） ---- */
+   数据靠公共 CORS 代理取回，代理限频/下线是常态，所以状态条必须**如实显示每个源
+   出了多少条、哪个挂了**，否则用户会以为「没评论」而不是「这个源没取到」。 */
+.cp__srcbar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 14px; flex: none;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-2);
+  font-size: 11px; color: var(--text-3);
+}
+/* ⚠️ display:flex 会盖掉 UA 的 [hidden]{display:none}：不在「最新」tab 时必须显式隐藏，
+   否则「推荐」顶部会残留一条源状态栏（用户 2026-10-07 要求）。 */
+.cp__srcbar[hidden] { display: none; }
+.cp__chips { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.cp__chip {
+  font-style: normal; line-height: 16px; padding: 1px 5px; border-radius: 2px;
+  background: var(--panel); border: 1px solid var(--border); color: var(--text-3);
+  white-space: nowrap;
+}
+.cp__chip.is-ok { color: #067647; border-color: rgba(6, 118, 71, .25); background: rgba(6, 118, 71, .07); }
+.cp__chip.is-bad { color: #b42318; border-color: rgba(180, 35, 24, .22); background: rgba(180, 35, 24, .06); }
+.cp__chip.is-load { color: #b54708; border-color: rgba(181, 71, 8, .2); background: rgba(181, 71, 8, .07); }
+.cp__srcbar .cp__meta { margin-left: auto; white-space: nowrap; }
+.cp__srcbtn {
+  flex: none; font-size: 11px; line-height: 18px; padding: 1px 8px; cursor: pointer;
+  color: var(--text-2); background: var(--panel);
+  border: 1px solid var(--border); border-radius: 3px;
+}
+.cp__srcbtn:hover { color: var(--text); border-color: var(--text-3); }
+.cp__srcbtn[disabled] { opacity: .5; cursor: default; }
+/* 源标签：跟在作者名后面，区分评论来自哪一站 */
+.cp__src {
+  font-style: normal; font-size: 10px; line-height: 16px; padding: 0 4px;
+  border-radius: 2px; margin-left: auto; flex: none;
+  color: var(--text-3); background: var(--panel-2); border: 1px solid var(--border);
+}
+.cp__src--guba { color: #b54708; background: rgba(181, 71, 8, .07); border-color: rgba(181, 71, 8, .2); }
+.cp__src--xueqiu { color: #175cd3; background: rgba(23, 92, 211, .07); border-color: rgba(23, 92, 211, .2); }
+.cp__src--sa { color: #067647; background: rgba(6, 118, 71, .07); border-color: rgba(6, 118, 71, .2); }
+.cp__item--cplatest .cp__text { word-break: break-word; }
+.cp__link { color: inherit; text-decoration: none; }
+.cp__link:hover { color: var(--text); text-decoration: underline; }
 /* ---- 快讯流（金十）：仿富途时间轴 = 左侧圆点+时间，下方正文 ---- */
 .cp__news { padding: 10px 14px 12px 14px; }
 .cp__news-time {
@@ -1214,6 +1263,51 @@ html, body {
   .trade-empty { display: none; }
 }
 
+/* ---- 持仓页资讯面板（2026-10-07 新增：桌面端图表曲线右侧那一栏）----
+   内容/条目样式直接复用 .cp__*（最新=社区聚合，推荐=金十快讯），这里只定义外层容器。
+   ⚠️ 它是 .trade-main 的**第二列**，所以桌面端 .trade-main 要改成横向 flex（见下）。
+   ⚠️ 收起用与 .comment-panel 同一套 .is-collapsed（flex-basis:0 + opacity），
+      动画期间内容保持固有宽度靠 `.trade-news > * { width: var(--cp-w) }`。 */
+.trade-news {
+  flex: 0 0 var(--cp-w);
+  display: flex; flex-direction: column;
+  min-height: 0; min-width: 0;
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+  overflow: hidden;
+  transition: flex-basis .25s ease, opacity .22s ease;
+}
+.trade-news > * { width: var(--cp-w); }
+.trade-news.is-collapsed {
+  flex-basis: 0;
+  opacity: 0;
+  border-left-width: 0;
+  pointer-events: none;
+}
+/* ⚠️ .cp__head 基础规则里没有 display（靠 button 的 inline-block 横排），
+   这里显式给 flex，收起按钮的 margin-left:auto 才生效（贴最右）。 */
+.trade-news__head { display: flex; }
+.trade-news__close { margin-left: auto; }
+/* 展开按钮：绝对定位在主区右上角（.panel-expand--r 是 static、给报价头用的，不能复用） */
+.panel-expand--tr { position: absolute; top: 12px; right: 12px; }
+/* 资讯面板收起时，图表头部右侧「账户资产 / 盘中」和右上角展开按钮挤在同一行，
+   会把按钮盖住（用户 2026-10-07：「这里挡住了，盘中这些往左移动一点」）——
+   给头部留出按钮宽度（24px + 右距 12px + 余量）。与上面 .is-side-collapsed 的
+   padding-left 是同一套路。⚠️ 用 :has() 而不是给 tradeMain 加类，收起逻辑零改动。 */
+.trade-main:has(.trade-news.is-collapsed) .asset-chart__head { padding-right: 46px; }
+/* ⚠️ 媒体查询必须写在**基础规则之后**（同级特异性、后写胜出）——
+   上面 .trade-news / .trade-main 的基础规则在 1236~1264 行附近，所以这两块放这里。 */
+@media (max-width: 1200px) {
+  /* 与自选页 .comment-panel 同一档：窄屏直接不显示（≤680px 的 .trade-main 本就整块隐藏） */
+  .trade-news, .panel-expand--tr { display: none !important; }
+}
+@media (min-width: 681px) {
+  /* 桌面：图表列（左，占满剩余宽度）+ 资讯列（右，固定 var(--cp-w)）并排。
+     ⚠️ .trade-main__chart 的 flex-basis 要从 auto 改成 0，否则按内容宽度起算、挤不动资讯列。 */
+  .trade-main { flex-direction: row; }
+  .trade-main__chart { flex: 1 1 0; }
+}
+
 /* 左侧资产摘要 */
 .acc-side {
   width: var(--wl-w); flex: 0 0 auto;
@@ -1567,6 +1661,9 @@ html, body {
 .ao-ranges button { border: 1px solid var(--border); background: var(--panel); font-size: 12px; padding: 4px 12px; border-radius: 5px; cursor: pointer; color: var(--text-2); font-family: inherit; }
 .ao-ranges button.is-active { border-color: var(--accent); color: var(--accent); font-weight: 700; }
 .ao-ranges button:disabled { color: #c3cad6; cursor: not-allowed; }
+/* 对比基准开关（QQQ 叠加层）：它是「叠加/不叠加」而不是互斥档位，
+   激活色用中性灰蓝（= 图里基准线的颜色），跟时间范围那组的品牌蓝区分开。 */
+.ao-ranges__bench.is-active { border-color: #7b8494; color: #56607a; font-weight: 700; }
 
 /* 统计 + 图表 */
 .ao-stats { display: flex; gap: 44px; padding: 14px 20px 2px; }
@@ -1667,6 +1764,8 @@ html, body {
   padding: 4px 12px; border-radius: 5px; cursor: pointer; color: var(--text-2); font-family: inherit;
 }
 .ao-fs__ranges button.is-active { border-color: var(--accent); color: var(--accent); font-weight: 700; }
+/* 同 .ao-ranges__bench：叠加层而非互斥档位，激活色用基准线的灰蓝 */
+.ao-fs__bench.is-active { border-color: #7b8494; color: #56607a; font-weight: 700; }
 /* 全屏里的统计行：把 .ao-stats 的节点搬进来复用样式，这里只管占位 */
 .ao-fs__stats .ao-stats { padding: 12px 4px 0; }
 .ao-fs__chart { flex: 1 1 auto; min-height: 0; margin-top: 4px; cursor: crosshair; }

@@ -1593,6 +1593,10 @@
     ctx.lineJoin = 'round';
     ctx.stroke(path);
 
+    /* 区间最高/最低点：小引线 + 数值（与自选分时图同款，用户 2026-10-07） */
+    paintHiLoMarks(ctx, pts.length, (i) => pts[i].v, X, Y, money,
+      { top: padT, bottom: padT + plotH, right: padL + plotW });
+
     /* 最新点：水平虚线 + 两端色块标签（左=金额、右=百分比） */
     const last = pts[pts.length - 1];
     const lastY = Y(last.v);
@@ -2593,13 +2597,18 @@
       return `<em class="cp__chip is-bad" title="${cpEsc(st.err || '')}">${s.name} ✗</em>`;
     }).join('');
     const at = S.at ? new Date(S.at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '';
+    /* ⚠️ 不再显示「 · allorigins」这类代理名（用户 2026-10-07：太长会把「更新 hh:mm」挤到第二行），
+       走的哪个代理仍在 chip 的 title 悬浮提示里保留。 */
     bar.innerHTML = `<span class="cp__chips">${chips}</span>`
-      + `<span class="cp__meta">${S.at ? '更新 ' + at : (S.loading ? '抓取中…' : '未更新')}`
-      + `${S.via ? ' · ' + cpEsc(S.via) : ''}</span>`
+      + `<span class="cp__meta">${S.at ? '更新 ' + at : (S.loading ? '抓取中…' : '未更新')}</span>`
       + `<button class="cp__srcbtn" data-cp-refresh="1"${S.loading ? ' disabled' : ''}>刷新</button>`;
   }
 
   function renderCpLatest() {
+    /* 2026-10-07：后台预拉 / 兜底刷新时 cpTab 可能是「推荐」，此时**不要往可见列表里写
+       「最新」内容**，否则会冲掉当前展示的推荐流。CP_STATE 已被 fetch 填好，等切到
+       「最新」tab 时再由 renderCpTab 渲染即可（renderCpTab 在 cpTab==='latest' 才调用本函数）。 */
+    if (cpTab !== 'latest') return;
     renderCpStatus();
     const uls = cpListEls();
     if (!uls.length) return;
@@ -2639,11 +2648,12 @@
     uls.forEach((ul) => { ul.innerHTML = html; });
   }
 
-  /* 每 3 分钟兜一次：面板开着且停在「最新」时，按 TTL 决定要不要重抓。
-     也顺带解决「切了标的但没重新进 tab」的陈旧问题。
-     ⚠️ 2026-10-07：自选页 / 持仓页任一面板开着都要兜（cpAnyPanelOpen）。 */
+  /* 每 3 分钟兜一次：面板开着（自选页 / 持仓页任一）就按 TTL 决定要不要重抓「最新」。
+     不再要求停在「最新」tab（2026-10-07 起后台也兜底刷新），
+     这样切到「最新」时看到的是已就绪的新鲜数据，而不是临时现拉。
+     仍受 cpAnyPanelOpen 守门：面板收起 / 窄屏隐藏时不打代理，省额度。 */
   setInterval(() => {
-    if (cpTab !== 'latest' || CP_STATE.loading) return;
+    if (CP_STATE.loading) return;
     if (!cpAnyPanelOpen()) return;
     if ((APP_DATA.quote || {}).code !== CP_STATE.code) { fetchCpComments(true); return; }
     if (Date.now() - CP_STATE.at > CP_TTL) fetchCpComments(true);
@@ -2677,6 +2687,43 @@
   /* ===================================================================
      4. 分时图绘制（canvas）
      =================================================================== */
+  /* 区间最高/最低点的小引线标注（仿富途：从极值点斜出一段短线 + 数值）。
+     bounds = {top, bottom, right}：引线端点与文字允许的活动范围（绘图区内）。
+     - 靠右边缘时引线自动改为向左出，避免数值溢出画布（涨势里末点常就是最高点）；
+     - 极值点贴近顶/底时 ty 被夹回绘图区内，引线变短但仍指向点。 */
+  function drawHiLoMark(ctx, px, py, text, isHigh, bounds) {
+    const RUN = 12, TOL = 6;
+    ctx.font = '10px "PingFang SC", "Microsoft YaHei", sans-serif';
+    const dir = (px + RUN + 6 + ctx.measureText(text).width <= bounds.right) ? 1 : -1;
+    const ty = Math.min(Math.max(isHigh ? py - 16 : py + 16, bounds.top + TOL), bounds.bottom - TOL);
+    const ex = px + dir * RUN;
+    ctx.strokeStyle = 'rgba(100,107,124,0.85)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(px + dir * 3, py + (isHigh ? -3 : 3));
+    ctx.lineTo(ex, ty);
+    ctx.stroke();
+    ctx.fillStyle = THEME.axisText;
+    ctx.textAlign = dir === 1 ? 'left' : 'right';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, ex + dir * 3, ty);
+  }
+
+  /* 找可见序列的最高/最低点并画引线（自选分时图与持仓资产分时图共用）。
+     getter(i) 返回第 i 点的数值；fmt(v) 返回要标的人文格式。序列太平（hi==lo）不标。 */
+  function paintHiLoMarks(ctx, n, getter, X, Y, fmt, bounds) {
+    if (n < 3) return;
+    let hiI = 0, loI = 0, hi = -Infinity, lo = Infinity;
+    for (let i = 0; i < n; i++) {
+      const v = getter(i);
+      if (v > hi) { hi = v; hiI = i; }
+      if (v < lo) { lo = v; loI = i; }
+    }
+    if (!(hi > lo)) return;
+    drawHiLoMark(ctx, X(hiI), Y(hi), fmt(hi), true, bounds);
+    drawHiLoMark(ctx, X(loI), Y(lo), fmt(lo), false, bounds);
+  }
+
   function drawChart() {
     const canvas = $('#priceChart');
     const stage = canvas.parentElement;
@@ -2786,6 +2833,11 @@
     ctx.lineWidth = 1.4;
     ctx.lineJoin = 'round';
     ctx.stroke(linePath);
+
+    /* --- 区间最高/最低点：小引线 + 数值（仿富途，用户 2026-10-07）--- */
+    paintHiLoMarks(ctx, series.length, (i) => series[i].price, X, Y,
+      (p) => p.toFixed(Math.abs(p) >= 1000 ? 1 : 3),
+      { top: padT, bottom: padT + plotH, right: padL + plotW });
 
     /* --- 最新价：优先用**报价头的实时价**，没有才退回最后一根 K 线收盘 ---
        ⚠️ 用户 2026-10-04：「5日为什么一直是 0%，不应该是实时价吗」。
@@ -3803,7 +3855,7 @@
 
     // 全屏顶部：走势图 tab 高亮 + 时间范围高亮，跟随 aoState 同步（定义在 openFs 之前，避免 TDZ 隐患）
     // 范围档位与主页面 #aoRanges 保持一致（用户 2026-10-04 定稿：近1月/近3月/今年以来/自始以来）
-    const RANGE_LABEL = { '1m': '近1月', '3m': '近3月', 'ytd': '今年以来', 'all': '自始以来' };
+    const RANGE_LABEL = { '1m': '近1月', '3m': '近3月', 'ytd': '今年来', 'all': '自始来' };
     const syncFsUi = () => {
       document.querySelectorAll('#aoFsRanges [data-ao-range]').forEach((x) => {
         x.classList.toggle('is-active', x.dataset.aoRange === aoState.range);
@@ -3977,6 +4029,11 @@
   fetchJin10();
   setInterval(() => { if (!document.hidden) fetchJin10(); }, 60000);
 
+  /* 「最新」社区评论（东财股吧 / 雪球 / Reddit）：原来只在**切到该 tab**时才首次拉取，
+     用户 2026-10-07 要求「一打开页面就刷新，不要打开最新才刷新」——
+     这里启动即预拉一份（与「推荐」一致），后台还会按下方 3 分钟定时器兜底刷新。 */
+  fetchCpComments();
+
   /* 顶栏「刷新」按钮（移动端左侧唯一保留的按钮）：
      手动重拉一轮数据 = 自选行情 + 外汇行 + 当前标的图表/分时。
      行为与启动序列一致，按钮转圈给出反馈。 */
@@ -4077,7 +4134,7 @@
   /* ===================== 账户实数据（Asset_parsed.json + fund_holdings.json） ===================== */
 
   /* ---- 全部账户总览页（品类/币种分布 + 收益率/资产走势） ---- */
-  const aoState = { ready: false, mode: 'return', range: '1m', series: [], hover: null, bench: false };
+  const aoState = { ready: false, mode: 'asset', range: '1m', series: [], hover: null, bench: false };
   /* ---- QQQ 对比基准（2026-10-07 新增）----
      走势图可叠加一条「同期把同样的钱全买 QQQ」的基准线：
        历史 = `fund_holdings.json` 的 `qqq_daily`（日线收盘，workflow 每日增量抓）；
@@ -4617,14 +4674,51 @@
   /* 顶部统计行：恒显区间累计收益 / 区间收益率（跟随末点，与光标位置无关）。
      ⚠️ 原先还有一套「悬停时把统计行换成 日期 + 资产净值 / 当日收益」（aoSetStat 的 point/dayGain 分支
       + `.ao-stats.is-hover` CSS + `.ao-stat--hover` 节点），2026-10-05 按用户要求整套删除，
-     读数口径固定，勿再加回来。 */
+     读数口径固定，勿再加回来。
+     ⚠️ 2026-10-07：收益率不再是「(末点−首点)/首点」这种简单比例（会把中途入金当成收益，
+        今年实测虚高 7 个点：25.32% vs 真实 18% 上下），改用**链式 TWR**，
+        与收益日历右上角同源同算法（都是 calIndex 的逐日 r 连乘）。 */
   function aoStatDefault() {
     const d = aoGeo.data;
     if (!d || d.length < 2) return;
     const gain = d[d.length - 1].cny - aoGeo.first;
-    const pctV = aoGeo.first ? gain / aoGeo.first * 100 : 0;
+    const pctV = aoTwrRange(d[0].date, d[d.length - 1].date, gain / aoGeo.first * 100);
     aoSetStat(gain, pctV);
     aoSetBenchStat();
+  }
+
+  /* 区间 TWR：优先用日历口径的链式 TWR；日历没有覆盖该区间时退回原来的简单比例。
+     `fallback` 由调用方算出（简单比例），只在无重叠数据时才用。 */
+  function aoTwrRange(fromDate, toDate, fallback) {
+    const map = aoTwrCum();
+    const from = map.get(fromDate), to = map.get(toDate);
+    if (from == null || to == null || to.bef <= 0) return fallback;
+    return (to.acc / from.bef - 1) * 100;
+  }
+
+  /* 逐日链式 TWR 序列（缓存）。返回 Map：date → { acc: 该日收盘时的累计乘数, bef: 该日之前的累计乘数 }。
+     acc/bef 的存在是为了算「区间 TWR」：区间 = acc(末日) / bef(首日) − 1，
+     这样区间起点当天的收益不会被算进分子（只算它之后的）。 */
+  let _twrCacheKey = '', _twrCacheMap = null;
+  function aoTwrCum() {
+    let idx;
+    try { idx = calIndex(); } catch (e) { return new Map(); }
+    const ds = idx.days || [];
+    if (!ds.length) return new Map();
+    /* 缓存键 = 天数 + 末日 + 实时权益（夜盘/盘中会变）+ 收盘口径权益 */
+    const key = ds.length + '|' + ds[ds.length - 1].date
+      + '|' + Math.round((TRADE_POS.rtStockCny || 0))
+      + '|' + Math.round((TRADE_POS.closeStockCny || 0));
+    if (_twrCacheKey === key && _twrCacheMap) return _twrCacheMap;
+    const map = new Map();
+    let acc = 1;
+    for (const d of ds) {
+      const bef = acc;
+      if (d.r != null && isFinite(d.r)) acc *= (1 + d.r);
+      map.set(d.date, { acc, bef });
+    }
+    _twrCacheKey = key; _twrCacheMap = map;
+    return map;
   }
 
   function aoSetStat(gain, pctV) {
@@ -4885,6 +4979,10 @@
        ⚠️ 只加权**证券入金**：基金申购成本已含在首日基线 fundTotalCost 里，
           再当现金流加权会重复计算（侧栏口径也是一次性减）。
      ------------------------------------------------------------------- */
+  /* 【已停用 —— 保留仅作口径对照】Modified Dietz：收益率 = gain / (BMV + Σ入金×剩余天数权重)。
+     2026-10-07 起日历与走势图右上角都改用链式 TWR（calChainTwr），原因：
+     Dietz 是「按在场天数加权」的近似，会把入金多的时段权重抬高；TWR 逐日链式相乘才是标准口径。
+     若以后要回退口径，这里是原实现。 */
   function calDietzPct(gain, bmv, flows, totalDays) {
     if (gain == null || !(bmv > 0) || !(totalDays > 0)) return null;
     let wsum = 0;
@@ -4936,27 +5034,53 @@
     const fundByDate = {};
     fundRows.forEach((r) => { fundByDate[r.date] = r.value; });
 
-    /* ---- 末点补实时证券权益（用户 2026-10-07）----
+    /* ---- 补实时证券权益（用户 2026-10-07）----
        IBKR 的 totalNetValueDaily 每天只更新一次（workflow 北京 13:10 抓快照），
-       所以「今天」这一格常常**根本没有证券数据** —— 只剩 TQQQ（Alpaca 日线盘中就有）
-       在撑着，日历于是显示一个假小的数（实测 10-06 只有 +477 = 纯 TQQQ 盘中浮盈）。
-       现在改成：最后一天若 IBKR 快照还没到，就用**实时证券权益**（= 侧栏「证券」
-       accStockVal 同源：IBKR 现金 + 正股实时市值 + **期权**）补上，
-       IBKR 快照一到（该日出现在 stockByDate 里）自动换回 IBKR 口径。
+       所以「最近」这一格常常**根本没有证券数据**。
+       补点日 = **当前美股交易日**（不再是 allDates 末位）：夜盘（ET 20:00 起）算下一天，
+       其余（盘前/盘中/盘后）算当天 —— 用户 2026-10-07「收益日历也是应该夜盘算一天起点，
+       10-6 用收盘价」。北京上午 = 美东夜盘 → 今天（10-7）补**实时**权益，
+       昨天（10-6）用**收盘价口径**（TRADE_POS.closeStockCny）补，IBKR 快照一到自动换回官方口径。
        ⚠️ 只补**证券段**：基金（QDII 净值 T+2、假期不发）与现金不做实时预测
           （用户：「基金和现金都预测得不准，只有证券是准确的」）。
-       ⚠️ 补的是 **IBKR 那一段**（实时权益 − 当日 TQQQ 市值）：实时权益**含 TQQQ**，
+       ⚠️ 补的是 **IBKR 那一段**（权益 − 当日 TQQQ 市值）：权益**含 TQQQ**，
           而 TQQQ 在下面另有一段独立的增益，直接把总量塞进 stockByDate 会重复算一份 TQQQ。 */
     let rtFillDate = null, rtFillVal = null;
+    const closeFills = {};     // 中间缺快照日 → 收盘价口径的 IBKR 段权益（不含 TQQQ）
     const rtStockCny = (TRADE_POS && TRADE_POS.rtStockCny) || 0;
-    if (rtStockCny > 0 && allDates.length) {
-      const lastAll = allDates[allDates.length - 1];
-      if (stockByDate[lastAll] == null) {          // 该日 IBKR 快照还没到 → 补
-        const qc = tqqqCloseOn(lastAll);
-        const qv = qc != null ? qc * tqqqShares * fxOn(lastAll) : 0;
-        const ibkrPart = rtStockCny - qv;
-        if (ibkrPart > 0) { rtFillDate = lastAll; rtFillVal = ibkrPart; }
+    const closeStockCny = (TRADE_POS && TRADE_POS.closeStockCny) || 0;
+    if (rtStockCny > 0) {
+      /* 当前美股交易日：ET 20:00 起算下一天（夜盘起始）；00:00–04:00 是夜盘后半段，
+         仍算当天。__cpForceNight（?cpdebug=1 调试口）强制走夜盘口径。 */
+      const et = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+      if (window.__cpForceNight || et.getHours() >= 20) et.setDate(et.getDate() + 1);
+      const td = et.toLocaleDateString('sv-SE');
+      const tqqqMv = (d) => { const qc = tqqqCloseOn(d); return qc != null ? qc * tqqqShares * fxOn(d) : 0; };
+      if (td >= from && stockByDate[td] == null) {
+        const ibkrPart = rtStockCny - tqqqMv(td);
+        if (ibkrPart > 0) { rtFillDate = td; rtFillVal = ibkrPart; }
+        /* 中间缺快照日（最后一个 IBKR 净值日 < d < td）：用收盘价口径补。
+           否则昨天那格没数据，夜盘涨幅会连着「昨天全天」的涨幅一起挂到今天
+           （实测：夜盘时 10-6 格挂着 +8,197 = 全天+夜盘累计，10-7 反而空着）。 */
+        const lastIbkr = stockRows.length ? stockRows[stockRows.length - 1].date : null;
+        if (closeStockCny > 0 && lastIbkr && lastIbkr < td
+            && (new Date(td) - new Date(lastIbkr)) <= 10 * 864e5) {   // 只补近 10 天，快照长期缺失时不刷屏
+          let d = lastIbkr;
+          while (d < td) {
+            const t2 = new Date(d + 'T00:00:00'); t2.setDate(t2.getDate() + 1);
+            d = t2.toLocaleDateString('sv-SE');
+            if (d >= td) break;
+            if (stockByDate[d] == null) {
+              const cf = closeStockCny - tqqqMv(d);
+              if (cf > 0) closeFills[d] = cf;
+            }
+          }
+        }
       }
+      /* 新补的日期（今天 / 中间缺快照日）要进序列，否则下面的循环根本走不到 */
+      const newDates = [...(rtFillDate ? [rtFillDate] : []), ...Object.keys(closeFills)]
+        .filter((d) => !dates.has(d));
+      if (newDates.length) { newDates.forEach((d) => dates.add(d)); allDates.push(...newDates); allDates.sort(); }
     }
 
     const byDate = {}, days = [], months = [];
@@ -4972,9 +5096,10 @@
     let lastStock = 0, lastQ = 0, lastFund = 0;
     let mKey = null, cur = null;
     for (const date of allDates) {
-      /* 证券当日值：补点日（IBKR 快照未到）用实时权益的 IBKR 段，其余照旧读 IBKR 净值 */
+      /* 证券当日值：今天（夜盘/盘中实时）→ rtFill；中间缺快照日 → 收盘价口径；其余读 IBKR 净值 */
       const stock = date === rtFillDate ? rtFillVal
-        : (stockByDate[date] != null ? stockByDate[date] : null);
+        : (closeFills[date] != null ? closeFills[date]
+          : (stockByDate[date] != null ? stockByDate[date] : null));
       const fund = fundByDate[date] != null ? fundByDate[date] : null;
       /* TQQQ 当日市值 = **TQQQ 自己的收盘价** × 股数 × 当日汇率
          （该日若无日线，沿用最近一条 ≤ 该日）。 */
@@ -5002,35 +5127,37 @@
       /* 分母 = 当日在投资产（证券权益含 TQQQ + 基金市值），**不含现金**；
          三段都取「最近一次已知值」，缺口日不再掉到 0。 */
       const den = lastStock + lastQ + lastFund;
-      /* 日收益率同样用 Modified Dietz：BMV = 前一段已知日的市值，
-         当日入金视作**中午到账**（off = 0.5 → 权重 50%）。
-         分子 gain 已扣掉当日入金，所以不用再减一次。 */
-      const pct = gain != null
-        ? calDietzPct(gain, bmv > 0 ? bmv : den, flow ? [{ off: 0.5, amt: flow }] : [], 1)
-        : null;
+      /* 每日 **TWR 日收益**（不是 Modified Dietz 加权）：
+         日收益率 r = 当日盈亏 ÷ (前一日市值 + 当日入金)。
+         推导：当日流入 F、出金后市值 V1 = V0 + F + gain，
+           真实 TWR 把 F 视作**开盘前到账** → r = (V1 − F) / V0 − 1 = gain / (V0 + F)。
+         分子 gain 已逐日扣掉入金，所以分母也要把当日入金加上，否则入金当天被算成暴跌。
+         ⚠️ 与旧 calDietzPct(off=0.5) 的区别：分母不再按半日折中，而是整笔计入 ——
+            这才是「时间加权」的严格口径（月/年只要按日连乘即可还原，无需再加权）。 */
+      const flowPos = flow > 0 ? flow : 0;
+      const rBase = bmv > 0 ? bmv : den;
+      const r = (gain != null && rBase + flowPos > 0) ? gain / (rBase + flowPos) : null;
 
-      const rec = { date, cny: den, gain, pct, flow: fundFlows[date] || 0, gainStock, gainFund };
+      const rec = { date, cny: den, gain, r, pct: r == null ? null : r * 100, flow: fundFlows[date] || 0, gainStock, gainFund };
       byDate[date] = rec;
       days.push(rec);
       const ym = date.slice(0, 7);
       if (ym !== mKey) { mKey = ym; cur = { ym, y: +date.slice(0, 4), m: +date.slice(5, 7) - 1, first: den, last: den }; months.push(cur); }
       cur.last = den;
     }
-    /* 各月 own = 该月每日 gain 之和；pct = **Modified Dietz**（见 calDietzPct 的说明）。
-       own 已经逐日扣掉了当月入金，所以它就是 Dietz 公式的分子 (EMV − BMV)；
-       分母要在 BMV 上加「当月入金按在场天数加权」，否则新投的钱会稀释收益率。
-       ⚠️ 只加权**证券入金**（stockFlows）：基金申购成本已包含在首日基线 fundTotalCost 里，
-          再当现金流加权就是重复计算（侧栏口径也是一次性减）。 */
+    /* 各月 own = 该月每日 gain 之和（区间盈亏，金额口径不变）。
+       pct = **TWR**：把该月每日收益 r 按日连乘 (1+r) 再 −1。
+       ⚠️ 2026-10-07 起不再用 Modified Dietz：那是「按在场天数加权」的近似，
+          会让入金多的月份权重被抬高；TWR 是逐日链式相乘，是行业标准口径，
+          而且月→年天然可加（年 = 各月连乘），不会因跨月拼接而失真。 */
     let run = 0;
     for (let i = 0; i < months.length; i++) {
       const m = months[i];
-      const bmv = i > 0 ? months[i - 1].last : m.first;
       m.days = days.filter((d) => d.date.slice(0, 7) === m.ym);
       m.own = m.days.reduce((s2, d) => s2 + (d.gain || 0), 0);
       run += m.own;
       m.gain = run;
-      /* 当月入金：off = 距当月 1 号的天数（0-based），当月总天数用自然月天数 */
-      const dim = new Date(m.y, m.m + 1, 0).getDate();
+      /* 当月入金（保留给明细/调试用；TWR 已在日层面处理掉，不再进汇总公式） */
       const flows = [];
       m.days.forEach((d) => {
         const f = stockFlows[d.date] || 0;
@@ -5038,24 +5165,37 @@
       });
       m.flows = flows;
       m.flow = flows.reduce((s2, f) => s2 + f.amt, 0);
-      /* 分子 = own（已扣当月入金），分母 = 上月末市值 + 加权入金 */
-      m.pct = calDietzPct(m.own, bmv, flows, dim);
+      m.pct = calChainTwr(m.days);
     }
-    /* 年视图（区间合计的收益率）：跨 12 个月**连续加权**，不是各月 pct 的平均。
-       分母 = 上年最后月的市值 + 当年所有入金按「距 1/1 的天数」加权。 */
+    /* 年视图：跨 12 个月**链式连乘**（不是各月 pct 求和或平均）。
+       TWR 的可加性：∏(1+r_月) = ∏∏(1+r_日)，所以直接把该年全部日收益连乘即可。 */
     const yearStats = {};
     months.forEach((m, i) => {
-      const st = yearStats[m.y] || (yearStats[m.y] = { y: m.y, own: 0, first: m.first, last: m.last, flows: [] });
+      const st = yearStats[m.y] || (yearStats[m.y] = { y: m.y, own: 0, first: m.first, last: m.last, flows: [], days: [] });
       st.own += m.own;
       st.last = m.last;
+      st.days = st.days.concat(m.days);
       (m.flows || []).forEach((f) => st.flows.push({ off: calDoy(m.ym + '-01') - 1 + f.off, amt: f.amt }));
       st.bmv = i > 0 ? months[i - 1].last : m.first;
     });
     Object.values(yearStats).forEach((st) => {
-      const dim = (st.y % 4 === 0 && st.y % 100 !== 0) || st.y % 400 === 0 ? 366 : 365;
-      st.pct = calDietzPct(st.own, st.bmv, st.flows, dim);
+      st.pct = calChainTwr(st.days);
     });
     return { byDate, days, months, yearStats };
+  }
+
+  /* TWR 链式累计：把一串日收益按 (1+r) 连乘再减 1，返回百分比。
+     这是「时间加权收益率」的定义式 —— 每日等权，外部现金流（入金/出金）在日层面
+     先被剔除，所以期间加了几笔钱都不会稀释结果，也不会伪造成暴涨。 */
+  function calChainTwr(dayList) {
+    if (!dayList || !dayList.length) return null;
+    let acc = 1, seen = 0;
+    for (const d of dayList) {
+      if (d.r == null || !isFinite(d.r)) continue;
+      acc *= (1 + d.r);
+      seen++;
+    }
+    return seen ? (acc - 1) * 100 : null;
   }
 
   /* 日历金额**只显示整数**（用户 2026-10-04 定稿）：格子里原本是 +3,208.15 这种两位小数，
@@ -5286,7 +5426,7 @@
   })();
 
   /* ===================== 资金明细弹窗（每日净值列表） ===================== */
-  const detailState = { stock: [], fund: [], cash: [], cat: null, panel: null, page: 0, per: 30, fx: 7, flows: {}, fundFlows: {} };
+  const detailState = { stock: [], fund: [], cash: [], cat: null, panel: null, page: 0, per: 30, fx: 7, flows: {}, fundFlows: {}, cashFlows: {} };
   const DETAIL_TITLE = { stock: '证券资金明细', fund: '基金资金明细', cash: '现金资金明细' };
   // 证券账户以 USD 计价，弹窗直接显示美元（不再折 CNY + 括注）；
   // 基金/现金是人民币口径，保持 CNY。
@@ -5353,7 +5493,9 @@
   function renderDetail() {
     const cat = detailState.cat;
     if (!cat) return;
-    const rows = detailRows(cat, cat === 'fund' ? detailState.fundFlows : detailState.flows)
+    const flows = cat === 'fund' ? detailState.fundFlows
+      : (cat === 'cash' ? detailState.cashFlows : detailState.flows);
+    const rows = detailRows(cat, flows)
       .slice().reverse();   // 最新的排最前
     const panel = detailState.panel;
     if (!panel) return;
@@ -5378,7 +5520,7 @@
       body.innerHTML = slice.map((r) => {
         // 当日盈亏显示「组合收益」（已剔除当日入金）；有入金时附小字说明
         const chgMain = r.gain;
-        const flowNote = r.flow ? `<span class="dlg-sub"> ${cat === 'stock' ? '入金' : '申购'} ${f2(r.flow)}</span>` : '';
+        const flowNote = r.flow ? `<span class="dlg-sub"> ${cat === 'stock' ? '入金' : (cat === 'cash' ? '存入' : '申购')} ${f2(r.flow)}</span>` : '';
         return `<tr class="${r.inBase ? '' : 'is-prebase'}"><td>${r.date}</td>` +
           `<td class="num">${f2(r.value)}</td>` +
           `<td class="num ${cls(chgMain)}">${sgn(chgMain)}${flowNote}</td>` +
@@ -5547,8 +5689,10 @@
           9000,
         ).then((bars) => {
           for (const [k, v] of Object.entries(bars || {})) {
+            /* dayClose = 日线**最后一根**的收盘。夜盘时 SIP 日线停在上一交易日收盘不动，
+               所以夜盘里它就是「上一交易日的日K收盘」—— 夜盘分支拿它当今日盈亏基准（见下）。 */
             const [now, prev] = prevCloseOf(v);
-            put(res.stock, k, { price: now, prevClose: prev });
+            put(res.stock, k, { price: now, prevClose: prev, dayClose: now });
           }
         }),
         /* 期权仍走 snapshots / bars（期权没有 IEX/SIP 这个区分问题），同样翻页。 */
@@ -5563,10 +5707,11 @@
         }),
         optSyms.length && accRace(
           alpacaPaged(`${ACC_API}/v1beta1/options/bars?symbols=${optSyms.join(',')}&timeframe=1Day&start=${start}&limit=30`, 'bars', 3), 9000,
-        ).then((bars) => {
+        )        .then((bars) => {
           for (const [k, v] of Object.entries(bars || {})) {
-            const [, prev] = prevCloseOf(v);
-            put(res.opt, k, { prevClose: prev });
+            /* 期权同样存 dayClose（日线最后一根收盘）—— 夜盘分支要把今日盈亏基准换成它。 */
+            const [now, prev] = prevCloseOf(v);
+            put(res.opt, k, { prevClose: prev, dayClose: now });
           }
         }),
       ]);
@@ -5574,17 +5719,37 @@
          为什么必须放在 Promise.all **之后**：夜盘时 SIP 那一根日线停在上一交易日收盘（不动），
          若两条并行，谁后写谁赢 → 会出现「有时夜盘价、有时收盘价」的抖动。串在后面才确定。
          盘中/盘前/盘后不进来，保持「账户账面 = SIP 全市场收盘」的口径不变。 */
-      if (inEtNight() && stockSyms.length) {
-        const snaps = await accRace(
-          accJson(`${ACC_API}/v2/stocks/snapshots?symbols=${stockSyms.join(',')}&feed=overnight`, { headers: ACC_HDR }),
-          9000,
-        );
-        /* ⚠️ 这个端点的响应是 **{SYMBOL:{...}} 直接摊在顶层**（不是 {snapshots:{...}}）。 */
-        for (const [k, s] of Object.entries(snaps || {})) {
-          if (!s) continue;
-          const p = (s.minuteBar && s.minuteBar.c > 0 ? s.minuteBar.c
-            : (s.dailyBar && s.dailyBar.c > 0 ? s.dailyBar.c : null));
-          if (p) put(res.stock, k, { price: p, overnight: true });   // prevClose 保留 SIP 昨收
+      /* ⚠️ 夜盘的「今日」已经是**下一个交易日**（用户 2026-10-07 定稿：
+         「夜盘开始应该就算下一天 10-7 的今日盈亏了吧。上一天 10-6 的盘后已经结束了，
+          已经有 alpaca 日 k 收盘价了」）。
+         → 今日盈亏基准从「倒数第二根日K」（= 上上交易日收盘）换成**最近一根日K收盘**
+           （= 上一交易日收盘，SIP 日线此刻就停在它不动）。这样：
+           · 正股：今日盈亏 =（夜盘实时价 − 上一交易日收盘）→ 夜盘一开盘就从 0 起算新一天；
+           · 期权：没有夜盘、价格冻结在收盘 → 基准同样换成最近一根后今日盈亏归 0，
+             不再挂着旧基准「把上一交易日的涨跌重复算进新一天」。 */
+      if (inEtNight()) {
+        if (stockSyms.length) {
+          const snaps = await accRace(
+            accJson(`${ACC_API}/v2/stocks/snapshots?symbols=${stockSyms.join(',')}&feed=overnight`, { headers: ACC_HDR }),
+            9000,
+          );
+          /* ⚠️ 这个端点的响应是 **{SYMBOL:{...}} 直接摊在顶层**（不是 {snapshots:{...}}）。 */
+          for (const [k, s] of Object.entries(snaps || {})) {
+            if (!s) continue;
+            const p = (s.minuteBar && s.minuteBar.c > 0 ? s.minuteBar.c
+              : (s.dailyBar && s.dailyBar.c > 0 ? s.dailyBar.c : null));
+            if (p) put(res.stock, k, { price: p, overnight: true });
+            /* 基准切换：优先 bars 那路存下的 dayClose（SIP 日线最后一根），
+               拿不到（bars 超时）再退 snapshot 自带的 dailyBar，都没有就维持旧基准。 */
+            const dayC = (res.stock[k] && res.stock[k].dayClose > 0) ? res.stock[k].dayClose
+              : (s.dailyBar && s.dailyBar.c > 0 ? s.dailyBar.c : null);
+            if (dayC) put(res.stock, k, { prevClose: dayC });
+          }
+        }
+        /* 期权没有夜盘：把今日盈亏基准换成最近一根日K收盘（上一交易日收盘）。
+           价格冻结在收盘 → 夜盘期间期权今日盈亏显示 0（真实状态）。 */
+        for (const o of Object.values(res.opt)) {
+          if (o && o.dayClose > 0) o.prevClose = o.dayClose;
         }
       }
       return res;
@@ -6586,11 +6751,15 @@
          为什么不再用 pAcct 当基准：盘中 pAcct 是**当日未完结日线的收盘**，会随行情一秒一跳，
          于是「较基准」一直在动、还和「今日涨跌」口径打架。
          日K收盘才是稳定的账本基准：盘中取 prevClose（昨日收盘，因为当根是今天的半截），
-         盘前/盘后/夜盘/休市取最近一根日K收盘（= pAcct 本身的定义）。
+         盘前/盘后/休市取最近一根日K收盘（= pAcct 本身的定义）。
+         ⚠️ 夜盘例外（2026-10-07）：prevClose 已被夜盘分支换成「最近一根日K收盘」
+            （上一交易日收盘），pAcct 却是**夜盘实时价** —— 基准必须跟 prevClose 走，
+            否则 OKX 现价 vs 夜盘价 ≈ 0，「较基准」整列失去意义。
          ⚠️ 只改**涨跌幅与较基准盈亏**的基准；现价（pTrade/OKX）、市值、汇总三行口径一律不动，
             所以账户资产 / 推算总资产 / 差额不受影响。 */
       const isOpt = !!h.opt;
-      const pctBase = (inEtRegular() ? prevClose : pAcct);
+      const isNightQ = !!(qq && qq.stock && qq.stock[k] && qq.stock[k].overnight);
+      const pctBase = ((inEtRegular() || isNightQ) ? prevClose : pAcct);
       const tradeChgUsd = (isOpt || pTrade == null || pctBase == null || pctBase <= 0)
         ? null : (pTrade - pctBase) * qty * mult;
       const tradePct = (isOpt || pTrade == null || !pctBase) ? null : (pTrade - pctBase) / pctBase;
@@ -6769,6 +6938,12 @@
          口径与侧栏「证券」完全相同：IBKR 账户内现金 + 实时持仓市值（正股 **含期权**，按实时价，
          不再兜 IBKR 快照价）—— 所以日历末点与侧栏 accStockVal 同源同刻。 */
       TRADE_POS.rtStockCny = stockEquityCny;
+      /* **收盘价口径权益**（收益日历「昨天」那格补点用，2026-10-07）：IBKR 现金 +
+         持仓按 **prevClose**（最近一根日K收盘）估值。夜盘时段 prevClose 已被换成
+         上一交易日收盘（夜盘今日盈亏修复同源），所以日历用它补「昨天」= 纯收盘口径，
+         不会把夜盘涨幅重复挂上去；盘中时段 prevClose = 昨收，同样是收盘口径。 */
+      const closePosVal = rows.reduce((s, r) => s + (r.prevClose != null ? r.prevClose * r.qty * r.mult : 0), 0);
+      TRADE_POS.closeStockCny = (ibkrCashAll + closePosVal) * FX;
       renderStockSum();               // 侧栏「证券 / 今日盈亏 / 累计盈亏」+ 资产卡
       refreshAoTail();                // 走势图末点（今天）= 实时正股价外推，跟着行情走
       totalCny = renderAccTotal();    // 账户页总资产 + 累计（函数声明已提升）
@@ -7083,6 +7258,17 @@
       for (const k of keys) { if (k <= d) best = k; else break; }
       return best ? tqqqBars[best] * tqqqShares : 0;
     };
+    /* 历史现金余额：按各银行账户的**交易流水**还原每个日期的余额（不再用「当前余额」常数）。
+       原因（用户 2026-10-07 反馈）：汇丰美国一开始 25,707 USD，之后换汇/转出被慢慢扣到 1,140 USD，
+       用常数现金会让 02-06 这种早期日期少算 ~16 万。余额 = 该日期及之前所有 in/out 的累加
+       （账户期初为 0，全部活动都在 transactions 里）。today 时累加全部 = 当前 cashCny，与现金页口径一致。
+       ⚠️ 汇丰美国经 forex 换出的 USD 不另补 CNH（现金页 cashCny 本就不含这部分，保持 today 一致、不重复）。 */
+    const cashAccts = (seed.pa_cash || []).filter((c) => !/盈透|IBKR/i.test(c.note || ''));
+    const cashOn = (date) => cashAccts.reduce((s, c) => {
+      const cur = (c.currency || '').toUpperCase();
+      const b = (c.transactions || []).reduce((t, tx) => (tx.date <= date ? t + tx.amount * (tx.type === 'in' ? 1 : -1) : t), 0);
+      return s + (cur === 'USD' ? b * FX : b);
+    }, 0);
     const aoSeries = nv.map((row) => {
       const fundPart = funds.reduce((s, f) => {
         const v = navOn(f.hist, row.date);
@@ -7091,7 +7277,7 @@
       /*带上 `nv`（IBKR 原始净值，USD）。calIndex 的废值段过滤要用它 ——
         判据不能看 cny：cny 含基金/现金（合计70 多万），哪怕 IBKR 净值只有 1.42
         也远大于阈值，前 28 天的占位噪声会一行都滤不掉（用户 2026-10-04 发现的偏差）。 */
-      return { date: row.date, cny: row.value * FX + tqqqValueOn(row.date) * FX + fundPart + cashCny, nv: row.value };
+      return { date: row.date, cny: row.value * FX + tqqqValueOn(row.date) * FX + fundPart + cashOn(row.date), nv: row.value };
     });
     if (aoSeries.length) {
       /* 末点（今天）= **顶部总资产 totalCny**（2026-10-07 用户拍板：「跳吧，无所谓，
@@ -7286,6 +7472,44 @@
       });
       return { date: d, value: ok ? v : null, cur: 'CNY', src: 'Σ 份额×净值', accrued: null };
     }).filter((r) => r.value != null);
+
+    // 现金：按各银行账户**交易流水**还原每日余额（与资产走势 / 现金页同一套 cashOn 口径），
+    //   不再留空 —— 用户 2026-10-07：「现金账号日明细直接加在现金资金明细里就好了，你可以直接读取」。
+    //   原 cashDaily 是盈透的现金余额（可为负 = 融资占用），与现金页「各银行账户余额」口径不同，
+    //   所以这里直接读 seed.pa_cash 各账户 transactions 自己还原，跟资产走势那条曲线完全一致。
+    // 字段与 stock/fund 对齐：{ date, value(=CNY 余额), cur:'CNY', src, accrued:null }。
+    // ⚠️ 汇丰美国经 forex 换出的 USD 不另补 CNH（现金页 cashCny 本也不含，today 自然一致）。
+    const cashAccts2 = (seed.pa_cash || []).filter((c) => !/盈透|IBKR/i.test(c.note || ''));
+    const cashOnDate = (date) => cashAccts2.reduce((s, c) => {
+      const cur = (c.currency || '').toUpperCase();
+      const b = (c.transactions || []).reduce((t, tx) => (tx.date <= date ? t + tx.amount * (tx.type === 'in' ? 1 : -1) : t), 0);
+      return s + (cur === 'USD' ? b * FX : b);
+    }, 0);
+    // 外部现金流（TWR 剔除项）：各账户每日 in/out 折算 CNY（USD×FX），与 value 同口径
+    const cashFlow = {};
+    cashAccts2.forEach((c) => {
+      const cur = (c.currency || '').toUpperCase();
+      (c.transactions || []).forEach((tx) => {
+        const amt = tx.amount * (tx.type === 'in' ? 1 : -1);
+        const cny = cur === 'USD' ? amt * FX : amt;
+        cashFlow[tx.date] = (cashFlow[tx.date] || 0) + cny;
+      });
+    });
+    detailState.cashFlows = cashFlow;
+    // 连续日序列：从首个现金活动日（2026-02-06）到今天，每天一行
+    {
+      const cashStart = '2026-02-06';
+      const endDs = new Date().toLocaleDateString('sv-SE');
+      const series = [];
+      let dt = new Date(cashStart + 'T00:00:00');
+      const endDt = new Date(endDs + 'T00:00:00');
+      while (dt <= endDt) {
+        const ds = dt.toLocaleDateString('sv-SE');
+        series.push({ date: ds, value: cashOnDate(ds), cur: 'CNY', src: '现金账户余额', accrued: null });
+        dt.setDate(dt.getDate() + 1);
+      }
+      detailState.cash = series;
+    }
 
     /* ---- 收益日历的数据准备（见 calIndex 处的口径说明）----
        ① CAL_FX_MAP：**逐日** USD→CNY（`fund_holdings.json` 的 `usdcnh_daily`，由 fund_holdings.py

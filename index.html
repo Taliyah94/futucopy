@@ -257,8 +257,8 @@
 
             <div class="ao-chart-head">
               <div class="ao-tabs" id="aoTabs">
-                <button class="is-active" data-ao-tab="return">收益率走势</button>
-                <button data-ao-tab="asset">资产走势</button>
+                <button class="is-active" data-ao-tab="asset">资产走势</button>
+                <button data-ao-tab="return">收益率走势</button>
                 <button data-ao-tab="cal">收益日历</button>
                 <!-- 统计：品类/币种分布（原先常驻在走势图上方，用户 2026-10-04 要求收进 tab） -->
                 <button data-ao-tab="stat" title="品类 / 币种分布">统计</button>
@@ -270,10 +270,10 @@
                 <button class="ao-ranges__fs" id="aoFsBtn" title="全屏查看"><svg viewBox="4 4 16 16" class="ic"><path d="M4 9V4h5M20 15v5h-5M15 4h5v5M9 20H4v-5"/></svg></button>
                 <button data-ao-range="1m" class="is-active">近1月</button>
                 <button data-ao-range="3m">近3月</button>
-                <button data-ao-range="ytd">今年以来</button>
-                <button data-ao-range="all">自始以来</button>
+                <button data-ao-range="ytd">今年来</button>
+                <button data-ao-range="all">自始来</button>
                 <!-- 对比基准：叠加「同期把同样的钱全买 QQQ」的走势（历史=本地日线，今日=OKX 永续实时价） -->
-                <button class="ao-ranges__bench" data-ao-bench="qqq" title="叠加 QQQ 同期收益对比">对比QQQ</button>
+                <button class="ao-ranges__bench" data-ao-bench="qqq" title="叠加 QQQ 同期收益对比">QQQ</button>
 </div>
 </div>
 
@@ -315,7 +315,7 @@
                 <b class="num" id="aoStatVal">--</b>
               </div>
               <div class="ao-stat ao-stat--range">
-                <span id="aoStatLabel2">区间收益率</span>
+                <span id="aoStatLabel2">TWR</span>
                 <b class="num" id="aoStatPct">--</b>
               </div>
               <!-- 对比基准同期收益率：只在「对比QQQ」打开时显示 -->
@@ -346,7 +346,7 @@
                 </div>
                 <div class="ao-cal__sum">
                   <div><span id="aoCalSumLabel">10月收益 · CNY</span><b class="num" id="aoCalSum">--</b></div>
-                  <div><span>收益率 · 简单加权</span><b class="num" id="aoCalPct">--</b></div>
+                  <div><span>TWR</span><b class="num" id="aoCalPct">--</b></div>
                 </div>
               </div>
               <div class="ao-cal__body" id="aoCalBody"></div>
@@ -883,16 +883,16 @@
   <div class="ao-fs__bar">
     <!-- 全屏内自带走势图 tab：否则全屏后只能看当前这张，收益率/资产之间切不了（用户 2026-10-04 反馈） -->
     <div class="ao-tabs" id="aoFsTabs">
-      <button class="is-active" data-ao-fs-tab="return">收益率走势</button>
-      <button data-ao-fs-tab="asset">资产走势</button>
+      <button class="is-active" data-ao-fs-tab="asset">资产走势</button>
+      <button data-ao-fs-tab="return">收益率走势</button>
     </div>
     <div class="ao-fs__ranges" id="aoFsRanges">
       <button data-ao-range="1m" class="is-active">近1月</button>
       <button data-ao-range="3m">近3月</button>
-      <button data-ao-range="ytd">今年以来</button>
-      <button data-ao-range="all">自始以来</button>
+      <button data-ao-range="ytd">今年来</button>
+      <button data-ao-range="all">自始来</button>
       <!-- 与非全屏那个共用 aoState.bench，点任一个两边同步高亮 -->
-      <button class="ao-fs__bench" data-ao-bench="qqq" title="叠加 QQQ 同期收益对比">对比QQQ</button>
+      <button class="ao-fs__bench" data-ao-bench="qqq" title="叠加 QQQ 同期收益对比">QQQ</button>
     </div>
     <button class="icon-btn icon-btn--sm" id="aoFsClose" title="关闭"><svg viewBox="0 0 24 24" class="ic"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
   </div>

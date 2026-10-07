@@ -216,7 +216,7 @@
             <svg class="acc-side__spark" viewBox="0 0 100 24" preserveAspectRatio="none"><path id="accSpark" d="" fill="none" stroke="#ff8f1f" stroke-width="1.5"/></svg>
             <div class="acc-side__pnl">
               <div class="asp-col"><span>今日盈亏</span><div class="asp-vals"><i class="num" id="accTotalNote">--</i><i class="num" id="accTotalNotePct">--</i></div></div>
-              <div class="asp-col"><span>累计盈亏</span><div class="asp-vals"><i class="num" id="accTotalCum">--</i><i class="num" id="accTotalCumPct">--</i></div></div>
+              <div class="asp-col"><span>累计盈亏 · TWR</span><div class="asp-vals"><i class="num" id="accTotalCum">--</i><i class="num" id="accTotalCumPct">--</i></div></div>
 </div>
           </div>
 </div>
@@ -226,12 +226,12 @@
               <div class="as-line as-line--3c is-active" data-cat="stock">
                 <div class="asl-col"><span>证券</span><b class="num" id="accStockVal">--</b></div>
                 <div class="asl-col asl-col--r"><span>今日盈亏</span><div class="asl-vals"><i class="num" id="accStockNote">--</i><i class="num" id="accStockPct">--</i></div></div>
-                <div class="asl-col asl-col--r"><span>累计盈亏</span><div class="asl-vals"><i class="num" id="accStockCum">--</i><i class="num" id="accStockCumPct">--</i></div></div>
+                <div class="asl-col asl-col--r"><span>累计盈亏 · TWR</span><div class="asl-vals"><i class="num" id="accStockCum">--</i><i class="num" id="accStockCumPct">--</i></div></div>
 </div>
               <div class="as-line as-line--3c" data-cat="fund">
                 <div class="asl-col"><span>基金</span><b class="num" id="accFundVal">--</b></div>
                 <div class="asl-col asl-col--r"><span>昨日收益</span><div class="asl-vals"><i class="num" id="accFundNote">--</i><i class="num" id="accFundNotePct">--</i></div></div>
-                <div class="asl-col asl-col--r"><span>累计收益</span><div class="asl-vals"><i class="num" id="accFundCum">--</i><i class="num" id="accFundCumPct">--</i></div></div>
+                <div class="asl-col asl-col--r"><span>累计收益 · TWR</span><div class="asl-vals"><i class="num" id="accFundCum">--</i><i class="num" id="accFundCumPct">--</i></div></div>
 </div>
               <div class="as-line as-line--3c" data-cat="cash">
                 <div class="asl-col"><span>现金</span><b class="num" id="accCashVal">--</b></div>
@@ -272,8 +272,6 @@
                 <button data-ao-range="3m">近3月</button>
                 <button data-ao-range="ytd">今年来</button>
                 <button data-ao-range="all">自始来</button>
-                <!-- 对比基准：叠加「同期把同样的钱全买 QQQ」的走势（历史=本地日线，今日=OKX 永续实时价） -->
-                <button class="ao-ranges__bench" data-ao-bench="qqq" title="叠加 QQQ 同期收益对比">QQQ</button>
 </div>
 </div>
 
@@ -318,11 +316,10 @@
                 <span id="aoStatLabel2">TWR</span>
                 <b class="num" id="aoStatPct">--</b>
               </div>
-              <!-- 对比基准同期收益率：只在「对比QQQ」打开时显示 -->
-              <div class="ao-stat ao-stat--range" id="aoStatBenchBox" hidden>
-                <span>QQQ 同期</span>
-                <b class="num" id="aoStatBench">--</b>
-              </div>
+              <!-- 「QQQ 同期」对比基准已下线（用户 2026-10-07）：
+                   资产走势含**现金**的进出（汇丰从 39 万慢慢扣到 23 万），
+                   拿一条纯指数跟它比没有可比性 —— 曲线的形状被现金流主导，
+                   不是投资表现。QQQ 对比格（#aoStatBenchBox）随之删除。 -->
             </div>
 
             <!-- 图表区：点右上角按钮或图表本身可全屏查看（移动端窄屏更好读） -->
@@ -891,8 +888,6 @@
       <button data-ao-range="3m">近3月</button>
       <button data-ao-range="ytd">今年来</button>
       <button data-ao-range="all">自始来</button>
-      <!-- 与非全屏那个共用 aoState.bench，点任一个两边同步高亮 -->
-      <button class="ao-fs__bench" data-ao-bench="qqq" title="叠加 QQQ 同期收益对比">QQQ</button>
     </div>
     <button class="icon-btn icon-btn--sm" id="aoFsClose" title="关闭"><svg viewBox="0 0 24 24" class="ic"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
   </div>

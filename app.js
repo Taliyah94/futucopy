@@ -2489,13 +2489,40 @@
       fetchText: cpFetchText, fetchAll: fetchCpComments, render: renderCpLatest, state: CP_STATE,
       /* 账户页资产走势曲线：暴露末几点，用于核对「曲线末点 vs 顶部总资产」是否一致
          （2026-10-07 改成全实时口径后新增）。 */
-      ao: () => ({ series: (aoState.series || []).slice(-3), mode: aoState.mode, range: aoState.range,
-                   benchOn: aoState.bench, benchVals: (aoGeo.bench || []).slice(-3) }),
+      ao: () => ({ series: (aoState.series || []).slice(-3), mode: aoState.mode, range: aoState.range }),
       bench: () => ({ ready: AO_BENCH.ready, n: AO_BENCH.keys.length, last3: AO_BENCH.keys.slice(-3),
                       map3: AO_BENCH.keys.slice(-3).map((k) => AO_BENCH.map[k]), live: AO_BENCH.live }),
       /* 分时图：暴露出来才能在**任意时刻**复现「某条腿拿不到 K 线」的半截数据场景
          （真实情况只在 OKX 限频时偶发），验证曲线是「沿用旧的」而不是「画断崖」。 */
       chart: { refresh: refreshAssetChart, series: assetSeries, data: () => assetChartData },
+      /* 收益日历 / 侧栏 TWR（2026-10-07）：分段收益率不对时用来看 calIndex 内部状态。 */
+      cal: () => {
+        try {
+          const i = calIndex();
+          const rs = (i.days || []).map((d) => d.rS).filter((x) => x != null);
+          const rf = (i.days || []).map((d) => d.rF).filter((x) => x != null);
+          return {
+            days: (i.days || []).length,
+            twrAll: i.twrAll, twrStock: i.twrStock, twrFund: i.twrFund,
+            nS: rs.length, nF: rf.length,
+            maxS: rs.length ? Math.max.apply(null, rs) : null,
+            minS: rs.length ? Math.min.apply(null, rs) : null,
+            maxF: rf.length ? Math.max.apply(null, rf) : null,
+            minF: rf.length ? Math.min.apply(null, rf) : null,
+            dStock: (detailState.stock || []).length,
+            dFund: (detailState.fund || []).length,
+            dCash: (detailState.cash || []).length,
+            base: CAL_BASE.fundBaseDate, tqqqDays: Object.keys(CAL_TQQQ_MAP || {}).length,
+            firstDays: (i.days || []).slice(0, 3).map((d) => d.date),
+            /* 日收益异常排查：把 |r| 最大的几天列出来（含分段），定位是哪段在爆。 */
+            worst: (i.days || []).filter((d) => d.r != null)
+              .sort((a, b) => Math.abs(b.r) - Math.abs(a.r)).slice(0, 4)
+              .map((d) => ({ d: d.date, r: +(d.r * 100).toFixed(2), g: Math.round(d.gain),
+                             rS: d.rS == null ? null : +(d.rS * 100).toFixed(2),
+                             rF: d.rF == null ? null : +(d.rF * 100).toFixed(2) })),
+          };
+        } catch (e) { return { error: e.message }; }
+      },
     };
   }
 
@@ -3736,15 +3763,11 @@
       aoState.hover = null;
       drawAoChart();
     }));
-    /* 「对比QQQ」开关：叠一条同期全买 QQQ 的基准线（2026-10-07 新增）。
-       状态在 aoState 上，全屏模式共用同一份 aoState，所以全屏里也会带上基准线。 */
-    const benchBtns = document.querySelectorAll('[data-ao-bench]');
-    benchBtns.forEach((b) => b.addEventListener('click', () => {
-      aoState.bench = !aoState.bench;
-      benchBtns.forEach((x) => x.classList.toggle('is-active', aoState.bench));
-      aoState.hover = null;
-      drawAoChart();
-    }));
+    /* 「对比QQQ」开关已下线（用户 2026-10-07）：资产走势含**现金**的进出
+       （汇丰美国从 39 万慢慢扣到 23 万），曲线形状被现金流主导而非投资表现，
+       拿一条纯指数跟它比没有可比性。按钮、基准线、基准读数格一并移除，
+       相关绘制代码仍在（aoBenchVals / aoSetBenchStat）只是不再被调用，
+       以便日后想恢复时有据可依。 */
   })();
 
   /* ============ 移动端：侧栏折叠（A） + 走势图全屏（D） ============
@@ -4582,9 +4605,24 @@
     if (data.length < 2) return;
     const first = data[0].cny;
     const isPct = aoState.mode === 'return';
-    const vals = data.map((p) => isPct ? (first ? (p.cny / first - 1) * 100 : 0) : p.cny);
-    /* QQQ 对比基准（开关 `aoState.bench`）：与 data 等长，null = 该日无基准数据（画线断开） */
-    const bench = (aoState.bench && AO_BENCH.ready) ? aoBenchVals(data, first, isPct) : null;
+    /* 收益率走势的纵轴 = **区间 TWR 曲线**（与右上角读数同源同算法）。
+       ⚠️ 2026-10-07 之前这里画的是简单比例 (cny/首日 − 1)：含现金、且把中途入金
+          当成收益，于是末点（截图 +23.12%）和右上角 TWR（+26.19%）永远对不上。
+       现在两者都走 calChainTwr 的链式乘数，末点 = 读数，曲线与数字一致。 */
+    let vals;
+    if (isPct) {
+      vals = aoTwrCurve(data);
+      /* 日历数据没覆盖到某些日期（理论上不该发生，兜底才画）：先用简单比例顶住，
+         避免整条线因一个 null 全断。 */
+      if (vals.some((v) => v == null)) {
+        vals = vals.map((v, i) => (v == null ? (first ? (data[i].cny / first - 1) * 100 : 0) : v));
+      }
+    } else {
+      vals = data.map((p) => p.cny);
+    }
+    /* QQQ 对比基准已下线（2026-10-07）：资产走势含现金进出，与纯指数不可比。
+       这里固定 bench = null（aoGeo.bench 也一并置空），基准线绘制分支自然全部跳过。 */
+    const bench = null;
     // 资产走势：恒橙色线 + 橙渐变（仿富途）；收益率走势：涨绿跌红
     const upTrend = vals[vals.length - 1] >= (isPct ? 0 : first);
     const lineC = isPct ? (upTrend ? '#00a86b' : '#ea3b3b') : '#ff8f1f';
@@ -4684,7 +4722,8 @@
     const gain = d[d.length - 1].cny - aoGeo.first;
     const pctV = aoTwrRange(d[0].date, d[d.length - 1].date, gain / aoGeo.first * 100);
     aoSetStat(gain, pctV);
-    aoSetBenchStat();
+    /* aoSetBenchStat() 已随 QQQ 对比下线而停调（2026-10-07）——
+       那个读数格（#aoStatBenchBox）已从 HTML 删除，函数留着备用。 */
   }
 
   /* 区间 TWR：优先用日历口径的链式 TWR；日历没有覆盖该区间时退回原来的简单比例。
@@ -4694,6 +4733,28 @@
     const from = map.get(fromDate), to = map.get(toDate);
     if (from == null || to == null || to.bef <= 0) return fallback;
     return (to.acc / from.bef - 1) * 100;
+  }
+
+  /* 收益率走势的**曲线值**：每个数据点相对区间首日的链式 TWR（%）。
+     区间基点 = 首日「之前的累计乘数」（bef），所以首日当天的涨跌不计入区间，
+     这与 aoTwrRange 的区间口径一致 → 曲线末点必然等于右上角读数。
+     ⚠️ 与 aoGeo.first（首日 cny）分开：这里用的是链式乘数，不是价格比。 */
+  function aoTwrCurve(data) {
+    const map = aoTwrCum();
+    if (!map.size) return data.map(() => null);
+    const base = map.get(data[0].date);
+    if (!base || base.bef <= 0) return data.map(() => null);
+    const out = new Array(data.length);
+    for (let i = 0; i < data.length; i++) {
+      const it = map.get(data[i].date);
+      out[i] = it ? (it.acc / base.bef - 1) * 100 : null;
+    }
+    /* 缺口日：沿用上一个已知值（曲线不断线；正常情况下日历日期是连续的）。 */
+    let lastV = 0;
+    for (let i = 0; i < out.length; i++) {
+      if (out[i] == null) out[i] = lastV; else lastV = out[i];
+    }
+    return out;
   }
 
   /* 逐日链式 TWR 序列（缓存）。返回 Map：date → { acc: 该日收盘时的累计乘数, bef: 该日之前的累计乘数 }。
@@ -5094,6 +5155,22 @@
        必须沿用上一次的市值，不能当 0，否则分母会剧烈跳变（实测 02-13 481,992 →
        02-17 18,372 → 02-24 495,019），每日涨跌幅与月度收益率跟着失真。 */
     let lastStock = 0, lastQ = 0, lastFund = 0;
+    /* 各段「累计已投入本金」：分段 TWR 的分母（见循环内 rS/rF 处的说明）。
+       初值 = **首日之前**已投入的本金：
+         证券 = TQQQ 的 17,600（CAL_TQQQ_BASE_CNY）；之后 03-20/06-25/07-15 三笔
+                由循环里的 `cumStockCapital += flowPos` 自然累加 → 终值 167,600。
+                （不能拿 167,600 当初值：CAL_STOCK_FLOW 里已含那三笔，会重复计。）
+       基金 = **0**！不能用 fundTotalCost 当初值 ——
+                那些基金是**分批**申购的：02-06 只投了 483,199.29，06-04 又投 7,779。
+                若首日就按 490,978 当分母，而当日市值才 231,916（还有几只当天没净值/未建仓），
+                首日就会算出 −52.68% 的假暴跌，后面全被它拖死（实测基金段 TWR −47.92%）。
+                所以从 0 起，让**当日申购额**在循环里逐笔累加成分母 —— 谁在场谁承担涨跌。 */
+    let cumStockCapital = CAL_TQQQ_BASE_CNY;
+    let cumFundCapital = 0;
+    /* 基金段**自己的**市值序列（首日 = 当日市值，之后 = 上一次已知市值）。
+       不能用 prevFund：那个的首日基线是全量申购成本 fundTotalCost，基金分批申购时会算出假暴跌。 */
+    let prevFundR = 0;
+    let ibkrSeen = false;
     let mKey = null, cur = null;
     for (const date of allDates) {
       /* 证券当日值：今天（夜盘/盘中实时）→ rtFill；中间缺快照日 → 收盘价口径；其余读 IBKR 净值 */
@@ -5113,14 +5190,33 @@
          ⚠️ 逐日扣掉 `forexTrades.cnh` 的当日入金（03-20 99,999.96 / 06-25 39,999.94 /
             07-15 9,999.99）：入金当天净值会跳升，不扣就是当日暴涨（实测 03-20 凭空 +85,104）。
             TQQQ 的 17,600 已作为 TQQQ 段的首日基线，不在这里重复扣。 */
-      let gainStock = 0, hasStock = false;
       const flow = stockFlows[date] || 0;
+      /* ---- IBKR 净值「首条出现」的处理（分段 TWR 的关键，2026-10-07）----
+         `totalNetValueDaily` 第一条有效值是 **03-18 的 1,450.52 USD**（在那之前
+         IBKR 没净值，只有 TQQQ 的日线）。所以 03-18 那天 prevStock=0，
+         `stock − prevStock` 会把整个 IBKR 账户余额当成「当日赚到的钱」。
+         那笔钱其实是**早就投进去的本金**（IBKR 里那笔 EFT 1,449.10 USD），
+         算成收益会让证券段凭空多出约 9,800 CNY、日收益被放大几十倍。
+         处理：在算 gainStock **之前**把 prevStock 从 0 改成「该日净值 − 当日入金」，
+         即把初始投入认定为资本，只留之后的涨跌算收益。
+         ⚠️ 必须前置：gainStock 一旦算完，prevStock 再改就没意义了；
+            也必须在 `const flow` 之后（这里要用 flow）。 */
+      if (stock != null && !ibkrSeen) {
+        ibkrSeen = true;
+        if (prevStock === 0) prevStock = stock - flow;      // 初始投入 = 本金，不算收益
+      }
+
+      let gainStock = 0, hasStock = false;
       if (stock != null) { gainStock += stock - prevStock; prevStock = stock; lastStock = stock; hasStock = true; }
       if (q != null) { gainStock += q - prevQ; prevQ = q; lastQ = q; hasStock = true; }
       if (hasStock && flow) gainStock -= flow;
       /* 基金日盈亏 = 当日市值 − 前一段已知值。
          ⚠️ 申购成本**不再**逐日扣：06-04 建信那笔 7,779 已包含在首日基线 fundTotalCost 里，
-            再扣一次就重复了（侧栏口径是 Σ(份额×成本) 一次性减）。 */
+            再扣一次就重复了（侧栏口径是 Σ(份额×成本) 一次性减）。
+         ⚠️ 但**分段**基金 TWR（rF）不能拿 fundTotalCost 当首日基线：基金是分批申购的
+            （02-06 投 483,199、06-04 再投 7,779），而 02-06 当日净值只覆盖当天建仓的部分，
+            用全量成本当基线会算出 −52.68% 的假暴跌（实测把基金段 TWR 拖到 −47.92%）。
+            rF 走自己的本金口径（cumFundCapital，从 0 起、由 fundFlows 逐笔累加），不受这里影响。 */
       let gainFund = 0, hasFund = false;
       if (fund != null) { gainFund = fund - prevFund; prevFund = fund; lastFund = fund; hasFund = true; }
       const gain = hasStock || hasFund ? gainStock + gainFund : null;
@@ -5138,7 +5234,45 @@
       const rBase = bmv > 0 ? bmv : den;
       const r = (gain != null && rBase + flowPos > 0) ? gain / (rBase + flowPos) : null;
 
-      const rec = { date, cny: den, gain, r, pct: r == null ? null : r * 100, flow: fundFlows[date] || 0, gainStock, gainFund };
+      /* ---- 分段 TWR 日收益（侧栏「证券 / 基金」两个累计收益率用，用户 2026-10-07 选方案 B）----
+         侧栏原本是「累计盈亏 ÷ 原始本金」的简单比例（证券 −0.11% / 基金 +10.07%），
+         与日历的 TWR 不同源、不可比。现在各段各自算链式 TWR。
+
+         ⚠️ **分母必须用「该段累计已投入本金」，不能用「上一日市值」** ——
+            证券段的 IBKR 净值 03-18 才有第一条（之前全靠 TQQQ 的 17,600），
+            若拿「上一日市值」当分母，02-06→03-18 这 40 天的入金会被算进收益，
+            日收益被放大几十倍、链式后累计上到 10,000%（实测 +10316%）。
+            IBKR 净值缺失期用「本金」才是对的：那段的钱确实在场，只是看不到市值。
+         口径：
+           证券段 rS = gainStock ÷ (累计已入证券本金 + 当日入金)   ← gainStock 已扣当日入金
+           基金段 rF = (gainFund − 当日申购) ÷ (累计已入基金本金 + 当日申购)
+         首日起本金即含全部申购/入金总额（fundTotalCost / CAL_TQQQ_BASE_CNY + CAL_STOCK_FLOW），
+         故无需等首日再起算；当日入金/申购要先加进本金再算日收益（视作开盘前到账）。 */
+      const fundFlowPos = (fundFlows[date] || 0) > 0 ? (fundFlows[date] || 0) : 0;
+      if (flowPos) cumStockCapital += flowPos;
+      if (fundFlowPos) cumFundCapital += fundFlowPos;
+      const rS = (hasStock && cumStockCapital > 0) ? gainStock / cumStockCapital : null;
+      /* ---- 基金段日收益 rF ----
+         ⚠️ **不能用 gainFund**：它的首日基线是 `CAL_BASE.fundTotalCost`（490,978，全量申购成本），
+            而 02-06 当日净值只覆盖当天建仓那部分 → 首日 gainFund 是个巨大负数
+            （实测把 rF 打到 −106%、基金段 TWR 变成 −107%）。基金是**分批**申购的，
+            所以分段必须走自己的市值序列 prevFundR（首日 = 当日市值，之后 = 上一次已知市值）。
+         分母 = 累计已申购本金（cumFundCapital，从 0 起、由 fundFlows 逐笔累加）；
+                若某日申购流水缺失导致分母为 0，兜底用当日市值。
+         分子 = (当日市值 − prevFundR) − 当日申购额（申购是本金不是收益）。 */
+      let rF = null;
+      if (hasFund) {
+        const fundDen = cumFundCapital > 0 ? cumFundCapital : fund;
+        if (fundDen > 0) {
+          rF = ((fund - prevFundR) - fundFlowPos) / fundDen;
+          prevFundR = fund;
+        }
+      }
+
+      const rec = {
+        date, cny: den, gain, r, pct: r == null ? null : r * 100,
+        rS, rF, flow: fundFlows[date] || 0, gainStock, gainFund,
+      };
       byDate[date] = rec;
       days.push(rec);
       const ym = date.slice(0, 7);
@@ -5181,7 +5315,37 @@
     Object.values(yearStats).forEach((st) => {
       st.pct = calChainTwr(st.days);
     });
-    return { byDate, days, months, yearStats };
+
+    /* ---- 分段累计乘数（侧栏「证券 / 基金」TWR 读数用，用户 2026-10-07 选方案 B）----
+       twrAll  = 证券+基金合计（= 日历 / 走势右上角那个数，方案 B 要求三者同源）
+       twrStock= 仅证券段（含 TQQQ）
+       twrFund = 仅基金段
+       分段起算点不同：证券段 02-06 前值为 0（无分母），故证券链从**首个有效证券日**起算；
+       基金段首日基线 = fundTotalCost（真实成本），所以可以从 02-06 当天起算。 */
+    let aS = 1, aF = 1, nS = 0, nF = 0;
+    days.forEach((d) => {
+      if (d.rS != null && isFinite(d.rS)) { aS *= (1 + d.rS); nS++; }
+      if (d.rF != null && isFinite(d.rF)) { aF *= (1 + d.rF); nF++; }
+    });
+    const twrAll = calChainTwr(days);
+
+    return {
+      byDate, days, months, yearStats,
+      twrAll,                                             // 合计（含现金？不含现金，见注释）
+      twrStock: nS ? (aS - 1) * 100 : null,
+      twrFund: nF ? (aF - 1) * 100 : null,
+    };
+  }
+
+  /* 取 calIndex 里的分段 TWR（'twrAll' / 'twrStock' / 'twrFund'）。
+     侧栏三处「累计收益率」都用它，保证与日历/走势**同源同算法**。
+     ⚠️ calIndex 依赖 detailState（异步加载），未就绪时返回 null → 侧栏显示 '--'，
+        绝不能退回旧的简单比例，否则页面刚打开时两个口径的数字会并排出现、又被误读成 bug。 */
+  function calTwrOf(key) {
+    try {
+      const v = calIndex()[key];
+      return typeof v === 'number' && isFinite(v) ? v : null;
+    } catch (e) { return null; }
   }
 
   /* TWR 链式累计：把一串日收益按 (1+r) 连乘再减 1，返回百分比。
@@ -5571,6 +5735,9 @@
       return sign && v > 0 ? '+' + s : s;
     };
     const pctS = (v) => (v == null || !isFinite(v)) ? '--' : (v > 0 ? '+' : '') + (v * 100).toFixed(2) + '%';
+    /* TWR 已经是**百分数**（calChainTwr / calTwrOf 返回的是 ×100 后的值），
+       再走 pctS 会被乘 100（实测 +26.19% 显示成 +2619%）。所以 TWR 一律用这个。 */
+    const pctAbs = (v) => (v == null || !isFinite(v)) ? '--' : (v > 0 ? '+' : '') + v.toFixed(2) + '%';
     function setTxt(id, txt, trend) {
       const el = $id(id);
       if (!el) return;
@@ -6539,9 +6706,12 @@
       const fundYestBase = fundAmount - fundYesterday;
       setTxt('accFundNotePct', fundYestBase ? pctS(fundYesterday / fundYestBase) : '--', fundYesterday);
       setTxt('accFundCum', f2(fundCum, true), fundCum);
-      // 累计涨跌幅 = 累计收益 ÷ 成本（今日市值 − 累计收益）
-      const fundCumBase = fundAmount - fundCum;
-      setTxt('accFundCumPct', fundCumBase > 0 ? pctS(fundCum / fundCumBase) : '--', fundCum);
+      /* 累计收益率改 **TWR**（用户 2026-10-07 选方案 B：侧栏与日历/走势同源）。
+         原式 = fundCum ÷ 原始成本（把 2 月建仓的钱当成在场一整年 → 偏低）。
+         TWR = 逐日 rF 链式连乘，只有实际在场的那天才承担涨跌。
+         ⚠️ 日历数据未就绪时 calTwrOf 返回 null → 显示 '--'，不退回旧口径（避免又出现两个数）。 */
+      const fundTwr = calTwrOf('twrFund');
+      setTxt('accFundCumPct', pctAbs(fundTwr), fundTwr == null ? fundCum : fundTwr);
       // 注：汇总行不再放比例（用户要求比例只出现在**表格列**里 → 昨日涨跌 / 持仓涨跌），
       // 侧栏那两处 accFundNotePct / accFundCumPct 保留。
     }
@@ -6917,8 +7087,11 @@
       setTxt('accStockNote', f2(stockTodayCny, true), stockTodayCny);
       setTxt('accStockPct', stockEquityCny - stockTodayCny ? pctS(stockTodayCny / (stockEquityCny - stockTodayCny)) : '--', stockTodayCny);
       setTxt('accStockCum', f2(stockCumCny, true), stockCumCny);
-      // 累计涨跌幅 = 累计盈亏 ÷ 本金 167,600（与上一行同源口径）
-      setTxt('accStockCumPct', pctS(stockCumCny / 167600), stockCumCny);
+      /* 累计收益率改 **TWR**（用户 2026-10-07 选方案 B）。原式 = 累计盈亏 ÷ 167,600，
+         把 4 笔分批到账的入金当成年初就全额在场 → 严重偏低。
+         ⚠️ 证券段 02-06 无 IBKR 数据，链式从首个有效证券日起算。 */
+      const stockTwr = calTwrOf('twrStock');
+      setTxt('accStockCumPct', pctAbs(stockTwr), stockTwr == null ? stockCumCny : stockTwr);
     }
     renderStockSum();
     /* ⚠️ 下面四个口径改成 `let`：分梯队刷新时每个梯队都要**重算**一遍
@@ -7051,9 +7224,12 @@
       // 累计盈亏 = 证券累计(IBKR净值+TQQQ市值-入金-买入成本) + 基金累计(净值-JSON成本)
       const cumCny = (eqCny - 167600) + fundCum;
       setTxt('accTotalCum', f2(cumCny, true), cumCny);
-      // 累计涨跌幅 = 累计盈亏 ÷ 总投入本金（证券本金 167,600 + 基金成本）
-      const costBase = 167600 + (fundAmount - fundCum);
-      setTxt('accTotalCumPct', costBase > 0 ? pctS(cumCny / costBase) : '--', cumCny);
+      /* 累计收益率 = **TWR**，且与日历/走势**完全同源**（同一个 calIndex().twrAll）。
+         用户 2026-10-07 选方案 B：侧栏总资产与日历对齐为「**不含现金**」——
+         现金既不产生收益也收不了涨跌，计进去只会稀释分母、让数字与日历对不上。
+         金额那一行仍含现金（那是总资产口径），只有收益率按投资产算，两者语义不同、已在标签注明。 */
+      const allTwr = calTwrOf('twrAll');
+      setTxt('accTotalCumPct', pctAbs(allTwr), allTwr == null ? cumCny : allTwr);
       return tot;
     }
     /* ⚠️ 必须是 `let`：分梯队刷新时 `recalcStockTotals()` 会重算总资产并回写这个值
@@ -7222,7 +7398,10 @@
              表现就是「证券表在跳、曲线末端不动」）。 */
     /* ---- QQQ 对比基准数据：历史取 fund_holdings.json 的 qqq_daily，今日补 OKX 永续实时价 ----
        ⚠️ 键统一成 'YYYY-MM-DD'；`live` 单独存而**不塞进 map**：qqq_daily 是美东日期、
-       曲线末点是北京日期（todayBj），直接塞会在跨日时错位，故只在末端单独用。 */
+       曲线末点是北京日期（todayBj），直接塞会在跨日时错位，故只在末端单独用。
+       ⚠️ 2026-10-07：QQQ 对比已下线（资产走势含现金、与纯指数不可比），
+          本段只保留本地日线解析（纯内存操作，无网络开销）供 aoBenchVals 备用；
+          **不再**发起 OKX 实时价请求（那是白花的一次网络往返）。 */
     (function loadQqqBench() {
       const arr = ((fundH && fundH.qqq_daily) || [])
         .map((r) => ({ d: String((r && r.d) || '').slice(0, 10), c: +(r && r.c) }))
@@ -7232,16 +7411,6 @@
       arr.forEach((x) => { map[x.d] = x.c; });
       AO_BENCH.map = map; AO_BENCH.keys = arr.map((x) => x.d);
       AO_BENCH.ready = arr.length > 1;
-      if (!AO_BENCH.ready) return;
-      /* 今日实时价：不阻塞首屏，到手后重画一次（曲线末端从昨收跳到实时）。
-         失败就只用日线（末端停在最近收盘），不影响主流程。 */
-      okxFetch(OKX_API_BASE + '/market/ticker?instId=QQQ-USDT-SWAP')
-        .then((r) => r.json())
-        .then((j) => {
-          const last = +(((j && j.data) || [])[0] || {}).last;
-          if (last > 0) { AO_BENCH.live = last; drawAoChart(); }
-        })
-        .catch(() => {});
     })();
 
     function rebuildAoSeries() {
@@ -7581,6 +7750,18 @@
         CAL_STOCK_FLOW[t.date] = (CAL_STOCK_FLOW[t.date] || 0) + t.cnh;
       });
     }
+
+    /* 侧栏三个「累计收益率 · TWR」的数据此刻才齐（calIndex 依赖 detailState + 上面这些基准）。
+       上面的 renderStockSum / paintFundSummary / renderAccTotal 都在本函数**之前**同步跑过一遍，
+       那时 calTwrOf 只能拿到 null → 侧栏显示 '--'。这里补一次即时刷新，
+       不然要等 15s 定时器才变。
+       ⚠️ 必须 try/catch：这两个渲染函数会连带调 drawAoCal / drawAssetChart，
+          任何一处抛错都会**中断 initAccountData 后续的 detailState 赋值**（实测 dStock=0、
+          资金明细整块空白）。侧栏 TWR 是锦上添花，绝不能拖垮主流程。 */
+    try {
+      if (typeof recalcStockTotals === 'function') recalcStockTotals();
+      if (typeof paintFundSummary === 'function') paintFundSummary();
+    } catch (e) { console.warn('[侧栏TWR] 首次补刷失败，等 15s 定时器', e && e.message); }
   }
   initAccountData();
 })();

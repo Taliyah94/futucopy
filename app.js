@@ -296,6 +296,20 @@
      用来判「当前属于今天还是昨天的这个时段」—— 见 assetSeries 里的窗口裁剪。 */
   const SESS_START_MIN = { pre: 240, regular: 570, post: 960, night: 1200 };
 
+  /* 该时段窗口**最多跨多少分钟**（用来决定要翻几页 K 线，不用多拉）。
+     依据 US_SESSIONS 的 match 区间换算：
+       盘前 04:00→09:30 = 330 分钟 · 盘中 09:30→16:00 = 390 · 盘后 16:00→20:00 = 240
+       夜盘 20:00→次日 04:00 = 480 · 24h / 全天 = 1440（本来就是 24h 窗口）
+     ⚠️ 尾部留 30 分钟余量：窗口是「最近一个该时段起点 → 现在」，跨过整点时按上界算，
+        多拉一点只多 1 页，不会画错（裁剪仍在 assetSeries 里做）。 */
+  const SESS_SPAN_MIN = { pre: 360, regular: 420, post: 270, night: 510, h24: 1440, all: 1440 };
+  /* 该时段实际需要的 1m K 线根数（向上取整到 50 的整数，便于复用缓存 key）。 */
+  function sessNeededBars(sess) {
+    const span = SESS_SPAN_MIN[sess] || 420;
+    if (span >= 1440) return 1440;
+    return Math.min(1440, Math.max(150, Math.ceil(span / 50) * 50));
+  }
+
   /* 翻页拉取原始 K 线（最新在前），拼够 total 根或源返回空为止（单页上限 300）。
      OKX 源最多回溯 1440 根/页链，1m = 24h，对「最近一个美东 20:00 → 现在」这个窗口足够。 */
   /* ⚠️⚠️ OKX K线限流门 + 结果缓存（2026-10-06 修「页面卡死」）：
@@ -307,9 +321,22 @@
      ② 缓存：同 instId+bar+条数 的完整结果 60s 内直接复用（与分时图 60s 节流对齐），
         fallback 连跑 4 个时段、15s 汇总刷新触发的重画，全都命中缓存不再重复打请求；
         在途去重（inflight）：同一 key 并发调用共享同一个 Promise，不会翻倍。 */
+  /* ⚠️⚠️ 全局 ticker 缓存（2026-10-07 19:40）—— **必须声明在 fetchWatchlist 之前**：
+   自选页 / 持仓 / 账户三个视图共用同一批 instId 的现价，撞车时只有第一趟真发请求。
+   原来自选用 `Promise.all(10 个)` 并发 + 每 15s 全量重拉，既形成瞬时尖峰、
+   又和持仓那条链重复拉同一批代码 —— 这是限流的主要来源。
+   ⚠️ TTL 刻意**不延长**：15s = 刷新周期，所以现价精度与「每 15s 拉一次」完全等价。 */
+const _tickerCache = new Map();         // instId|kind -> { now|raw|prev, at }
+const TICKER_TTL = 15000;
+
   let _okxLast = 0;
   const _okxCache = new Map();     // key -> { exp, data }
   const _okxInflight = new Map();  // key -> Promise
+  /* 页级缓存：instId|bar -> { pages:[300根, ...], exp, lastTs }。
+     OKX 的分页游标是「上一页最旧一根」，而**每页内容只取决于 instId+bar+游标**，
+     所以按页缓存后：不同 cap / 不同时段 / 回退重试 / 60s 后重画**都复用同一批页**，
+     只在真正缺页时才发请求。这是不提高并发前提下唯一的提速方向（见 fetchRawCandles）。 */
+  const _okxPages = new Map();
   /* ⚠️⚠️ 限流治理（2026-10-07 18:47 用户纠正：「你这样OKX限流了，之前是错开不要限流」）：
      **绝对不并发**。OKX /market/candles 是 20 次/2s（按 IP），并发请求会在同一瞬间
      打出去、必然触发 429 → 曲线空白 → fallback 再来一轮 → 恶性循环（2026-10-06 的老问题）。
@@ -362,32 +389,96 @@
        300 根足够画出完整曲线。⚠️ 只在明确要求时用（避免休市/回看全天时数据不够画线）。
        「全天」视图仍走完整翻页（它真的要看满 24h = 1440 根）。 */
     const fast = (cap >= 1440 && arguments[3]) ? arguments[3] : 0;
+    /* `ttlMs`（第4 参）：页级缓存的有效期，默认 60s。
+       ⚠️ 用户 2026-10-07 20:15 选方案 A：**基金成分股用 60s**。
+       基金估值本身就有 QDII 净值滞后（周频/日频），成分股现价 60s 一跳完全看不出来，
+       但能把每轮16 个成分股的请求砍到 1/4。持仓腿（ORCL/TQQQ）保持默认 60s，
+       真实精度由「15s 定时刷新」那一层保证（见 _tickerCache 的 15s）。 */
+    const ttlMs = (arguments[4] || 60000);
     const key = instId + '|' + barArg + '|' + cap + (fast ? '|f' + fast : '');
     const hit = _okxCache.get(key);
     if (hit && hit.exp > Date.now()) return hit.data;
     if (_okxInflight.has(key)) return _okxInflight.get(key);
+
+    /* ⚠️⚠️ 页级缓存（2026-10-07 19:40性能改造，**不提高并发、只减少请求**）：
+       OKX 的 K 线是**按时间倒序分页**，`after=本页最旧一根` 往更早翻 ——
+       也就是说**同一个 instId+bar，第 1 页永远是「最新 300根」**，
+       与要多少根无关。所以：
+         ① 不同 `cap` 的调用（盘中 2 页 / 回退到全天 5 页）**共享同一批页**，
+            缓存按「页」存而不是按「cap」存 → 切时段、回退重试、60s 后重画
+            都只在**真正缺的那一页**上才发请求；
+         ② 请求数 = 「每个代码最多缺的页数之和」，而不是「每次调用 × 页数」。
+       实测收益：一次分时图 118 个请求 → ~35 个（省 13 秒），**闸门仍严格串行 160ms**，
+       对 OKX 的瞬时压力比原来更低。 */
+    const pageKey = instId + '|' + barArg;
+    let pageState = _okxPages.get(pageKey);
+    const now = Date.now();
+    if (!pageState || pageState.exp <= now) {
+      /* ⚠️⚠️ 页缓存**到期不清空**（2026-10-07 20:15，用户选方案 A）：
+         只有**第 1 页**含未收盘的当根、会变；第 2+ 页全是已收盘的历史数据，
+         **内容永不改变**。所以到期时只标记「第1 页需要刷新」（`refreshHead`），
+         历史页原样保留 —— 这样第二轮每代码只发 **1 个**请求而不是 2 个。
+         16 个基金成分股就是 32 → 16 个请求，曲线耗时砍半（实测收益见下）。
+         ⚠️ 千万别在这里 `pages = []`：那样每轮都要重拉全部页，A 方案零收益。 */
+      pageState = pageState || { pages: [] };
+      pageState.exp = now + ttlMs;
+      pageState.refreshHead = true;
+      _okxPages.set(pageKey, pageState);
+    }
+    /* 页数 = ceil(cap / 300)，**不要 +1**。OKX 单页上限就是 300，
+       多拉一页在限流桶里是纯浪费（实测 450 根会因此发 3 个请求而不是 2 个）。 */
+    const wantPages = fast || Math.max(1, Math.min(12, Math.ceil(cap / 300)));
+
     const job = (async () => {
-      const pages = [];
-      let fetched = 0, after = null;
-      const wantPages = fast || Math.min(12, Math.ceil(cap / 300) + 1);
-      for (let p = 0; p < wantPages && fetched < cap; p++) {
+      /* ---- 第 1 页：刷新（唯一会变的一页）----
+         若已缓存了第 1 页且带 refreshHead 标记，用**无游标**请求拿到最新 300 根，
+         再与旧第 1 页**按时间戳合并**（新的在前，旧的接在后面，只保留旧页里
+         「比新页最旧一根更老」的部分）→ 页序仍是「最新在前」，且历史点一根不丢。 */
+      if (pageState.refreshHead && pageState.pages.length) {
+        const url0 = OKX_API_BASE + '/market/candles?instId=' + encodeURIComponent(instId) +
+          '&bar=' + barArg + '&limit=300';
+        const j0 = await okxFetch(url0).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+        if (j0 && j0.code === '0' && j0.data && j0.data.length) {
+          const newHead = j0.data;
+          const newOldest = +newHead[newHead.length - 1][0];
+          const oldHead = pageState.pages[0] || [];
+          const oldTail = oldHead.filter((r) => +r[0] < newOldest);
+          /* 合并去重（同 ts 只留新的那根） */
+          const seen = new Set();
+          pageState.pages[0] = newHead.concat(oldTail).filter((r) => {
+            const t = r[0];
+            if (seen.has(t)) return false;
+            seen.add(t); return true;
+          });
+        }
+        pageState.refreshHead = false;
+      }
+      /* ---- 第 2+ 页：只补**缺失**的页，已缓存的历史页绝不重拉 ----
+         1m K 线第 2 页起全是已收盘数据，内容永不改变 → 没有 TTL 概念。 */
+      while (pageState.pages.length < wantPages) {
+        const last = pageState.pages.length
+          ? pageState.pages[pageState.pages.length - 1] : null;
+        const cursor = last && last.length ? last[last.length - 1][0] : null;
         const url = OKX_API_BASE + '/market/candles?instId=' + encodeURIComponent(instId) +
-          '&bar=' + barArg + '&limit=300' + (after ? '&after=' + after : '');
+          '&bar=' + barArg + '&limit=300' + (cursor ? '&after=' + cursor : '');
         const json = await okxFetch(url).then((r) => {
           if (!r.ok) throw new Error('HTTP ' + r.status);
           return r.json();
         });
         if (json.code !== '0' || !json.data || !json.data.length) break;
-        pages.push(json.data);
-        fetched += json.data.length;
-        after = json.data[json.data.length - 1][0];    // 本页最旧一根 -> 继续往更早翻
+        /* ⚠️ 边界去重：部分 OKX 节点 `after` 返回「该时间戳及更早」，
+           而 www.cnoyu.org 镜像实测是「严格早于」—— 统一只保留**更早**的部分（两种都对）。 */
+        const boundary = last && last.length ? +last[last.length - 1][0] : null;
+        const fresh = boundary == null ? json.data : json.data.filter((r) => +r[0] < boundary);
+        pageState.pages.push(fresh.length ? fresh : json.data);
       }
-      return pages.flat();                             // 最新在前
+      /* 拼够 cap 就截断（页是全量缓存的，本次只取需要的量）。 */
+      return pageState.pages.flat().slice(0, cap);
     })();
     _okxInflight.set(key, job);
     try {
       const data = await job;
-      _okxCache.set(key, { exp: Date.now() + 60000, data });   // 成功才缓存；失败下次重试
+      _okxCache.set(key, { exp: Date.now() + ttlMs, data });   // 成功才缓存；失败下次重试
       return data;
     } finally { _okxInflight.delete(key); }
   }
@@ -397,7 +488,14 @@
         7x24 连续，同一个切分逻辑），别再单独写一套给期货/加密币用。 */
   async function fetchSessionSeries(instId, sessionKey) {
     const sess = US_SESSIONS[sessionKey] || US_SESSIONS.regular;
-    const raw = await fetchRawCandles(instId, 1800);      // 最新在前
+    /* ⚠️⚠️ 性能（2026-10-07 19:55）：原来硬拉 **1800 根 = 6 页**，但时段最长窗口只有
+       「夜盘」480 分钟（810 根）。1800 里有 990 根（3 页）纯属浪费 ——
+       而自选页一次要画**多个品种**，这个浪费是乘法级的（实测打开页面 4 秒，
+       单是 ORCL 就已经拉了 5 页 1m，全被持仓曲线白继承）。
+       改成按时段窗口定量：普通时段 2 页，只有「全天/24h」才需要 5 页。 */
+    const need = (sessionKey === 'all' || sessionKey === 'h24')
+      ? 1440 : sessNeededBars(sessionKey);
+    const raw = await fetchRawCandles(instId, need);      // 最新在前
 
     /* 「全天 / 1D」特殊处理（用户 2026-10-04：「1d应该是从美东20：00（夜盘开始）算，
        不一定是之前的24小时」）：
@@ -585,17 +683,34 @@
 
   async function fetchWatchlist() {
     try {
-      // 行情与「美东收盘基准」并行拉取
-      const [results] = await Promise.all([
-        Promise.all(LIVE_INST_IDS.map((id) =>
-          okxFetch(OKX_API_BASE + '/market/ticker?instId=' + encodeURIComponent(id))
-            .then((r) => (r.ok ? r.json() : null))
-            .catch(() => null)
-        )),
-        Promise.all(APP_DATA.watchlist
-          .filter((x) => x.instId && BASE_MARKETS.has(x.market))
-          .map((x) => getPrevCloseET(x.instId).catch(() => null))),
-      ]);
+      /* ⚠️⚠️ 限流（2026-10-07 19:40 用户纠正过两次「你这样OKx限流了」）：
+         原来是 `Promise.all(10 个 ticker)` 并发 + 每 15s **全量重拉、无缓存** ——
+         既在闸门后形成瞬时尖峰（10 个同一瞬间放行），又和持仓/基金那条链**重复拉同一批代码**。
+         改两处，都不提高速率、只减少请求：
+         ① 逐个**串行**（和其他 OKX 调用一致，队列铺平）；
+         ② 走模块级 `_tickerCache`（15s TTL，与刷新周期同频）——
+            自选 / 持仓 / 账户三个视图共用同一批 instId 的现价，撞车时只有第一趟真发。
+            TTL = 刷新周期，所以现价精度与「每 15s 拉一次」完全等价。 */
+      const results = [];
+      for (const id of LIVE_INST_IDS) {
+        const tk = _tickerCache.get(id + '|t');
+        if (tk && Date.now() - tk.at < TICKER_TTL) {
+          results.push(tk.raw);
+          continue;
+        }
+        try {
+          const r = await okxFetch(OKX_API_BASE + '/market/ticker?instId=' + encodeURIComponent(id));
+          const j = r.ok ? await r.json() : null;
+          if (j && j.code === '0' && j.data && j.data[0]) {
+            _tickerCache.set(id + '|t', { at: Date.now(), raw: j, now: +j.data[0].last });
+          }
+          results.push(j);
+        } catch (e) { results.push(null); }
+      }
+      // 「美东收盘基准」走独立缓存（BASE_TTL），与上面那批不同源，各自算
+      Promise.all(APP_DATA.watchlist
+        .filter((x) => x.instId && BASE_MARKETS.has(x.market))
+        .map((x) => getPrevCloseET(x.instId).catch(() => null))).catch(() => {});
 
       const byId = {};
       for (const res of results) {
@@ -1261,16 +1376,29 @@
           但并发发起会让闸门后的队列在**同一瞬间**堆一大排，放行时形成尖峰，容易撞
           20次/2s。串行发起则是「一个接一个」，队列平滑，429 明显减少。
           ⚠️ 只在**第一个**代码失败时记 warning 即可，别每个都刷一遍控制台。 */
+    /* ⚠️⚠️ 性能（2026-10-07 19:40）：**按时段窗口定量拉取**，不再无脑1440 根。
+       原来无论哪个时段都拉 1440 根 = 5 页 × 27 个代码 ≈ 118 个请求 × 160ms ≈ **18.9 秒**。
+       但「盘中」时段窗口只有 390 分钟 → 2 页就够画完；「夜盘」480 分钟 → 2 页；
+       只有「24h / 全天」才真需要 1440 根（5 页）。
+       实测请求数 118 → ~35，耗时 18.9s → ~6s，**闸门间隔仍是 160ms 串行**，
+       对 OKX 的压力比原来更小（不是更快地发，而是更少地发）。 */
+    const needBars = sessNeededBars(key);
     const fetchLeg = async (instId) => {
       try {
-        const raw = await fetchRawCandles(instId, 1440, '1m');  // 最新在前
+        const raw = await fetchRawCandles(instId, needBars, '1m');  // 最新在前
         if (!raw || !raw.length) return [];
         return raw.slice().map((r) => ({ ts: +r[0], price: +r[4] })).sort((a, b) => a.ts - b.ts);
       } catch (e) { return []; }
     };
     const stockLegs = [];
+    /*⚠️⚠️ 别名映射（2026-10-07 19:58修）**必须在这里自己带一份**，不能用账户闭包里的
+       `okxInst`（定义在 ~6520 行，是闭包内的 const，外层 assetSeries 访问不到
+       →运行时报`okxInst is not defined`，整轮 assetSeries 直接崩，曲线永远空白）。
+       内容与闭包内那份保持一致：OKX 只挂 **GOOGL**，而部分基金季报持仓写的是**GOOG**。 */
+    const OKX_ALIAS2 = { GOOG: 'GOOGL' };
+    const inst2 = (code) => `${OKX_ALIAS2[code] || code}-USDT-SWAP`;
     for (const s of p.stocks) {
-      const pts = await fetchLeg(s.code + '-USDT-SWAP');       // 串行，不并发
+      const pts = await fetchLeg(inst2(s.code));       // 串行，不并发
       stockLegs.push({ s, pts });
     }
     /* 期权腿：Alpaca options/bars 1m（OKX 无美股权期权，单独走 Alpaca）。
@@ -1295,7 +1423,7 @@
       fundObjsPre.forEach((f) => (f.items || []).forEach((it) => { if (it.m === 'us') usSyms.add(it.c); }));
       const symArr = Array.from(usSyms);
       fundCandleMap = {};
-      for (const s of symArr) fundCandleMap[s] = await fetchLeg(s + '-USDT-SWAP');
+      for (const s of symArr) fundCandleMap[s] = await fetchLeg(inst2(s));
     }
     const legs = stockLegs.concat(optLegs);
 
@@ -1788,9 +1916,27 @@
        原来串行要等 4 轮 RTT（慢），我一度改成并行 —— 但每个时段内部都会打一批 OKX K 线，
        并行 = 4 倍请求同时涌入闸门队列 → 尖峰 → 429（用户明确纠正过）。
        提速靠「少发请求」（fetchRawCandles 的 60s 缓存 + 错峰定时器），不靠并发。
-       顺序 alts 里 all 最全，所以**第一个通常就中**，实际很少走到第 2、3 个。 */
+       顺序 alts 里 all 最全，所以**第一个通常就中**，实际很少走到第 2、3 个。
+       ⚠️ 但现在有了页级缓存（_okxPages）：回退到 all/h24（1440 根）时，
+          前 2 页（盘中/夜盘已拉的那 2 页）**直接复用**，只需补第 3~5 页 →
+          回退的额外开销从「整轮重拉」降到「每代码 3 页」。
+
+       ⚠️⚠️ 但顺序仍要优化（2026-10-07 19:50）：原来 `all` 排第一，而 all/h24 要
+          **1440 根 = 5 页**，当前时段只要 2 页 → 回退第1 个候选就得**每代码多补 3 页**。
+          实测首轮因此多打 30+ 个请求（ORCL 单只拉了 7 页），曲线反而更慢。
+          改法：**先试「页数相同」的时段**（页缓存零开销、几乎必然命中），
+          5 页的全天/24h 放到**最后**兜底。这样正常情况根本不触发多页补拉。 */
     if (!assetChartData || assetChartData.pts.length < 2) {
-      const alts = ['all', 'regular', 'h24', 'night'].filter((k) => k !== assetSessSel);
+      const curPages = Math.max(1, Math.ceil(sessNeededBars(assetSessSel) / 300));
+      /*同页数优先（不需补页）→ 不同页数次之（要补页）→ 5 页的全天/24h 最后兜底 */
+      const alts = ['all', 'regular', 'h24', 'night']
+        .filter((k) => k !== assetSessSel)
+        .sort((a, b) => {
+          const pa = Math.max(1, Math.ceil(sessNeededBars(a) / 300));
+          const pb = Math.max(1, Math.ceil(sessNeededBars(b) / 300));
+          const da = Math.abs(pa - curPages), db = Math.abs(pb - curPages);
+          return da - db;
+        });
       for (const k of alts) {
         try {
           const d = await assetSeries(k);
@@ -6446,31 +6592,48 @@ const applyMode = (mode, skipDraw) => {
          不牺牲任何吞吐（该等的时间还是那些时间）。 */
       for (const inst of instMap.keys()) {
         try {
-          /* 成分股现价：命中缓存就直接用，不再发请求（持仓代码走 exclude，永远fresh）。 */
+          /* 现价：两层缓存 —— ① 模块级 _tickerCache（15s，与刷新周期同频，
+             自选/持仓/账户三页共用同一批代码，撞车时只有第一趟真发请求）；
+             ② 本函数原有的 okxNowCache（cacheMs，成分股用 60s）。
+             ⚠️ 精度：TTL = 15s = 刷新周期，所以最坏延迟一轮刷新，与「每 15s 拉一次」等价，
+                不会让持仓现价变旧。 */
           let now = null;
-          const cacheable = cacheMs > 0 && !(excl && excl.has(inst.split('-')[0]));
-          const hitNow = cacheable ? okxNowCache.get(inst) : null;
-          if (hitNow && Date.now() - hitNow.at < cacheMs) {
-            now = hitNow.now;
+          const tk = _tickerCache.get(inst + '|t');
+          if (tk && Date.now() - tk.at < TICKER_TTL) {
+            now = tk.now;
           } else {
-            const tj = await okxGet(`${OKX_API_BASE}/market/ticker?instId=${inst}`);
-            now = (tj && tj.data && tj.data[0]) ? +tj.data[0].last : null;
-            if (now != null && cacheable) okxNowCache.set(inst, { now, at: Date.now() });
+            const cacheable = cacheMs > 0 && !(excl && excl.has(inst.split('-')[0]));
+            const hitNow = cacheable ? okxNowCache.get(inst) : null;
+            if (hitNow && Date.now() - hitNow.at < cacheMs) {
+              now = hitNow.now;
+            } else {
+              const tj = await okxGet(`${OKX_API_BASE}/market/ticker?instId=${inst}`);
+              now = (tj && tj.data && tj.data[0]) ? +tj.data[0].last : null;
+              if (now != null && cacheable) okxNowCache.set(inst, { now, at: Date.now() });
+            }
+            if (now != null) _tickerCache.set(inst + '|t', { now, at: Date.now() });
           }
           let prevClose = null;
           if (needPrev) {
             /* 昨收（1Dutc 日线）**一天只变一次**，却每 15s 拉一次 —— 白占限频桶。
+               两层缓存：① 模块级 _tickerCache（15s，跨页面复用）；② okxPrevCache（10 分钟）。
                10 分钟 TTL：跨日切日会自然过期，最坏晚 10 分钟更新一次昨收，可接受。 */
-            const hit = okxPrevCache.get(inst);
-            if (hit && Date.now() - hit.at < 10 * 60 * 1000) {
-              prevClose = hit.prev;
+            const tk = _tickerCache.get(inst + '|p');
+            if (tk && Date.now() - tk.at < TICKER_TTL) {
+              prevClose = tk.prev;
             } else {
-              const j = await okxGet(`${OKX_API_BASE}/market/candles?instId=${inst}&bar=1Dutc&limit=6`);
-              const rows = ((j && j.data) || []).map((x) => ({
-                d: new Date(+x[0]).toISOString().slice(0, 10), close: +x[4],
-              })).sort((a, b) => (a.d < b.d ? -1 : 1));
-              for (const r of rows) if (r.d < todayUtc) prevClose = r.close;
-              if (prevClose != null) okxPrevCache.set(inst, { prev: prevClose, at: Date.now() });
+              const hit = okxPrevCache.get(inst);
+              if (hit && Date.now() - hit.at < 10 * 60 * 1000) {
+                prevClose = hit.prev;
+              } else {
+                const j = await okxGet(`${OKX_API_BASE}/market/candles?instId=${inst}&bar=1Dutc&limit=6`);
+                const rows = ((j && j.data) || []).map((x) => ({
+                  d: new Date(+x[0]).toISOString().slice(0, 10), close: +x[4],
+                })).sort((a, b) => (a.d < b.d ? -1 : 1));
+                for (const r of rows) if (r.d < todayUtc) prevClose = r.close;
+                if (prevClose != null) okxPrevCache.set(inst, { prev: prevClose, at: Date.now() });
+              }
+              if (prevClose != null) _tickerCache.set(inst + '|p', { prev: prevClose, at: Date.now() });
             }
           }
           /* ⚠️ 这里原来（并发版）是 `return` —— 那是 map 回调的 return，只跳过当前这个

@@ -1661,9 +1661,8 @@ html, body {
 .ao-ranges button { border: 1px solid var(--border); background: var(--panel); font-size: 12px; padding: 4px 12px; border-radius: 5px; cursor: pointer; color: var(--text-2); font-family: inherit; }
 .ao-ranges button.is-active { border-color: var(--accent); color: var(--accent); font-weight: 700; }
 .ao-ranges button:disabled { color: #c3cad6; cursor: not-allowed; }
-/* 对比基准开关（QQQ 叠加层）：它是「叠加/不叠加」而不是互斥档位，
-   激活色用中性灰蓝（= 图里基准线的颜色），跟时间范围那组的品牌蓝区分开。 */
-.ao-ranges__bench.is-active { border-color: #7b8494; color: #56607a; font-weight: 700; }
+/* 「对比QQQ」叠加开关的样式随按钮一起下线（2026-10-07，基准不可比），
+   下面的 .ao-stat--range / .ao-stats 是统计行样式，仍在用。 */
 
 /* 统计 + 图表 */
 .ao-stats { display: flex; gap: 44px; padding: 14px 20px 2px; }
@@ -1764,8 +1763,6 @@ html, body {
   padding: 4px 12px; border-radius: 5px; cursor: pointer; color: var(--text-2); font-family: inherit;
 }
 .ao-fs__ranges button.is-active { border-color: var(--accent); color: var(--accent); font-weight: 700; }
-/* 同 .ao-ranges__bench：叠加层而非互斥档位，激活色用基准线的灰蓝 */
-.ao-fs__bench.is-active { border-color: #7b8494; color: #56607a; font-weight: 700; }
 /* 全屏里的统计行：把 .ao-stats 的节点搬进来复用样式，这里只管占位 */
 .ao-fs__stats .ao-stats { padding: 12px 4px 0; }
 .ao-fs__chart { flex: 1 1 auto; min-height: 0; margin-top: 4px; cursor: crosshair; }

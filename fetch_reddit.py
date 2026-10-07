@@ -59,7 +59,11 @@ DEFAULT_TARGETS = {
     'TQQQ': 'TQQQ',
 }
 LIMIT = 100                             # 单页上限：实测 limit=250 也只返回 100 条
-SELFTEXT_MAX = 240                      # 正文摘要截断长度（列表里点开才看）
+# 正文不再截断（用户 2026-10-07：「不应该限制讨论的字数和高度」）。
+# 原先按 240 字符截，列表里读到的 Reddit 正文一律半截（实测有正文被砍在 "…inspir" 处）。
+# 面板本身是纵向滚动的，长文自然往下延伸即可；这里只防一个极端情况：
+# 十万字级的灌水帖把 json 撑爆，超过上限就保留前 8000 字（远大于正常帖子长度）。
+SELFTEXT_MAX = 8000
 TIMEOUT = 45
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'reddit_posts.json')
 

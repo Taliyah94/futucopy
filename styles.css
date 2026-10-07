@@ -648,22 +648,46 @@ html, body {
 
 .cp__item { padding: 12px 14px; border-bottom: 1px solid var(--border); }
 
-/* ---- 「最新」tab：多站社区评论聚合（东财股吧 / 雪球 / Reddit via oanor）----
+/* 「最新」tab：多站社区评论聚合（东财股吧 / 雪球 / Reddit via oanor）
    （新浪股吧与 SeekingAlpha 2026-10-06 实测不可达已弃；东财资讯新闻源与 Adanos
-   情绪卡 2026-10-07 按用户要求移除。） ---- */
-   数据靠公共 CORS 代理取回，代理限频/下线是常态，所以状态条必须**如实显示每个源
-   出了多少条、哪个挂了**，否则用户会以为「没评论」而不是「这个源没取到」。 */
+      情绪卡 2026-10-07 按用户要求移除。）
+
+   数据靠公共 CORS 代理取回，代理限频/下线是常态，所以状态条必须如实显示每个源
+   出了多少条、哪个挂了，否则用户会以为「没评论」而不是「这个源没取到」。
+
+   ⚠️ 排版纪律（别踩）：本注释曾因内部写了「注释结束符」的字面量而提前闭合，
+      把紧随其后的 .cp__srcbar 整条规则当成注释吞掉 —— 状态条退化成 block、
+      「更新 hh:mm」和「刷新」被挤到第二行（用户 2026-10-07 15:03 反馈）。
+      写 CSS 注释时注释体内不得出现结束符字面量，分隔线「----」也不要放在
+      注释中段，否则紧随其后的那一行会把注释提前闭合。 */
 .cp__srcbar {
   display: flex; align-items: center; gap: 8px;
   padding: 7px 14px; flex: none;
   border-bottom: 1px solid var(--border);
   background: var(--panel-2);
   font-size: 11px; color: var(--text-3);
+  /* ⚠️ 窄屏（手机）上「东财股吧 21 / 雪球 / Reddit 1」三个 chip 会把「更新 14:27 / 刷新」
+     挤到第二行（用户 2026-10-07 15:03 反馈）。这里让 chips 区域**单行、自身横向滚动**，
+     meta + 刷新按钮永远留在第一行右侧（flex:none，不参与压缩）。 */
+  flex-wrap: nowrap; min-width: 0;
 }
 /* ⚠️ display:flex 会盖掉 UA 的 [hidden]{display:none}：不在「最新」tab 时必须显式隐藏，
    否则「推荐」顶部会残留一条源状态栏（用户 2026-10-07 要求）。 */
 .cp__srcbar[hidden] { display: none; }
-.cp__chips { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+/* chips 单行 + 可横向滚动：宁可自己滑，也不把「更新 hh:mm」/刷新按钮挤到第二行。
+   ⚠️ `flex: 0 1 auto` 的 flex-basis 是 auto（=内容宽度），在 nowrap 容器里**不会**收缩，
+      实测 chips 仍占满 1213px 把后两项顶到第二行。必须给 `min-width:0` + `flex-shrink:1`
+      并让 flex-basis 收缩（用 `flex-basis:0` 配合 grow=0 就是「按可用空间分配」）。
+      这里直接 `flex: 0 1 0%` —— 基点 0、可收缩，宽度完全由剩余空间决定，多余部分自己横向滚。 */
+.cp__chips {
+  display: flex; flex-wrap: nowrap; gap: 4px;
+  min-width: 0; flex: 0 1 0%;
+  overflow-x: auto; overflow-y: hidden;
+  scrollbar-width: none; -webkit-overflow-scrolling: touch;
+}
+.cp__chips::-webkit-scrollbar { display: none; }
+/* chip 本身不压缩（`.cp__chip` 已有 white-space:nowrap，这里补 flex-shrink 保险） */
+.cp__chip { flex: none; }
 .cp__chip {
   font-style: normal; line-height: 16px; padding: 1px 5px; border-radius: 2px;
   background: var(--panel); border: 1px solid var(--border); color: var(--text-3);
@@ -672,7 +696,7 @@ html, body {
 .cp__chip.is-ok { color: #067647; border-color: rgba(6, 118, 71, .25); background: rgba(6, 118, 71, .07); }
 .cp__chip.is-bad { color: #b42318; border-color: rgba(180, 35, 24, .22); background: rgba(180, 35, 24, .06); }
 .cp__chip.is-load { color: #b54708; border-color: rgba(181, 71, 8, .2); background: rgba(181, 71, 8, .07); }
-.cp__srcbar .cp__meta { margin-left: auto; white-space: nowrap; }
+.cp__srcbar .cp__uptime { margin-left: auto; white-space: nowrap; flex: none; }
 .cp__srcbtn {
   flex: none; font-size: 11px; line-height: 18px; padding: 1px 8px; cursor: pointer;
   color: var(--text-2); background: var(--panel);
@@ -690,6 +714,18 @@ html, body {
 .cp__src--xueqiu { color: #175cd3; background: rgba(23, 92, 211, .07); border-color: rgba(23, 92, 211, .2); }
 .cp__src--sa { color: #067647; background: rgba(6, 118, 71, .07); border-color: rgba(6, 118, 71, .2); }
 .cp__item--cplatest .cp__text { word-break: break-word; }
+/* Reddit 正文（selftext）：接在标题后面另起一段显示完整内容。
+   ⚠️ 2026-10-07 用户「不应该限制讨论的字数和高度」——
+      ① 不做 line-clamp、不设 max-height，让长文自然往下延伸（面板整体纵向滚动）；
+      ② 必须显式 `display:block`，否则它作为 `<p>` 里的 `<span>` 会与标题挤在同一行；
+      ③ 保留原文里的空行（Reddit 正文常带段落分隔），但去掉首尾多余空行。 */
+.cp__digest {
+  display: block;
+  margin-top: 6px;
+  white-space: pre-wrap;      /* 尊重原文换行与空行 */
+  overflow-wrap: anywhere;    /* 超长无空格串（URL/长 token）也能断 */
+  color: var(--text-2);
+}
 .cp__link { color: inherit; text-decoration: none; }
 .cp__link:hover { color: var(--text); text-decoration: underline; }
 /* ---- 快讯流（金十）：仿富途时间轴 = 左侧圆点+时间，下方正文 ---- */
@@ -1661,8 +1697,11 @@ html, body {
 .ao-ranges button { border: 1px solid var(--border); background: var(--panel); font-size: 12px; padding: 4px 12px; border-radius: 5px; cursor: pointer; color: var(--text-2); font-family: inherit; }
 .ao-ranges button.is-active { border-color: var(--accent); color: var(--accent); font-weight: 700; }
 .ao-ranges button:disabled { color: #c3cad6; cursor: not-allowed; }
-/* 「对比QQQ」叠加开关的样式随按钮一起下线（2026-10-07，基准不可比），
-   下面的 .ao-stat--range / .ao-stats 是统计行样式，仍在用。 */
+/* QQQ 对比开关（叠加层）：它是「叠加/不叠加」而不是互斥档位，
+   激活色用中性灰蓝（= 图里基准线的颜色），跟时间范围那组的品牌蓝区分开。
+   ⚠️ 2026-10-07：这个按钮**只在「收益率走势」tab 显示**（资产走势含现金、与纯指数不可比），
+      显隐由 applyMode 控制（display:none / ''）。 */
+.ao-ranges__bench.is-active { border-color: #7b8494; color: #56607a; font-weight: 700; }
 
 /* 统计 + 图表 */
 .ao-stats { display: flex; gap: 44px; padding: 14px 20px 2px; }
@@ -1763,6 +1802,8 @@ html, body {
   padding: 4px 12px; border-radius: 5px; cursor: pointer; color: var(--text-2); font-family: inherit;
 }
 .ao-fs__ranges button.is-active { border-color: var(--accent); color: var(--accent); font-weight: 700; }
+/* 同 .ao-ranges__bench：叠加层而非互斥档位，激活色用基准线的灰蓝；同样只在收益率走势显示 */
+.ao-fs__bench.is-active { border-color: #7b8494; color: #56607a; font-weight: 700; }
 /* 全屏里的统计行：把 .ao-stats 的节点搬进来复用样式，这里只管占位 */
 .ao-fs__stats .ao-stats { padding: 12px 4px 0; }
 .ao-fs__chart { flex: 1 1 auto; min-height: 0; margin-top: 4px; cursor: crosshair; }

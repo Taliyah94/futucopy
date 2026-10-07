@@ -2623,6 +2623,10 @@
               : '无',
             cumStock: i.cumStock, cumFund: i.cumFund, cumAll: i.cumAll, lastDen: i.lastDen,
             firstDays: (i.days || []).slice(0, 3).map((d) => d.date),
+            /* 证券段（rS）异常排查：分段 TWR 暴涨/暴跌往往来自某天的补点或口径跳变。 */
+            worstS: (i.days || []).filter((d) => d.rS != null)
+              .sort((a, b) => Math.abs(b.rS) - Math.abs(a.rS)).slice(0, 5)
+              .map((d) => ({ d: d.date, rS: +(d.rS * 100).toFixed(2), gS: Math.round(d.gainStock || 0) })),
             /* 日收益异常排查：把 |r| 最大的几天列出来（含分段），定位是哪段在爆。 */
             worst: (i.days || []).filter((d) => d.r != null)
               .sort((a, b) => Math.abs(b.r) - Math.abs(a.r)).slice(0, 4)
@@ -5359,7 +5363,13 @@ const applyMode = (mode, skipDraw) => {
     /* 基金段**自己的**市值序列（首日 = 当日市值，之后 = 上一次已知市值）。
        不能用 prevFund：那个的首日基线是全量申购成本 fundTotalCost，基金分批申购时会算出假暴跌。 */
     let prevFundR = 0;
-    let ibkrSeen = false;
+    /* IBKR 净值首条出现日：那一笔（约 9,773 CNY = EFT 1,449.10 USD）是**早就投进去的本金**，
+       金额口径要算进收益（对齐侧栏「末权益 − 167,600」，那 167,600 里不含它），
+       但 TWR 口径**不能**把它当成「单日暴涨 52%」—— 否则证券段 TWR 从 +47% 虚高到 +135%。
+       做法：首条当日把 rS 置null（那天不产生 TWR 日收益），
+       同时把这笔金额计入 cumStockCapital（本金），之后逐日正常算。 */
+    let ibkrInitial = 0;
+    let ibkrSeenHere = false;
     let mKey = null, cur = null;
     for (const date of allDates) {
       /* 证券当日值：今天（夜盘/盘中实时）→ rtFill；中间缺快照日 → 收盘价口径；其余读 IBKR 净值 */
@@ -5404,9 +5414,11 @@ const applyMode = (mode, skipDraw) => {
 
             所以：这里**不改 prevStock**（保持 0 → 首条净值全额计入 gainStock），
             首条当日 gain 直接跳 +9,773，与侧栏口径一致。 */
-      /* ibkrSeen：仅用于调试标记（首个有 IBKR 净值的日子），金额口径上**不做任何调整** ——
-            理由见循环内那段注释（用户 2026-10-07 16:32：要与侧栏「末权益 − 167,600」对齐）。 */
-      if (stock != null && !ibkrSeen) { ibkrSeen = true; }   // 仅记录
+      /* ibkrSeen →改为「首条初始投入」：金额口径不动prevStock（首条全额计入 gainStock，
+         与侧栏对齐），只把金额记到 ibkrInitial 供**分段 TWR** 用。
+         理由见上面 ibkrInitial 的声明。 */
+      const ibkrFirstDay = (stock != null && !ibkrSeenHere);
+      if (ibkrFirstDay) { ibkrSeenHere = true; ibkrInitial = stock; }
 
       let gainStock = 0, hasStock = false;
       if (stock != null) { gainStock += stock - prevStock; prevStock = stock; lastStock = stock; hasStock = true; }
@@ -5453,7 +5465,11 @@ const applyMode = (mode, skipDraw) => {
       const fundFlowPos = (fundFlows[date] || 0) > 0 ? (fundFlows[date] || 0) : 0;
       if (flowPos) cumStockCapital += flowPos;
       if (fundFlowPos) cumFundCapital += fundFlowPos;
-      const rS = (hasStock && cumStockCapital > 0) ? gainStock / cumStockCapital : null;
+      /* IBKR 净值首条日：那一笔是**初始投入**（本金），不是当日收益。
+         → 金额上已由 gainStock 计入（对齐侧栏），这里只做两件事给 TWR 用：
+           ① 当天不产生 rS（否则分母只有TQQQ 的 17,600、分子却是 +9,773 → 单日 +52%）；      ② 把这笔算进本金，之后逐日正常算。 */
+      if (ibkrInitial > 0) { cumStockCapital += ibkrInitial; ibkrInitial = 0; }
+      const rS = (hasStock && cumStockCapital > 0 && !ibkrFirstDay) ? gainStock / cumStockCapital : null;
       /* ---- 基金段日收益 rF ----
          ⚠️ **不能用 gainFund**：它的首日基线是 `CAL_BASE.fundTotalCost`（490,978，全量申购成本），
             而 02-06 当日净值只覆盖当天建仓那部分 → 首日 gainFund 是个巨大负数

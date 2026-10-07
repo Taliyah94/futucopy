@@ -15,7 +15,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="资产看板" />
-<link rel="stylesheet" href="styles.css?v=20261007zz" />
+<link rel="stylesheet" href="styles.css?v=20261007ae" />
 </head>
 <body>
 <div class="app">
@@ -272,6 +272,10 @@
                 <button data-ao-range="3m">近3月</button>
                 <button data-ao-range="ytd">今年来</button>
                 <button data-ao-range="all">自始来</button>
+                <!-- QQQ 对比基准：**只在「收益率走势」tab 显示**（用户 2026-10-07）。
+                     收益率是纯投资回报、与指数可比；资产走势含现金进出（汇丰从 39 万扣到 23 万），
+                     曲线形状被现金流主导，跟一条纯指数比没有意义，所以那边隐藏（见 applyMode）。 -->
+                <button class="ao-ranges__bench" data-ao-bench="qqq" title="叠加 QQQ 同期收益对比（仅收益率走势）">QQQ</button>
 </div>
 </div>
 
@@ -316,10 +320,12 @@
                 <span id="aoStatLabel2">TWR</span>
                 <b class="num" id="aoStatPct">--</b>
               </div>
-              <!-- 「QQQ 同期」对比基准已下线（用户 2026-10-07）：
-                   资产走势含**现金**的进出（汇丰从 39 万慢慢扣到 23 万），
-                   拿一条纯指数跟它比没有可比性 —— 曲线的形状被现金流主导，
-                   不是投资表现。QQQ 对比格（#aoStatBenchBox）随之删除。 -->
+              <!-- QQQ 同期对比读数：**只在「收益率走势」tab 显示**（与 #aoRanges 里那个 QQQ 按钮同步，由 applyMode 控制）。
+                   资产走势不含它 —— 资产含现金进出，与纯指数不可比（用户 2026-10-07）。 -->
+              <div class="ao-stat ao-stat--range" id="aoStatBenchBox" hidden>
+                <span>QQQ 同期</span>
+                <b class="num" id="aoStatBench">--</b>
+              </div>
             </div>
 
             <!-- 图表区：点右上角按钮或图表本身可全屏查看（移动端窄屏更好读） -->
@@ -888,6 +894,8 @@
       <button data-ao-range="3m">近3月</button>
       <button data-ao-range="ytd">今年来</button>
       <button data-ao-range="all">自始来</button>
+      <!-- 与非全屏那个共用 aoState.bench，点任一个两边同步高亮；同样**只在收益率走势**可见 -->
+      <button class="ao-fs__bench" data-ao-bench="qqq" title="叠加 QQQ 同期收益对比（仅收益率走势）">QQQ</button>
     </div>
     <button class="icon-btn icon-btn--sm" id="aoFsClose" title="关闭"><svg viewBox="0 0 24 24" class="ic"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
   </div>
@@ -896,6 +904,6 @@
 </div>
 </div>
 </div>
-<script src="app.js?v=20261007zz"></script>
+<script src="app.js?v=20261007ay"></script>
 </body>
 </html>

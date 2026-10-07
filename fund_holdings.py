@@ -798,6 +798,398 @@ def merge_fx_daily(old, fresh):
 # ---------------------------------------------------------------------------
 # 主流程
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# 美股市值榜（含 OTC / ADR 巨头）—— 选股器「全部个股」tab 的数据源
+#
+# 为什么用东方财富 push2 而不是 FMP（2026-10-07 实测，用户原本指定 FMP）：
+#   FMP **免费版**（password.txt 里那个 key）根本取不到 screener：
+#     api/v3/stock_screener 与 api/v3/stock-screener → 403 Legacy（端点 2025-08-31 停用）
+#     stable/company-screener、stable/batch-quote    → 402 Restricted（需付费订阅）
+#     stable/company-profile                          → 404（免费版没有）
+#     stable/quote?symbol=X                           → 200，但**只能单只**查，额度 250 次/天
+#   而「全市场按市值排序」只能靠 screener，batch 也被墙 —— 免费版做不到。
+#   FMP 侧也拿不到 sector（profile 404 / sector-analytics 402），所以行业同样走东财。
+#   东财 clist/get 一次请求按 f20（市值）降序给全市场，**顺带 f100 = GICS 行业（中文）**，
+#   免费无 key，一个请求拿到 代码/名称/现价/涨跌幅/市值/行业 六项。
+#
+# 市场代码（实测 2026-10-07）：
+#   m:105=m NASDAQ / m:106=NYSE / m:107=AMEX → 13847 只
+#   m:153 = OTC / ADR（OTCQX、OTCQB、TRF）  →   952 只，TCEHY 腾讯控股(ADR)、TCTZF 腾讯控股
+#   ⚠️ 多市场合并查询（fs=m:105,m:106,m:107,m:153）实测会超时，必须**分两次请求再合并**。
+#
+# 字段与缩放（实测校准，勿改）：
+#   f12=代码  f13=市场号  f14=名称  f2=现价(×1000)  f3=涨跌幅%(×100)  f20=市值(真实美元)  f100=行业
+#   校验：NVDA f2=237330 → 237.33；f3=-80 → -0.80%；f20=5719653000000 → 5.72 万亿。
+#
+# 为什么给 OTC 预留固定名额（US_TOP_OTC_SLOTS）：
+#   OTC 巨头的 ADR（TCEHY 约 5120 亿）市值高于交易所 top150 门槛，纯粹合并排序通常也装得下；
+#   但 ADR 里绝大多数是几十亿的小票，一旦市场整体估值变化导致门槛抬高，可能一只都进不来，
+#   「包含 OTC 巨头 ADR」就会悄悄失效。显式留 10 个名额（150 - 140）让它稳定可控。
+#
+# ⚠️ 本机（国内家庭宽带）访问 push2 **极不稳定**：2026-10-07 实测同一上午 5 次连续请求 4 次
+#    超时/000，偶发才成功。真正每天跑的是 GitHub Actions（美国 runner），那边才稳。
+#    所以这里必须有重试；且**失败时保留上一版名单**（沿用本文件其余模块的语义：
+#    拉不到就不覆盖、绝不写成空 —— 空名单会让选股器「全部个股」tab 变成空白）。
+EM_LIST_URL = "https://push2.eastmoney.com/api/qt/clist/get"
+EM_FS_EXCH = "m:105,m:106,m:107"
+EM_FS_OTC = "m:153"
+US_TOP_KEY = "us_top"          # fund_holdings.json 顶层键（前端只认这个）
+US_TOP_TOTAL = 150             # 名单总长度
+US_TOP_OTC_SLOTS = 10          # 其中给 OTC/ADR 的固定名额，其余给三大交易所
+EM_PRICE_SCALE = 1000.0        # 美股 f2 是价格 ×1000
+EM_PCT_SCALE = 100.0           # f3 是涨跌幅 ×100
+
+
+def _em_clist(fs, limit, fid="f20", po=1, retries=3, timeout=25, fields=None):
+    """东财 clist/get：按 fid + po 排序取 limit 条。返回 list[原始 dict]，失败 None。
+
+    po=1 降序 / po=0 升序（跌幅榜就要 po=0）。
+    pz 上限实测 100 稳妥（超过会截断/超时），要 150 就分页；这里调用方按需传页号。
+    """
+    if fields is None:
+        fields = "f12,f13,f14,f2,f3,f20,f100"
+    url = (EM_LIST_URL + "?pn=1&pz=%d&po=%d&fid=%s&fs=%s&fields=%s"
+           % (limit, po, fid, fs, fields))
+    last = None
+    for attempt in range(1, retries + 1):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+            raw = urllib.request.urlopen(req, timeout=timeout).read().decode("utf-8", "ignore")
+            obj = json.loads(raw)
+            diff = (obj.get("data") or {}).get("diff") or []
+            rows = list(diff.values()) if isinstance(diff, dict) else list(diff)
+            return [r for r in rows if isinstance(r, dict)]
+        except Exception as e:  # noqa: BLE001 - 网络/JSON 各种失败统一重试
+            last = e
+            if attempt < retries:
+                time.sleep(1.2 * attempt)   # time 已在文件顶部 import
+    sys.stderr.write("  [东财] 请求失败(%s fid=%s po=%d, %d 次): %s\n"
+                     % (fs, fid, po, retries, last))
+    return None
+
+
+def _em_clist_po(fs, limit, fid="f20", po=1, retries=3, timeout=25, fields=None):
+    """_em_clist 的薄包装：市场榜要用 f6/f8（成交量/成交额）且要 po=0 的升序。"""
+    return _em_clist(fs, limit, fid=fid, po=po, retries=retries, timeout=timeout,
+                     fields=fields or "f12,f13,f14,f2,f3,f6,f8")
+
+
+def _norm_us_top_rows(rows):
+    """东财原始行 → 前端结构。价格/涨跌幅按实测缩放还原；缺关键字段的行直接丢。"""
+    out = []
+    for r in rows:
+        code = (r.get("f12") or "").strip()
+        if not code:
+            continue
+        try:
+            mkt = int(r.get("f13"))
+        except (TypeError, ValueError):
+            mkt = 0
+        p = r.get("f2")
+        pc = r.get("f3")
+        mc = r.get("f20")
+        out.append({
+            "c": code,
+            "n": (r.get("f14") or "").strip(),
+            "m": mkt,
+            "p": round(float(p) / EM_PRICE_SCALE, 4) if isinstance(p, (int, float)) and p else None,
+            "pct": round(float(pc) / EM_PCT_SCALE, 2) if isinstance(pc, (int, float)) and pc else None,
+            "mc": int(mc) if isinstance(mc, (int, float)) and mc else None,
+            "ind": (r.get("f100") or "").strip() or None,
+            "otc": mkt == 153,
+        })
+    return out
+
+
+def fetch_us_top(retries=3, timeout=25, total=US_TOP_TOTAL, otc_slots=US_TOP_OTC_SLOTS):
+    """美股市值 top N 名单（含 OTC/ADR）。返回 {"asOf","source","rows"} 或 None。
+
+    交易所与 OTC **分两次请求**（合并查询实测超时）：交易所取 total-otc_slots 只、
+    OTC 取 otc_slots 只，各自按市值降序，最后再按市值统一排序。
+    任何一半失败就整体返回 None —— 半份名单比旧名单更糟（页面会以为只有这些票）。
+    """
+    ex_n = max(1, total - otc_slots)
+    ex = _em_clist(EM_FS_EXCH, ex_n, fid="f20", po=1, retries=retries, timeout=timeout)
+    if not ex:
+        return None
+    otc = _em_clist(EM_FS_OTC, otc_slots, fid="f20", po=1, retries=retries, timeout=timeout)
+    if not otc:
+        return None
+    rows = _norm_us_top_rows(ex) + _norm_us_top_rows(otc)
+    rows.sort(key=lambda x: -(x["mc"] or 0))
+    if len(rows) < total:
+        sys.stderr.write("  [美股榜] 只取到 %d 只（目标 %d）\n" % (len(rows), total))
+    return {
+        "asOf": _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "source": "eastmoney push2 clist/get",
+        "slots": {"exch": len(ex), "otc": len(otc)},
+        "rows": rows[:total],
+    }
+
+
+def load_existing_us_top(path):
+    """从已存盘 JSON 读上一版名单（失败保留用）。"""
+    try:
+        with open(path, encoding="utf-8") as f:
+            old = json.load(f)
+        u = old.get(US_TOP_KEY)
+        return u if isinstance(u, dict) and u.get("rows") else None
+    except Exception:  # noqa: BLE001 - 首次运行/文件损坏
+        return None
+
+
+def merge_us_top(old, fresh):
+    """名单是**每日快照**（不是历史序列），语义与 qqq_daily 的增量合并不同：
+    抓成功就整份换成新的；抓失败（None）才沿用旧的。
+    旧名单的 asOf 会原样保留 —— 前端据此显示「数据日期」，不假装是今天的数据。"""
+    if fresh and fresh.get("rows"):
+        return fresh
+    return old
+
+
+# ---------------------------------------------------------------------------
+# 市场榜（选股器「市场」tab）：成交榜 / 涨幅榜 / 跌幅榜，各 top 10
+#
+# 为什么落成文件而不是前端直连（2026-10-07 决定）：
+#   浏览器直连 push2 **技术上可行**（实测 OPTIONS 预检回显 Access-Control-Allow-Origin），
+#   但本机实测 push2 的 DNS 首选 IPv6（2402:4e00:... trafficmanager.cn），IPv6 通路有问题 →
+#   `net::ERR_EMPTY_RESPONSE` / curl 000，**同一时刻 fund.eastmoney.com 却完全正常**。
+#   既然用户自己的浏览器也可能命中同样的问题，就不赌前端直连 —— 走 workflow 每天抓一次。
+#   顺带的好处：榜单是「每日快照」语义，不必担心盘中频繁刷新把额度打爆。
+#
+# 三个榜 = **同一个接口的三个参数组合**（各 1 次请求，共 3 次）：
+#   成交榜 fid=f6(成交量) po=1(降序) / 涨幅榜 fid=f3(涨跌幅) po=1 / 跌幅榜 fid=f3 po=0(升序)
+#   —— 用户原本指定的 Alpaca v1beta1 screener 免费账户全部 404（订阅级限制），
+#      quotes 无涨跌幅/成交量、bars 是 IEX only 实测 5 个 symbol 只回 2 个，所以走东财。
+#
+# ⚠️ 字段缩放沿用美股榜那套（实测校准）：f2 现价 ×1000、f3 涨跌幅 ×100、f20 市值不缩放。
+#    成交量 f6 / 成交额 f8 是**手数与金额**，单位与美股不同，前端只做量级展示不参与计算。
+#    任一榜失败 → **只回退这一榜**（榜单之间互不依赖），三榜全失败才整体保留旧数据。
+US_MKT_KEY = "us_mkt"           # fund_holdings.json 顶层键（前端只认这个）
+US_MKT_TOP = 10                 # 每榜条数（用户 2026-10-07 定的「top 10」）
+# (键名, 中文名, fid, po) —— po=1 降序 / po=0 升序
+US_MKT_BOARDS = [
+    ("turnover", "成交榜", "f6", 1),
+    ("gainer", "涨幅榜", "f3", 1),
+    ("loser", "跌幅榜", "f3", 0),
+]
+
+
+def _norm_us_mkt_rows(rows):
+    """东财原始行 → 前端结构。缩放与 _norm_us_top_rows 同源，这里只多带成交量/成交额。"""
+    out = []
+    for r in rows:
+        code = (r.get("f12") or "").strip()
+        if not code:
+            continue
+        try:
+            mkt = int(r.get("f13"))
+        except (TypeError, ValueError):
+            mkt = 0
+        p, pc = r.get("f2"), r.get("f3")
+        vol, amt = r.get("f6"), r.get("f8")
+        out.append({
+            "c": code,
+            "n": (r.get("f14") or "").strip(),
+            "m": mkt,
+            "p": round(float(p) / EM_PRICE_SCALE, 4) if isinstance(p, (int, float)) and p else None,
+            "pct": round(float(pc) / EM_PCT_SCALE, 2) if isinstance(pc, (int, float)) and pc else None,
+            "vol": int(vol) if isinstance(vol, (int, float)) and vol else None,
+            "amt": int(amt) if isinstance(amt, (int, float)) and amt else None,
+        })
+    return out
+
+
+def fetch_us_market(retries=3, timeout=25, top=US_MKT_TOP):
+    """三个市场榜。返回 {"asOf","source","boards":{键:[行]}} 或 None（全失败）。
+
+    各榜**独立失败**：某一榜取不到就缺那一榜，不整份作废 —— 三个榜来自三次独立请求，
+    一起失败通常意味着东财整体不可达（Actions 上少见），此时保留旧数据更诚实。
+    """
+    boards, failed = {}, []
+    for key, _label, fid, po in US_MKT_BOARDS:
+        rows = _em_clist_po(EM_FS_EXCH, top, fid=fid, po=po, retries=retries, timeout=timeout)
+        if rows:
+            boards[key] = _norm_us_mkt_rows(rows)[:top]
+        else:
+            failed.append(key)
+    if not boards:
+        return None
+    if failed:
+        sys.stderr.write("  [市场榜] 部分榜单取不到: %s（其余照常写入）\n" % ",".join(failed))
+    return {
+        "asOf": _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "source": "eastmoney push2 clist/get",
+        "boards": boards,
+    }
+
+
+def load_existing_us_mkt(path):
+    """从已存盘 JSON 读上一版市场榜（全失败时保留用）。"""
+    try:
+        with open(path, encoding="utf-8") as f:
+            old = json.load(f)
+        u = old.get(US_MKT_KEY)
+        return u if isinstance(u, dict) and u.get("boards") else None
+    except Exception:  # noqa: BLE001 - 首次运行/文件损坏
+        return None
+
+
+def merge_us_market(old, fresh):
+    """逐榜合并：新抓到的榜用新的，没抓到的沿用旧的（比整份保留旧更合理）。
+
+    asOf 只在**真抓到新数据**时刷新 —— 沿用旧榜时不刷新，否则页面会显示今天的日期
+    却挂着昨天的数字（违反「没数据不假装是最新的」原则）。
+    """
+    if not fresh or not fresh.get("boards"):
+        return old
+    if not old or not old.get("boards"):
+        return fresh
+    merged = {}
+    for key, _label, _fid, _po in US_MKT_BOARDS:
+        nb = fresh["boards"].get(key)
+        ob = old["boards"].get(key)
+        merged[key] = nb or ob or []
+    merged = {k: v for k, v in merged.items() if v}
+    if not merged:
+        return old
+    # 有任何一个榜是新的 → 认为这份数据是新的（混合日期已在页面上标注每榜更新时间则更严谨，
+    # 这里保守起见：只要有过半的榜是新的就更新 asOf）
+    new_cnt = sum(1 for k, v in fresh["boards"].items() if v)
+    return {
+        "asOf": fresh["asOf"] if new_cnt >= 2 else old.get("asOf", fresh["asOf"]),
+        "source": fresh.get("source") or old.get("source"),
+        "boards": merged,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 10 年期美债收益率（BC_10YEAR，日频 %）—— 与 USDCNH 同样的「每天抓一次、前端只读」
+#
+# 为什么也落成文件（2026-10-07 用户要求「省额度」）：
+#   原来前端**每次打开页面 + 每 30 分钟**都直接 fetch 财政部 XML，一次 300KB，
+#   既慢又反复请求；改成每天写进 fund_holdings.json、前端只读最新，
+#   请求数恒定 —— 与 usdcnh_daily 完全一致。
+# 数据源仍是财政部官方 Daily Treasury Par Yield Curve（权威的 H.15 数据）：
+#   fred.stlouisfed.org 不行（CSV 不发 ACAO、ALFRED 的 CORS 白名单写死自己域名、api 要 key），
+#   财政部 home.treasury.gov 的 XML 同样权威且浏览器可直连。
+#
+# ⚠️ **财政部 XML 一次只给一年**（?field_tdr_date_value=2026），所以按年份分段请求再合并。
+#    实测：2025 → 249 条（01-02~12-31，末值 4.18）、2026 → 192 条（01-02~10-06，末值 5.27）。
+#    起点用 FX_SERIES_START（2025-01-02），与 usdcnh_daily / qqq_daily 完全对齐。
+# 口径：BC_10YEAR 是**百分数**（5.27 = 5.27%），与自选行显示一致，**不做 /100**。
+UST_DAILY_KEY = "ust10y_daily"   # fund_holdings.json 顶层键（前端只认这个）
+TREASURY_YIELD_URL = ("https://home.treasury.gov/resource-center/data-chart-center/interest-rates"
+                      "/pages/xml?data=daily_treasury_yield_curve&field_tdr_date_value=%d")
+_TREASURY_RE = re.compile(r"<entry>([\s\S]*?)</entry>")
+_UST_DATE_RE = re.compile(r"<d:NEW_DATE[^>]*>([\d-]{10})")
+_UST_VAL_RE = re.compile(r"<d:BC_10YEAR[^>]*>([\d.]+)</d:BC_10YEAR>")
+
+
+def _norm_ust_rows(xml_text, start=None):
+    """财政部 Atom feed → [{"d": "YYYY-MM-DD", "c": 收益率%}, ...]（升序、去重）。"""
+    if not xml_text:
+        return []
+    out = []
+    seen = set()
+    for m in _TREASURY_RE.finditer(xml_text):
+        d = _UST_DATE_RE.search(m.group(1))
+        y = _UST_VAL_RE.search(m.group(1))
+        if not (d and y):
+            continue
+        day = d.group(1)
+        if start and day < start:
+            continue
+        try:
+            val = float(y.group(1))
+        except ValueError:
+            continue
+        if val <= 0:
+            continue
+        if day in seen:
+            continue
+        seen.add(day)
+        out.append({"d": day, "c": round(val, 4)})
+    out.sort(key=lambda x: x["d"])
+    return out
+
+
+def fetch_treasury_daily(start=FX_SERIES_START, retries=3, timeout=30):
+    """抓 10Y 美债日频序列（跨年分段请求），失败返回 None（不阻断主流程）。
+
+    curl 优先、urllib 兜底：与 fetch_fx_daily 同一套理由（部分 Windows 环境有 HTTPS
+    中间人代理，Python 校验证书会失败而 curl 走系统证书链能过；Actions 上两者都可用）。
+    """
+    y0 = int(str(start)[:4])
+    y1 = _dt.date.today().year
+    merged, got_any, last_err = [], False, None
+    for year in range(y0, y1 + 1):
+        url = TREASURY_YIELD_URL % year
+        rows = None
+        for attempt in range(1, retries + 1):
+            try:
+                raw = subprocess.run(["curl", "-sS", "--max-time", str(timeout), url],
+                                     capture_output=True, timeout=timeout + 5)
+                if raw.returncode == 0 and raw.stdout.strip():
+                    rows = _norm_ust_rows(raw.stdout.decode("utf-8", "ignore"), start)
+                    if rows:
+                        break
+                    rows = None
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+                rows = _norm_ust_rows(
+                    urllib.request.urlopen(req, timeout=timeout).read().decode("utf-8", "ignore"), start)
+                if rows:
+                    break
+                rows = None
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+            if attempt < retries:
+                time.sleep(2 * attempt)
+        if rows:
+            got_any = True
+            merged.extend(rows)
+        else:
+            sys.stderr.write("  [美债] %d 年段抓取失败: %s\n" % (year, last_err))
+    if not got_any:
+        sys.stderr.write("  [美债] 全部年份段都失败\n")
+        return None
+    # 跨年可能有重叠（当年数据会被反复刷新），按日期去重取最后一条
+    by_d = {}
+    for r in merged:
+        by_d[r["d"]] = r
+    return [by_d[k] for k in sorted(by_d)]
+
+
+def load_existing_treasury(path):
+    """读取已存盘 JSON 里的 ust10y_daily，作为增量追加的基底。"""
+    if not (path and os.path.exists(path)):
+        return []
+    try:
+        with open(path, encoding="utf-8") as f:
+            obj = json.load(f)
+    except Exception as e:  # noqa: BLE001 - 旧文件损坏则当空，退回全量
+        sys.stderr.write("  [美债] 读取旧文件失败，本次全量重抓：%s\n" % e)
+        return []
+    return _norm_ust_rows(json.dumps(obj.get(UST_DAILY_KEY)), None)
+
+
+def merge_treasury_daily(old, fresh):
+    """增量合并，语义与 merge_fx_daily 完全相同（抓失败绝不丢历史）。"""
+    if not old:
+        return fresh or []
+    if not fresh:
+        return old
+    last_d = old[-1]["d"]
+    by_d = {r["d"]: r for r in old}
+    for r in fresh:
+        if r["d"] >= last_d:
+            by_d[r["d"]] = r
+    return sorted(by_d.values(), key=lambda x: x["d"])
+
+
 def load_config(path):
     """读取可选的 fund_codes.json 配置。返回 (codes, proxy) 或 (None, None)。"""
     if not path or not os.path.exists(path):
@@ -992,6 +1384,12 @@ def main(argv=None):
                     help="跳过 QQQ 日线抓取（曲线图基准对比用）")
     ap.add_argument("--no-fx", action="store_true",
                     help="跳过美元/离岸人民币汇率日线抓取（自选行与 K 线用）")
+    ap.add_argument("--no-us-top", action="store_true",
+                    help="跳过美股市值榜抓取（选股器「全部个股」tab 用）")
+    ap.add_argument("--no-ust", action="store_true",
+                    help="跳过 10 年期美债日频抓取（自选行 10Ymain 用）")
+    ap.add_argument("--no-us-mkt", action="store_true",
+                    help="跳过市场榜抓取（选股器「市场」tab：成交/涨幅/跌幅各 top 10）")
     ap.add_argument("--snapshot-days", type=int, default=SNAPSHOT_DAYS,
                     help="行情快照保留天数（默认 %d）" % SNAPSHOT_DAYS)
     args = ap.parse_args(argv)
@@ -1061,6 +1459,59 @@ def main(argv=None):
                     len(fx_merged), fx_merged[0]["d"], fx_merged[-1]["d"], _n_new))
         elif not args.quiet:
             sys.stderr.write("  [FX] 未取得汇率日线\n")
+
+    # 10 年期美债日频（自选行 10Ymain）：与 FX 完全同语义，起始日也对齐
+    if not args.no_ust:
+        ust_old = load_existing_treasury(args.output)
+        ust_start = FX_SERIES_START
+        _qqq_hist2 = load_existing_qqq(args.output)
+        if _qqq_hist2:
+            ust_start = min(ust_start, _qqq_hist2[0]["d"])
+        ust = fetch_treasury_daily(start=ust_start, retries=args.retries)
+        ust_merged = merge_treasury_daily(ust_old, ust)
+        # ⚠️ 无条件写回（与 FX 同理）：fetch 失败时 merge 返回旧数据，不写等于抹掉历史。
+        if ust_merged:
+            result[UST_DAILY_KEY] = ust_merged
+            if not args.quiet:
+                _n_new2 = len(ust_merged) - len(ust_old) if ust_old else len(ust_merged)
+                sys.stderr.write("  [美债] 日线 %d 条（%s ~ %s，新增 %d 条）\n" % (
+                    len(ust_merged), ust_merged[0]["d"], ust_merged[-1]["d"], _n_new2))
+        elif not args.quiet:
+            sys.stderr.write("  [美债] 未取得日线\n")
+
+    # 美股市值榜（选股器「全部个股」tab）：每日快照语义，拉不到就沿用上一版
+    if not args.no_us_top:
+        us_old = load_existing_us_top(args.output)
+        us_fresh = fetch_us_top(retries=args.retries)
+        us_merged = merge_us_top(us_old, us_fresh)
+        # ⚠️ 必须无条件写回（与 FX 同理）：result 是全新 dict，fetch 失败时 merge 返回旧数据，
+        #    不写就等于把已有名单抹成空 → 前端「全部个股」tab 会空白。
+        if us_merged:
+            result[US_TOP_KEY] = us_merged
+            if not args.quiet:
+                _otc = us_merged.get("slots", {}).get("otc", 0)
+                _tag = "" if us_fresh else "（本次未取到，沿用旧数据）"
+                sys.stderr.write("  [美股榜] %d 只（含 OTC/ADR %d 只）@ %s%s\n" % (
+                    len(us_merged.get("rows") or []), _otc, us_merged.get("asOf"), _tag))
+        elif not args.quiet:
+            sys.stderr.write("  [美股榜] 未取得名单\n")
+
+    # 市场榜（选股器「市场」tab）：成交榜 / 涨幅榜 / 跌幅榜，各 top 10，3 次请求
+    if not args.no_us_mkt:
+        mkt_old = load_existing_us_mkt(args.output)
+        mkt_fresh = fetch_us_market(retries=args.retries)
+        mkt_merged = merge_us_market(mkt_old, mkt_fresh)
+        # 同上：无条件写回，否则 fetch 失败会把已存的市场榜抹成空
+        if mkt_merged:
+            result[US_MKT_KEY] = mkt_merged
+            if not args.quiet:
+                _bs = mkt_merged.get("boards") or {}
+                _tag = "" if mkt_fresh else "（本次未取到，沿用旧数据）"
+                sys.stderr.write("  [市场榜] %s @ %s%s\n" % (
+                    " ".join("%s%d" % (k, len(v)) for k, v in _bs.items()),
+                    mkt_merged.get("asOf"), _tag))
+        elif not args.quiet:
+            sys.stderr.write("  [市场榜] 未取得榜单\n")
 
     # 增量合并：与存盘文件取并集（同日新覆盖旧），抓取失败的部分沿用旧数据
     if not args.no_merge:

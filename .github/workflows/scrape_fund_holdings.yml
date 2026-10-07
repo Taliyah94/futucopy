@@ -48,27 +48,12 @@ jobs:
           fi
           python3 fund_holdings.py $ARGS
 
-      # Reddit 帖子（ORCL / TQQQ）：oanor 的 reddit-api **不给 CORS 头**，
-      # 前端无法直连，只能 Actions 抓成静态 JSON 供页面读。
-      # 本 workflow（UTC 13:30）+ ibkr-daily（UTC 05:10）= 一天 2 次
-      # = 4 次调用/天 ≈ 120 次/月（oanor 上限 500）。失败只告警，不影响基金抓取。
-      - name: 抓取 Reddit 帖子（ORCL / TQQQ）
-        continue-on-error: true
-        env:
-          OANOR_KEY: ${{ secrets.OANOR_KEY }}
-        run: |
-          if [ -z "${OANOR_KEY}" ]; then
-            echo "::warning::未配置 Secrets.OANOR_KEY，跳过 Reddit 抓取（不影响基金抓取）"
-            exit 0
-          fi
-          python fetch_reddit.py || echo "::warning::Reddit 抓取失败，沿用上一版 reddit_posts.json"
-
       - name: 提交结果（如有变化）
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           OUT="${{ github.event.inputs.output || 'fund_holdings.json' }}"
-          git add "$OUT" reddit_posts.json
+          git add "$OUT"
           if git diff --cached --quiet; then
             echo "内容无变化，跳过提交"
           else

@@ -121,30 +121,12 @@ jobs:
             echo "ℹ️ 脚本退出码为 0 但未命中 [ok]/[skip]/[warn]，检查上方日志"
           fi
 
-      # ---------------------------------------------------------------
-      # Reddit 帖子（ORCL / TQQQ）：oanor 的 reddit-api **不给 CORS 头**，
-      # 前端无法直连，只能 Actions 抓成静态 JSON 供页面读。
-      # 两个 workflow 各跑一次 = 一天 2 次 = 4 次调用/天 ≈ 120 次/月（上限 500）。
-      # ⚠️ 附加信息：抓失败只告警，不算 job 失败，也不影响 IBKR 同步。
-      # ---------------------------------------------------------------
-      - name: 抓取 Reddit 帖子（ORCL / TQQQ）
-        if: steps.guard.outputs.run == 'true'
-        continue-on-error: true
-        env:
-          OANOR_KEY: ${{ secrets.OANOR_KEY }}
-        run: |
-          if [ -z "${OANOR_KEY}" ]; then
-            echo "::warning::未配置 Secrets.OANOR_KEY，跳过 Reddit 抓取（不影响 IBKR 同步）"
-            exit 0
-          fi
-          python fetch_reddit.py || echo "::warning::Reddit 抓取失败，沿用上一版 reddit_posts.json"
-
       - name: 提交并推送更新后的 JSON
         if: steps.guard.outputs.run == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Asset_parsed.json reddit_posts.json
+          git add Asset_parsed.json
           # 仅当 JSON 有变化才提交（避免无谓的空提交触发 Pages 重建）
           if git diff --cached --quiet; then
             echo "Asset_parsed.json 无变化，跳过提交"

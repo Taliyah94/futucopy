@@ -648,9 +648,10 @@ html, body {
 
 .cp__item { padding: 12px 14px; border-bottom: 1px solid var(--border); }
 
-/* 「最新」tab：多站社区评论聚合（东财股吧 / 雪球 / Reddit via oanor）
-   （新浪股吧与 SeekingAlpha 2026-10-06 实测不可达已弃；东财资讯新闻源与 Adanos
-      情绪卡 2026-10-07 按用户要求移除。）
+/* 「最新」tab：多站社区评论聚合。
+   ⚠️ 2026-10-07 按用户要求整体移除东财股吧 / 雪球 / Reddit 三站社区源（CP_SOURCES 置空），
+      下面 .cp__srcbar / .cp__item--cplatest 相关样式全部保留未删 —— 加回源即可复活。
+      （.cp__src--guba / --xueqiu / --sa 三个 chip 配色与 .cp__digest 正文样式已随之删除。）
 
    数据靠公共 CORS 代理取回，代理限频/下线是常态，所以状态条必须如实显示每个源
    出了多少条、哪个挂了，否则用户会以为「没评论」而不是「这个源没取到」。
@@ -666,7 +667,7 @@ html, body {
   border-bottom: 1px solid var(--border);
   background: var(--panel-2);
   font-size: 11px; color: var(--text-3);
-  /* ⚠️ 窄屏（手机）上「东财股吧 21 / 雪球 / Reddit 1」三个 chip 会把「更新 14:27 / 刷新」
+  /* ⚠️ 窄屏（手机）上多个源 chip 会把「更新 14:27 / 刷新」
      挤到第二行（用户 2026-10-07 15:03 反馈）。这里让 chips 区域**单行、自身横向滚动**，
      meta + 刷新按钮永远留在第一行右侧（flex:none，不参与压缩）。 */
   flex-wrap: nowrap; min-width: 0;
@@ -710,22 +711,7 @@ html, body {
   border-radius: 2px; margin-left: auto; flex: none;
   color: var(--text-3); background: var(--panel-2); border: 1px solid var(--border);
 }
-.cp__src--guba { color: #b54708; background: rgba(181, 71, 8, .07); border-color: rgba(181, 71, 8, .2); }
-.cp__src--xueqiu { color: #175cd3; background: rgba(23, 92, 211, .07); border-color: rgba(23, 92, 211, .2); }
-.cp__src--sa { color: #067647; background: rgba(6, 118, 71, .07); border-color: rgba(6, 118, 71, .2); }
 .cp__item--cplatest .cp__text { word-break: break-word; }
-/* Reddit 正文（selftext）：接在标题后面另起一段显示完整内容。
-   ⚠️ 2026-10-07 用户「不应该限制讨论的字数和高度」——
-      ① 不做 line-clamp、不设 max-height，让长文自然往下延伸（面板整体纵向滚动）；
-      ② 必须显式 `display:block`，否则它作为 `<p>` 里的 `<span>` 会与标题挤在同一行；
-      ③ 保留原文里的空行（Reddit 正文常带段落分隔），但去掉首尾多余空行。 */
-.cp__digest {
-  display: block;
-  margin-top: 6px;
-  white-space: pre-wrap;      /* 尊重原文换行与空行 */
-  overflow-wrap: anywhere;    /* 超长无空格串（URL/长 token）也能断 */
-  color: var(--text-2);
-}
 .cp__link { color: inherit; text-decoration: none; }
 .cp__link:hover { color: var(--text); text-decoration: underline; }
 /* ---- 快讯流（金十）：仿富途时间轴 = 左侧圆点+时间，下方正文 ---- */
@@ -1135,9 +1121,11 @@ html, body {
 }
 .trade-view[hidden] { display: none !important; }
 
-/* ---- 选股器视图（美股热力图 = TickerTiles iframe）----
-   iframe 铺满主区，TickerTiles 自带深色底+ 内部滚动，所以外层不设背景色、
-   也不加边框（加了会出现双层边线）。头部只放标题 + 索引切换。 */
+/* ---- 选股器视图 ----
+   2026-10-07 按用户要求整体清空：原 TickerTiles 跨域热力图 iframe、缩放下拉、
+   60s 自动刷新下拉、以及那一大段「虚拟视口负偏移裁剪」注释全部删除；
+   页面只剩 .screen-head 里那排 tab 按钮（纯占位、点击无反应）。
+   保留下面这些基础样式是为了以后往里塞自己的选股内容时不用重写骨架。 */
 .screen-view {
   flex: 1 1 auto; min-width: 0;
   display: flex; flex-direction: column;
@@ -1153,23 +1141,6 @@ html, body {
 }
 .screen-head__title { margin: 0; font-size: 14px; font-weight: 700; color: var(--text); }
 .screen-switch { display: flex; gap: 4px; flex-wrap: wrap; }
-/* 缩放 + 刷新间隔：靠 margin-left:auto 顶到头部最右边 */
-.screen-zoom { margin-left: auto; display: flex; align-items: center; gap: 6px; }
-.screen-refresh { display: flex; align-items: center; gap: 6px; }
-.screen-zoom__label,
-.screen-refresh__label { font-size: 12px; color: var(--text-3); }
-.screen-zoom select,
-.screen-refresh select {
-  font: inherit; font-size: 12px; line-height: 20px;
-  padding: 2px 6px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--panel-2);
-  color: var(--text-2);
-  cursor: pointer;
-}
-.screen-zoom select:hover,
-.screen-refresh select:hover { color: var(--text); border-color: var(--text-3); }
 .screen-switch button {
   font: inherit; font-size: 12px; line-height: 20px;
   padding: 3px 10px;
@@ -1185,51 +1156,87 @@ html, body {
   color: #fff; background: var(--accent);
   border-color: var(--accent);
 }
-/* ⚠️ 热力图「只留热力图本身 + 放大」的做法：
-   iframe 不铺满容器，而是**比容器大一圈**（宽 +HM_PAD_X、高 +HM_PAD_Y）并整体负偏移到
-   (-HM_X, -HM_Y)，于是 TickerTiles 自带的左侧栏 / 顶栏被推到可视区外，剩下的正好是热力图。
-   比 `transform: scale()` 好在：站点收到的是**更大的虚拟视口**，会重排树图，
-   500 只票全部可见且格子更大，不会裁掉边缘（scale 版必然切掉一条边）。
-   大一圈的具体数值由 JS 按容器实测尺寸算（fitHeatmap），这里只保证定位方式。 */
-.screen-body { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden; }
-.screen-frame { position: absolute; display: block; border: 0; }
-.screen-loading {
-  position: absolute; inset: 0;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 12px; color: var(--text-3);
-  background: var(--bg);
-  pointer-events: none;
+/* ---- 市场榜：三栏并排（成交/涨幅/跌幅）---- */
+.mkt {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0; padding: 0; min-width: 860px;
 }
-.screen-loading[hidden] { display: none !important; }
-.screen-note {
-  margin: 0; padding: 6px 16px 8px;
-  font-size: 11px; color: var(--text-3);
-  border-top: 1px solid var(--border);
-  background: var(--panel);
+.mkt__col { min-width: 0; border-right: 1px solid var(--border); }
+.mkt__col:last-child { border-right: 0; }
+.mkt__hd {
+  position: sticky; top: 0; z-index: 1;
+  display: flex; align-items: baseline; gap: 6px;
+  padding: 8px 12px; background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px; font-weight: 600; color: var(--text);
 }
-.screen-note a { color: var(--text-2); }
+.mkt__hd i { font-style: normal; font-weight: 400; font-size: 10px; color: var(--text-3); }
+.mkt__row {
+  display: grid;
+  grid-template-columns: 22px 78px 1fr 72px 64px;
+  align-items: center; gap: 6px;
+  padding: 5px 12px; font-size: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.mkt__row:hover { background: var(--panel-2); }
+/* 成交榜的「量/额」基准行：斜体弱化，与逐只股票区分开 */
+.mkt__row--sub { font-size: 10px; color: var(--text-3); background: var(--panel-2); }
+.mkt__row--sub .mkt__p, .mkt__row--sub .mkt__x { font-size: 10px; }
+.mkt__i { color: var(--text-3); text-align: right; font-variant-numeric: tabular-nums; }
+.mkt__c { display: flex; align-items: baseline; gap: 4px; min-width: 0; }
+.mkt__c b { font-weight: 500; color: var(--text); overflow: hidden; text-overflow: ellipsis; }
+.mkt__c i { font-style: normal; font-size: 9px; color: var(--text-3); flex: 0 0 auto; }
+.mkt__n { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mkt__p, .mkt__x { text-align: right; font-variant-numeric: tabular-nums; }
+.mkt__p.up, .mkt__x.up { color: var(--up); }
+.mkt__p.down, .mkt__x.down { color: var(--down); }
+.mkt__none { padding: 20px 12px; font-size: 11px; color: var(--text-3); text-align: center; }
 
-/* 移动端：TickerTiles 换成单列布局，自带顶栏（logo + 搜索框 + App Store 按钮）占约 138px、
-   左右只剩 13px 边距 —— 这两个数配在 app.js 的 `HM_CHROME.narrow` 里。
-   （以前这里用固定的 `margin-top:-136px` 硬裁顶栏，尺寸改由 fitHeatmap() 统一算，
-     两条规则同时生效会互相打架，所以那条已删除。） */
+/* ---- 选股器内容区（2026-10-07 起接自建数据，不再是 iframe）---- */
+.screen-body {
+  flex: 1 1 auto; min-height: 0; overflow: auto;
+  background: var(--bg); padding: 0 0 12px;
+}
+.screen-bar {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  padding: 8px 16px; border-bottom: 1px solid var(--border);
+  background: var(--panel-2); font-size: 12px; color: var(--text-2);
+}
+.screen-bar b { color: var(--text); font-weight: 500; }
+.screen-bar__src { margin-left: auto; color: var(--text-3); font-size: 11px; }
+.screen-empty {
+  padding: 40px 20px; text-align: center;
+  font-size: 13px; line-height: 1.9; color: var(--text-3);
+}
+/* 美股榜：7 列定宽表。窄屏整体横向滚动，不换行（宁可横滑也不要挤成一团）。 */
+.us-top { padding: 0 16px; min-width: 780px; }
+.us-top__hd, .us-top__row {
+  display: grid;
+  grid-template-columns: 44px 132px 1fr 96px 84px 108px 132px;
+  align-items: center; gap: 8px;
+  padding: 6px 0; font-size: 12px;
+}
+.us-top__hd {
+  position: sticky; top: 0; z-index: 1;
+  background: var(--bg); color: var(--text-3); font-size: 11px;
+  border-bottom: 1px solid var(--border); padding-top: 8px; padding-bottom: 8px;
+}
+.us-top__row { border-bottom: 1px solid var(--border); }
+.us-top__row:hover { background: var(--panel-2); }
+.us-top__i { color: var(--text-3); text-align: right; font-variant-numeric: tabular-nums; }
+.us-top__c { display: flex; align-items: baseline; gap: 5px; }
+.us-top__c b { font-weight: 500; color: var(--text); }
+.us-top__c i { font-style: normal; font-size: 10px; color: var(--text-3); }
+.us-top__n { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.us-top__p, .us-top__x, .us-top__m { text-align: right; font-variant-numeric: tabular-nums; }
+.us-top__m { color: var(--text-2); }
+.us-top__i2 { color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.us-top__p.up, .us-top__x.up { color: var(--up); }
+.us-top__p.down, .us-top__x.down { color: var(--down); }
+
 @media (max-width: 720px) {
-  /* ⚠️ 单行规则（用户 2026-10-05：「刷新 60s 和上面的按钮放一行」）：
-     原来 `flex-wrap: wrap` 会把「刷新」挤到第二行（实测头部 77px 高：
-     第 1 行 = 标题 + 5 个视图按钮，第 2 行 = 刷新）。
-     现在强制一行，靠三件事让它在最窄的手机上也不换行：
-       ① 标题 `flex: 0 1 auto` + `min-width: 0` + 省略号 —— 空间不够先压标题（"美股热力…"）；
-       ② 按钮组 `flex-wrap: nowrap` + `overflow-x: auto` + `min-width: 0` —— 空间再不够就横向滚动，
-          绝不让按钮回落到第二行（注意 `min-width: 0` 缺了的话 flex item 撑得比内容还宽，不会滚）；
-       ③ 缩放下拉（.screen-zoom）在窄屏由 JS 的 syncZoomVisibility() 隐藏，这里不用管。 */
   .screen-head { padding: 8px 12px; gap: 6px; flex-wrap: nowrap; }
-  /* ⚠️ 用户 2026-10-05 定稿：标题「美股热力图」与「刷新」两字标签**在 ≤720px 一律隐掉**
-     （原先分两档：标题 ≤480、标签 ≤420），不再按机型细分。
-     手机上标题是纯装饰（入口就是底部 tab「选股」，下面还有 .screen-note），
-     「刷新」的语义由 select 的 title 提示兜住 —— 隐掉后 按钮组 302 + 刷新下拉 62 = 364px，
-     最窄机型也稳稳一行，不必再靠标题省略号 / 按钮横滚兜底。 */
   .screen-head__title { display: none; }
-  .screen-refresh__label { display: none; }
   .screen-switch {
     flex: 0 1 auto; min-width: 0;
     flex-wrap: nowrap; overflow-x: auto;
@@ -1238,14 +1245,13 @@ html, body {
   }
   .screen-switch::-webkit-scrollbar { display: none; }
   .screen-switch button { flex: 0 0 auto; padding: 3px 8px; font-size: 11px; }
-  .screen-zoom, .screen-refresh { flex: 0 0 auto; }
-  .screen-zoom { margin-left: auto; }
-  .screen-refresh { margin-left: 0; }
-  .screen-zoom select, .screen-refresh select { padding: 2px 4px; }
-  .screen-note { padding: 5px 12px 6px; }
+  .screen-bar { padding: 7px 12px; gap: 10px; font-size: 11px; }
+  .screen-bar__src { margin-left: 0; width: 100%; }
+  .us-top { padding: 0 12px; }
+  /* 三栏在窄屏改为纵向堆叠：横排时每栏不足 130px，代码与名称都会挤掉 */
+  .mkt { grid-template-columns: 1fr; min-width: 0; }
+  .mkt__col { border-right: 0; border-bottom: 1px solid var(--border); }
 }
-/* ⚠️ 「美股热力图」标题与「刷新」文字标签的隐藏已并入上面的 ≤720px 块
-   （2026-10-05 用户定稿「只要小于 720px 都做」），这里不再留 480 / 420 分档的重复规则。 */
 /* 交易页侧栏宽度：让名称列的可视宽度与移动端（430px 全宽）一致 ——
    移动端 430 - 24内边距 - 62现价 - 54涨跌 - 90市值 - 4×5间距 = 180px 给名称；
    桌面若只给 332px，名称只剩 82px，长基金名几乎全是省略号。 */

@@ -2,9 +2,21 @@ name: IBKR 每日资产同步
 
 on:
   schedule:
-    # 每天 UTC 05:10 跑一次（北京时间 13:10）
-    # cron 固定按 UTC 执行，无时区概念，不再绑定美东时区，无需随夏令时/冬令时切换。
-    - cron: "10 5 * * *"   # UTC 05:10 = 北京时间 13:10
+    # ============================================================
+    # 目标：美东时间（America/New_York）每天 00:05 抓 IBKR 1day 快照。
+    # GitHub Actions 的 cron 只认 UTC，且**不会随夏令时自动切换**，
+    # 所以「美东 00:05」在两种时制下对应不同的 UTC：
+    #   - 冬令时 EST（UTC−5，约 11 月初～次年 3 月中）：美东 00:05 = 05:05 UTC → `5 5 * * *`
+    #   - 夏令时 EDT（UTC−4，约 3 月中～11 月初）：美东 00:05 = 04:05 UTC → `5 4 * * *`
+    # DST 边界（美国）：
+    #   - 开始：3 月第 2 个周日（2026-03-08）凌晨 02:00 拨快到 03:00
+    #   - 结束：11 月第 1 个周日（2026-11-01）凌晨 02:00 拨慢到 01:00
+    # 两条 cron 都挂上，由下面「DST 自适应守护」步判断：只有当前美东时间
+    # 真落在 00:00–00:10 窗口内的那一次才真正执行，另一次优雅跳过。
+    # 这样无论冬夏令时切换，全年都精确在美东 00:05 跑一次，且不选整点高峰。
+    # ============================================================
+    - cron: "5 4 * * *"   # UTC 04:05 = 美东 00:05（夏令时 EDT 期间命中）
+    - cron: "5 5 * * *"   # UTC 05:05 = 美东 00:05（冬令时 EST 期间命中）
   workflow_dispatch:
     inputs:
       force:
@@ -26,12 +38,38 @@ jobs:
     # 给 5 分钟余量，足以覆盖 IBKR 接口抖动与 Actions 自身调度延迟。
     timeout-minutes: 5
     steps:
+      # ---------------------------------------------------------------
+      # DST 自适应守护：只有在「美东 00:05 窗口」内（或手动触发）才继续，
+      # 否则本触发整体跳过。runner 自带 America/New_York 时区数据，
+      # 用 TZ 环境变量读本地时间即可，无需自己算 DST 边界。
+      # ---------------------------------------------------------------
+      - name: DST 自适应守护（仅美东 00:05 窗口执行）
+        id: guard
+        run: |
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "✅ 手动触发，跳过时间窗口检查"
+            exit 0
+          fi
+          now_et=$(TZ="America/New_York" date +"%H:%M")
+          hh=${now_et%%:*}; mm=${now_et##*:}
+          # 只在 00:00–00:10 ET 之间执行；另一 UTC 候选触发会落在此区间外被跳过
+          if [ "$hh" = "00" ] && [ "${mm#0}" -le 10 ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "✅ 命中美东 00:05 窗口（当前 $now_et），继续同步"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::当前美东 $now_et，不在 00:05 窗口内，本触发跳过（由另一个 UTC 候选负责）"
+          fi
+
       - name: 检出仓库
+        if: steps.guard.outputs.run == 'true'
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: 设置 Python
+        if: steps.guard.outputs.run == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -44,6 +82,7 @@ jobs:
       # 注意：这里只判断「secrets 是否存在」，不打印 secrets 的内容。
       # ---------------------------------------------------------------
       - name: 检查 Secrets 是否配置
+        if: steps.guard.outputs.run == 'true'
         run: |
           MISSING=()
           [ -z "${{ secrets.IBKR_TOKEN }}" ] && MISSING+=("IBKR_TOKEN")
@@ -56,6 +95,7 @@ jobs:
           echo "✅ IBKR_TOKEN / IBKR_QUERY_ID_1DAY 已配置"
 
       - name: 运行 IBKR 1day 解析脚本
+        if: steps.guard.outputs.run == 'true'
         env:
           IBKR_TOKEN: ${{ secrets.IBKR_TOKEN }}
           IBKR_QUERY_ID_1DAY: ${{ secrets.IBKR_QUERY_ID_1DAY }}
@@ -76,7 +116,7 @@ jobs:
           elif echo "$OUT" | grep -q "\[skip\] 今日"; then
             echo "ℹ️ 今日已同步过，跳过（正常）"
           elif echo "$OUT" | grep -q "\[warn\] 拉取失败"; then
-            echo "::warning::IBKR 报表未就绪，本次未写入（次日 UTC 05:10 再试）"
+            echo "::warning::IBKR 报表未就绪，本次未写入（次日美东 00:05 再试）"
           else
             echo "ℹ️ 脚本退出码为 0 但未命中 [ok]/[skip]/[warn]，检查上方日志"
           fi
@@ -88,6 +128,7 @@ jobs:
       # ⚠️ 附加信息：抓失败只告警，不算 job 失败，也不影响 IBKR 同步。
       # ---------------------------------------------------------------
       - name: 抓取 Reddit 帖子（ORCL / TQQQ）
+        if: steps.guard.outputs.run == 'true'
         continue-on-error: true
         env:
           OANOR_KEY: ${{ secrets.OANOR_KEY }}
@@ -99,6 +140,7 @@ jobs:
           python fetch_reddit.py || echo "::warning::Reddit 抓取失败，沿用上一版 reddit_posts.json"
 
       - name: 提交并推送更新后的 JSON
+        if: steps.guard.outputs.run == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"

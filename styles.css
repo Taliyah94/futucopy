@@ -255,6 +255,28 @@ html, body {
 .wl__list--4 .wl-pct { font-size: 14px; }
 .wl__row--empty { color: var(--text-3); cursor: default; }
 .wl__row--empty .wl-name b { font-weight: 400; color: var(--text-3); }
+
+/* 基金行展开估值明细（2026-10-08）：点击基金行 → 下方插入明细 li，
+   逐行给 成分股 / QQQ近似（未披露仓位）/ 债券 / 现金 的 比例·现价·基准·涨跌幅。
+   展开箭头放在**副行**（代码 · 基金）行首（用户定稿：主行放太大），
+   行内 inline 排在副行文字前，展开时旋转 90°。 */
+.wl__list--4 .wl__row--fund { cursor: pointer; }
+.wl-caret { display: inline-flex; vertical-align: -1px; margin-right: 3px; color: var(--text-3); transition: transform .15s; }
+.wl__row.is-open .wl-caret { transform: rotate(90deg); }
+.wl-fund-detail { padding: 7px 12px 9px 13px; background: var(--panel-2); }
+.wl-fund-detail .fd-head { font-size: 10px; color: var(--text-3); margin-bottom: 5px; }
+/* 明细两栏（2026-10-08 用户反馈「一栏太长」）：成分股多时按顺序左右分栏。
+   第二行小字 = 基准价（2026-10-08 用户定稿去掉「基准」前缀省宽），
+   现价列收窄到 62px，让「代码 · 占比」在剩余宽度里放开显示不截断。 */
+.wl-fund-detail .fd-body { display: grid; grid-template-columns: 1fr 1fr; column-gap: 16px; }
+.wl-fund-detail .fd-row { display: grid; grid-template-columns: minmax(0, 1fr) 62px 50px; gap: 4px; align-items: center; padding: 3px 0; font-size: 11px; }
+.wl-fund-detail .fd-name { min-width: 0; }
+.wl-fund-detail .fd-name b { display: block; font-weight: 500; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wl-fund-detail .fd-name span { display: block; font-size: 10px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wl-fund-detail .fd-row--sub .fd-name b { font-weight: 400; color: var(--text-2); }
+.wl-fund-detail .fd-px { text-align: right; color: var(--text); font-variant-numeric: tabular-nums; }
+.wl-fund-detail .fd-px i { display: block; font-style: normal; font-size: 10px; color: var(--text-3); }
+.wl-fund-detail .fd-chg { text-align: right; font-variant-numeric: tabular-nums; }
 .ta-r { text-align: right; }
 
 /* 持仓汇总（列表底部固定）：推算总资产 + 与账户总资产的差额 */

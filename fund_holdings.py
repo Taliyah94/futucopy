@@ -830,7 +830,18 @@ def merge_fx_daily(old, fresh):
 #    超时/000，偶发才成功。真正每天跑的是 GitHub Actions（美国 runner），那边才稳。
 #    所以这里必须有重试；且**失败时保留上一版名单**（沿用本文件其余模块的语义：
 #    拉不到就不覆盖、绝不写成空 —— 空名单会让选股器「全部个股」tab 变成空白）。
-EM_LIST_URL = "https://push2.eastmoney.com/api/qt/clist/get"
+# ⚠️ 域名回退链（2026-10-08 加）：push2 主域对 GitHub Actions（Azure 美国 IP）实测回
+#    **HTTP 502 Bad Gateway**（10-07 run 日志：4 组请求 × 3 次重试全 502，非限流 429，
+#    是东财对境外机房 IP 的策略）。编号镜像 90.push2 等同源同路径，实测（外部网络）可用，
+#    每次重试换下一个域名。本机（国内宽带）则是 TLS 握手直接被 RST，走哪个域名都 000 ——
+#    本地别指望直连，真正生产在 Actions。
+#    注意本机 curl 000 与 Actions 502 是**两种不同的故障**：前者链路阻断，后者服务端拒绝。
+EM_LIST_HOSTS = [
+    "https://push2.eastmoney.com",
+    "https://90.push2.eastmoney.com",
+    "https://48.push2.eastmoney.com",
+    "https://push2delay.eastmoney.com",   # 延迟 15 分钟版兜底（榜单场景可接受）
+]
 EM_FS_EXCH = "m:105,m:106,m:107"
 EM_FS_OTC = "m:153"
 US_TOP_KEY = "us_top"          # fund_holdings.json 顶层键（前端只认这个）
@@ -848,23 +859,31 @@ def _em_clist(fs, limit, fid="f20", po=1, retries=3, timeout=25, fields=None):
     """
     if fields is None:
         fields = "f12,f13,f14,f2,f3,f20,f100"
-    url = (EM_LIST_URL + "?pn=1&pz=%d&po=%d&fid=%s&fs=%s&fields=%s"
-           % (limit, po, fid, fs, fields))
     last = None
-    for attempt in range(1, retries + 1):
+    # 域名回退（2026-10-08）：主域对 Actions 境外 IP 回 502，每次重试换下一个 host；
+    # 200 但 diff 为空也算失败继续换（防东财个别镜像抽风给空数据）。
+    n = len(EM_LIST_HOSTS)
+    total = retries * n
+    for attempt in range(1, total + 1):
+        host = EM_LIST_HOSTS[(attempt - 1) % n]
+        url = (host + "/api/qt/clist/get?pn=1&pz=%d&po=%d&fid=%s&fs=%s&fields=%s"
+               % (limit, po, fid, fs, fields))
         try:
             req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
             raw = urllib.request.urlopen(req, timeout=timeout).read().decode("utf-8", "ignore")
             obj = json.loads(raw)
             diff = (obj.get("data") or {}).get("diff") or []
             rows = list(diff.values()) if isinstance(diff, dict) else list(diff)
-            return [r for r in rows if isinstance(r, dict)]
+            rows = [r for r in rows if isinstance(r, dict)]
+            if rows:
+                return rows
+            last = RuntimeError("200 但 diff 为空")
         except Exception as e:  # noqa: BLE001 - 网络/JSON 各种失败统一重试
             last = e
-            if attempt < retries:
+            if attempt < total:
                 time.sleep(1.2 * attempt)   # time 已在文件顶部 import
     sys.stderr.write("  [东财] 请求失败(%s fid=%s po=%d, %d 次): %s\n"
-                     % (fs, fid, po, retries, last))
+                     % (fs, fid, po, total, last))
     return None
 
 

@@ -1365,6 +1365,7 @@ const TICKER_TTL = 15000;
   const WL_CAT_OF = { fx: 'fut', bond: 'fut' };
   let wlCat = 'all';
   let wlTradeCat = 'all';      // 持仓页分类：'all' 全部 / 'us' 证券 / 'fund' 基金（与行情页独立）
+  const fundOpenCodes = new Set();  // 持仓页展开估值明细的基金 code（列表每 15s 重绘，状态必须存活在外）
 
   /* ---- 交易页持仓数据（由 initAccountData 数据就绪时填充，见 aoState.series 赋值处） ---- */
   const TRADE_POS = { stock: [], fund: [], fx: 1, totalCny: null, cashCny: 0, ibkrCashCny: 0, ready: false };
@@ -2283,16 +2284,67 @@ const TICKER_TTL = 15000;
       ul.innerHTML = '<li class="wl__row wl__row--empty"><span class="wl-name"><b>该分类下无持仓</b></span></li>';
       return;
     }
+    /* 基金行点击展开的估值明细（用户 2026-10-08）：成分股 / QQQ近似（未披露仓位）/ 债券 / 现金
+       逐行给 比例 · 现价 · 基准价 · 涨跌幅。数据全部来自 TRADE_POS.estimateFund（估值同一套
+       口径，parts 里已带 symbolPx 解析的现价/基准）；净值日没就绪或该基金无估值 → 只给提示行，
+       不编数字（「没数据就显示 --」铁律）。 */
+    const fundDetailHtml = (code) => {
+      const f = TRADE_POS.fund.find((x) => x.code === code);
+      if (!f) return '';
+      const est = (typeof TRADE_POS.estimateFund === 'function' && f.navDate)
+        ? TRADE_POS.estimateFund(f, f.navDate) : null;
+      if (!est) {
+        return '<li class="wl-fund-detail"><div class="fd-head">估值明细暂不可用（净值基准未就绪）</div></li>';
+      }
+      const alloc = f.alloc || {};
+      const pctS = (v) => (v == null || !isFinite(v)) ? '--' : v.toFixed(1) + '%';
+      const rows = [];
+      (est.parts || []).forEach((p) => rows.push({
+        name: p.n || p.code, code: p.code, w: p.w, now: p.now, base: p.base, chg: p.chg, sub: false,
+      }));
+      if (est.residual > 0.01) rows.push({
+        name: 'QQQ近似', code: 'QQQ', w: est.residual, sub2: pctS(est.residual),   // 副标注只带百分比（2026-10-08 用户定稿）
+        now: est.qqqPx ? est.qqqPx.now : null, base: est.qqqPx ? est.qqqPx.base : null,
+        chg: est.qqq, sub: true,                       // QQQ 取不到 → chg=null → 显示 --
+      });
+      /* 债券+现金合并为一行「现金」（2026-10-08 用户定稿）：估值模型里两者都无利息、价值不变
+         （FX_IN_VAL=false 时汇率层也关），chg 恒 0 —— 这个 0 是模型语义本身，不是编造；
+         没有价格概念 → 现价/基准画 --。副标注只写「含债券」三个字。 */
+      const cashAll = (alloc.bond || 0) + (alloc.cash || 0);
+      if (cashAll > 0.01) rows.push({ name: '现金', code: '含债券', w: cashAll, sub2: `含债券 · ${pctS(cashAll)}`, now: null, base: null, chg: 0, sub: true });
+      const body = rows.map((r) => {
+        const cc = cls(r.chg == null ? null : r.chg * 100);
+        return `<div class="fd-row${r.sub ? ' fd-row--sub' : ''}">
+          <span class="fd-name"><b>${r.name}</b><span>${r.sub2 != null ? r.sub2 : `${r.code} · ${pctS(r.w)}`}</span></span>
+          <span class="fd-px num">${fmt(r.now, 2)}<i>${fmt(r.base, 2)}</i></span>
+          <span class="fd-chg num ${cc}">${fmtPct(r.chg == null ? null : r.chg * 100)}</span>
+        </div>`;
+      }).join('');
+      /* 头部的「股票」用**有效仓位** = max(alloc.stock, 已披露成分股权重和)：
+         个别基金（016532/016533）季报 json 里 alloc.stock=0 但 items 里 QQQ 权重 91%，
+         直接照抄 alloc 会显示「股票 0.0%」与下面的成分股行自相矛盾。 */
+      const eqW = Math.max(alloc.stock || 0, (est.parts || []).reduce((s, p) => s + (p.w || 0), 0));
+      return `<li class="wl-fund-detail">
+        <div class="fd-head">净值基准 ${asOfMd(f.navDate)} · 股票 ${pctS(eqW)} · 现金 ${pctS(cashAll)}${est.chg != null ? ` · 估算 ${(est.chg * 100).toFixed(2)}%` : ''}</div>
+        <div class="fd-body">${body}</div>
+      </li>`;
+    };
     ul.innerHTML = list.map((it) => {
       /* 期权没有涨跌幅（pct=null → 显示 `--`，见 fmtPct），主行就不着色；
          市值那格退回按盈亏正负着色，免得整行看着像「没数据」。 */
       const c = it.pct != null ? cls(it.pct) : clsCls(it.pnl);
       const pc = clsCls(it.pnl);
       // 汇率明细只在悬停提示里给（副行已有「代码 · 类别」，再加就挤了）
-      return `<li class="wl__row" data-code="${it.code}" title="${it.name}（${it.code}）· ${it.kind}${it.fxNote ? '｜' + it.fxNote : ''}">
+      /* 基金行可点击展开估值明细（fundDetailHtml）：加 data-kind 标记；展开箭头放在
+         副行（代码 · 基金）行首 —— 用户 2026-10-08：主行放箭头太大，副行小字更协调。
+         证券/期权行不加标记，点击无效果。展开状态存 fundOpenCodes，重绘后仍保持。 */
+      const isFund = it.kind === '基金';
+      const open = isFund && fundOpenCodes.has(it.code);
+      const caret = isFund ? '<i class="wl-caret"><svg width="9" height="9" viewBox="0 0 10 10" fill="none"><path d="M3 1.5L7 5L3 8.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></i>' : '';
+      return `<li class="wl__row${isFund ? ' wl__row--fund' : ''}${open ? ' is-open' : ''}" data-code="${it.code}"${isFund ? ' data-kind="fund"' : ''} title="${it.name}（${it.code}）· ${it.kind}${it.fxNote ? '｜' + it.fxNote : ''}">
           <span class="wl-name">
             <b>${tradeShortName(it.name)}</b>
-            <span>${it.code} · ${it.kind}</span>
+            <span>${caret}${it.code} · ${it.kind}</span>
           </span>
           <span class="wl-price num ${c}">${fmt(it.price, it.decimals)}</span>
           <span class="wl-pct num ${c}">${fmtPct(it.pct)}</span>
@@ -2302,8 +2354,22 @@ const TICKER_TTL = 15000;
             <b class="num ${c}">${f2(it.value)}</b>
             <i class="num ${pc}">${f2(it.pnl, true)}</i>
           </span>
-        </li>`;
+        </li>${open ? fundDetailHtml(it.code) : ''}`;
     }).join('');
+  }
+
+  /* 基金行点击 → 展开/收起估值明细。事件委托挂在 ul 上（innerHTML 重建不丢监听）；
+     只有带 data-kind="fund" 的行响应。点击后整列表重绘一次（明细里的价格随行情一起刷新）。 */
+  {
+    const tradeUl = $('#watchlistTrade');
+    if (tradeUl) tradeUl.addEventListener('click', (e) => {
+      const row = e.target.closest('.wl__row');
+      if (!row || row.dataset.kind !== 'fund') return;
+      const code = row.dataset.code;
+      if (fundOpenCodes.has(code)) fundOpenCodes.delete(code);
+      else fundOpenCodes.add(code);
+      renderTradeList();
+    });
   }
 
   /* 分类归属：先取行上的 cat（us/cn/fut/ccy），再用 WL_CAT_OF 把
@@ -6525,7 +6591,7 @@ const applyMode = (mode, skipDraw) => {
        ⚠️ OKX 并非所有代码都有永续合约，个别标的要用同一公司的另一类股份顶替（比 QQQ 兜底准得多）：
           GOOG（谷歌-C）没有 `GOOG-USDT-SWAP`，用 GOOGL（谷歌-A）的行情 —— A/C 两类股同股不同权，
           同属 Alphabet，价格长期贴合，基金季报里两者也常混用。 */
-    const VAL = { qqq: [], dq: {}, splits: {}, dqDirty: new Set(), txUs: {} };
+    const VAL = { qqq: [], dq: {}, splits: {}, dqDirty: new Set(), txUs: {}, dqLive: {} };
     {
       const FH = fundH || {};
       // 日期格式必须归一化后再比较（ymd 已在上面定义，详见那里注释）
@@ -6696,7 +6762,14 @@ const applyMode = (mode, skipDraw) => {
              ② 本函数原有的 okxNowCache（cacheMs，成分股用 60s）。
              ⚠️ 精度：TTL = 15s = 刷新周期，所以最坏延迟一轮刷新，与「每 15s 拉一次」等价，
                 不会让持仓现价变旧。 */
-          let now = null;
+          /* ⚠️ tj 必须声明在这里（而不是内层 else 里）：下面 _tickerCache.set 的 raw 字段
+             要引用它。2026-10-08 真 bug：tj 原先 const 在「真发请求」的内层块里，
+             块一关闭就出作用域 → 只要走到 _tickerCache.set 这行（现价拉到了、缓存却没过期）
+             就 ReferenceError「tj is not defined」→ 被 catch 静默吞掉 → 该 inst 的
+             VAL_OKX[code].now **永远写不进去**。QQQ 不在自选/持仓链（没有别的链帮它写
+             _tickerCache），于是 016532/016533（成分只有 QQQ）的预测涨跌恒 0.00%，
+             而 ORCL/NVDA 等有自选链兜底所以看起来正常。 */
+          let now = null, tj = null;
           const tk = _tickerCache.get(inst + '|t');
           if (tk && Date.now() - tk.at < TICKER_TTL) {
             now = tk.now;
@@ -6706,7 +6779,7 @@ const applyMode = (mode, skipDraw) => {
             if (hitNow && Date.now() - hitNow.at < cacheMs) {
               now = hitNow.now;
             } else {
-              const tj = await okxGet(`${OKX_API_BASE}/market/ticker?instId=${inst}`);
+              tj = await okxGet(`${OKX_API_BASE}/market/ticker?instId=${inst}`);
               now = (tj && tj.data && tj.data[0]) ? +tj.data[0].last : null;
               if (now != null && cacheable) okxNowCache.set(inst, { now, at: Date.now() });
             }
@@ -6881,6 +6954,47 @@ const applyMode = (mode, skipDraw) => {
       throw lastErr || new Error('all tx hosts failed');
     }
 
+    /* 单标的「现价 / 基准价」解析。基金估值（symbolChg）与持仓明细展开（renderTradeList
+       的成分股行）共用这一份口径，改基准语义只改这里：
+       - US：现价只认 OKX 永续现价、基准价只认 Alpaca 净值日收盘（2026-10-08 用户定稿，无兜底）；
+       - 其他市场：现价优先 qt.gtimg 实时快照（VAL.dqLive，loadDqLive 每 30s 批量刷一次；
+         收盘后=当天收盘价，盘中=最新价），取不到再退 json 快照末根（fund_holdings.py 每天只
+         跑一次，盘中/漏跑时末根可能是昨天，只是兜底不是主口径）；基准 = ≤净值日末根。
+       任一处读不到 → 该字段 null（明细里画 --，不编数）。 */
+    function symbolPx(code, mkt, baseDate) {
+      if (mkt === 'us') {
+        const k = String(code).toUpperCase();
+        const ok = VAL_OKX[k];
+        const now = (ok && ok.now != null) ? ok.now : null;            // 当前价：只认 OKX
+        /* 基准价也按 alias 口径（2026-10-08 用户定稿）：GOOG 的现价本来就是 GOOGL 顶的，
+           基准若取 GOOG 自己的 Alpaca 日线，现价/基准就不是一个东西，涨跌幅凭空差一截。
+           GOOG 与 GOOGL 同股不同权、价差约 0.1%，现价基准必须同一代码。 */
+        const q = VAL.txUs[OKX_ALIAS[k] || k];
+        /* 基准价：优先从已存的 Alpaca 日线里按「本基金自己的 navDate」取 <= 该日的末根
+           （各基金净值日不同，不能共用一个 init 基准）；日线缺失时退到 init 算好的
+           alpacaBase/base（同语义、单日版本）。 */
+        const bd10 = String(baseDate || '').slice(0, 10);              // YYYY-MM-DD
+        let base = null;
+        if (q && q.bars && q.bars.length && bd10) {
+          let bi = -1;
+          for (let i = 0; i < q.bars.length; i++) if (String(q.bars[i].t).slice(0, 10) <= bd10) bi = i;
+          if (bi >= 0 && q.bars[bi].c > 0) base = q.bars[bi].c;
+        }
+        if (base == null) base = (q && q.alpacaBase > 0) ? q.alpacaBase
+                                                         : (q && q.base > 0 ? q.base : null);
+        return { now, base };
+      }
+      const arr = VAL.dq[mkt + code];
+      if (!arr || !arr.length || VAL.dqDirty.has(mkt + code)) return { now: null, base: null };
+      const bd = String(baseDate || '').replace(/-/g, '');
+      let bi = -1;
+      for (let i = 0; i < arr.length; i++) if (arr[i].d <= bd) bi = i;
+      if (bi < 0) bi = 0;
+      const lv = VAL.dqLive[mkt + code];
+      const now = (lv && lv.c > 0) ? lv.c : arr[arr.length - 1].c;
+      return { now, base: arr[bi].c };
+    }
+
     function symbolChg(code, mkt, baseDate) {
       const bd = String(baseDate || '').replace(/-/g, '');
       const pick = (arr) => {
@@ -6889,39 +7003,20 @@ const applyMode = (mode, skipDraw) => {
         let bi = -1;
         for (let i = 0; i < arr.length; i++) if (arr[i].d <= bd) bi = i;
         if (bi < 0) bi = 0;
+        const lv = VAL.dqLive[mkt + code];
+        if (lv && lv.c > 0) return lv.c / arr[bi].c - 1;   // 实时现价（收盘后=当天收盘）
         const last = arr[arr.length - 1];
         if (last.d <= arr[bi].d) return 0;                  // 基准日之后没更新
         return last.c / arr[bi].c - 1;
       };
       if (mkt === 'us') {
-        const k = code.toUpperCase();
-        /* 腾讯 A/C 两类股是两个独立代码，直接按各自代码取即可（不再需要 GOOG→GOOGL 别名） */
-        const q = VAL.txUs[k];                 // Alpaca：仅作兜底（OKX 日线没拉到时）
-        /* ⚠️ 2026-10-08：基准 = 「净值日那天的 OKX 美东 16:00 收盘」（用户定稿，彻底脱离 Alpaca）。
-           OKX 美股永续 7×24，loadOkxTradeQuotes 用 1H 拉 limit=300、提取每个美东交易日 16:00 的
-           open 归档进 dayClose（按美东交易日为 key）；dayClose[净值日] 即那天 16:00 ET 收盘，
-           作为估值基准。净值日若恰逢休市（节假日），baseOf 自动回退到之前最近的美东交易日
-           （原 Alpaca 逻辑：取 <= baseDate 的最后一根）。Alpaca 退居最后兜底，不再卡基金估值。 */
-        const ok = VAL_OKX[k];
-        const now = (ok && ok.now != null) ? ok.now : (q ? q.now : null);
-        const bdd = String(baseDate || '').slice(0, 10);   // 净值日（YYYY-MM-DD），与 dayClose key 同格式
-        const baseOf = (dc, key) => {
-          if (dc && dc[key] != null && dc[key] > 0) return dc[key];
-          const p = key.split('-'); if (p.length !== 3) return null;
-          const dt = new Date(Date.UTC(+p[0], +p[1] - 1, +p[2]));
-          for (let s = 1; s <= 10; s++) {            // 向前回退最多 10 天找最近交易日
-            dt.setUTCDate(dt.getUTCDate() - 1);
-            const kk = dt.toISOString().slice(0, 10);
-            if (dc && dc[kk] != null && dc[kk] > 0) return dc[kk];
-          }
-          return null;
-        };
-        const b = ok && ok.dayClose ? baseOf(ok.dayClose, bdd) : null;
-        if (b != null && now != null) return now / b - 1;
-        if (now != null && ok && ok.prevClose > 0) return now / ok.prevClose - 1;   // 退化：OKX 昨收
-        if (q && q.base != null && now != null && q.base > 0) return now / q.base - 1; // 退化：Alpaca 净值日
-        if (/^QQQ$/i.test(code)) return qqqChgOn(baseDate);   // 最后兜底：静态文件日线
-        return null;
+        /* ⚠️ 2026-10-08 改（用户定稿）：持仓预测净值口径 ——
+           当前价只认 OKX 永续现价；基准价只认 Alpaca 的基金净值日（实时东财给的 navDate，如 9-30）那根收盘。
+           去掉所有兜底（OKX dayClose / OKX prevClose / QQQ 静态文件）；任一处读不到 → 返回 null（渲染画 -）。
+           现价/基准的解析统一走 symbolPx（与持仓明细展开共用，改口径只改一处）。 */
+        const px = symbolPx(code, mkt, baseDate);
+        if (px.now == null || px.base == null) return null;            // 读取失败 → 画 -
+        return px.now / px.base - 1;
       }
       return pick(VAL.dq[mkt + code]);                      // jp285A / kr000660 / hk02513 / sz300408
     }
@@ -6951,11 +7046,12 @@ const applyMode = (mode, skipDraw) => {
       const rec = VAL.txUs[code] = VAL.txUs[code] || {};
       rec.now = bars[bars.length - 1].c;
       if (bars.length >= 2) rec.prevClose = bars[bars.length - 2].c;
+      rec.bars = bars;                                   // ⚠️ 存原始日线，供 symbolChg 按各基金 navDate 解析基准（2026-10-08）
       /* 基准 = 净值日那天的收盘；取不到就退到该日之前最近的一条（那天休市）。 */
       let bi = -1;
       const bd = String(baseDate || '').slice(0, 10);
       if (bd) for (let i = 0; i < bars.length; i++) if (String(bars[i].t).slice(0, 10) <= bd) bi = i;
-      if (bi >= 0) rec.base = bars[bi].c;
+      if (bi >= 0) { rec.base = bars[bi].c; rec.alpacaBase = bars[bi].c; }  // alpacaBase：Alpaca 专属净值日基准（symbolChg 只认它）
       rec.alpaca = true;
       return true;
     }
@@ -7009,6 +7105,9 @@ const applyMode = (mode, skipDraw) => {
       funds.forEach((f) => (f.items || []).forEach((it) => {
         if (it.m === 'us') s.add(String(it.c).toUpperCase());
       }));
+      /* alias 目标也要拉（GOOG→GOOGL）：基准价统一按 GOOGL 口径（2026-10-08 用户定稿），
+         若 GOOGL 本身不在任何基金成分里，这里不补 Alpaca 就没有 GOOGL 日线可取。 */
+      Object.values(OKX_ALIAS).forEach((t) => s.add(t));
       return [...s];
     }
 
@@ -7021,8 +7120,15 @@ const applyMode = (mode, skipDraw) => {
       const start = baseDate || etDate(12);
       /* 一次批量 + 跟着 next_page_token 翻页（20 个代码 = 3 次请求），比「逐个补拉」少 8 次。 */
       try {
+        /* ⚠️⚠️ `limit` 是**每页总行数**（不是「每符号根数」）——2026-10-08 实测坐实：
+             20 个成分股 × 6 根 = 120 行，而 limit=90 → 第一页只回 15 个代码（按字母序到 NVDA），
+             **QQQ/SNDK/TSLA/TSM/WDC 被切到第二页**并返回 next_page_token。第二页一旦因 8s 预算
+             被截断（弱网常见），`VAL.txUs['QQQ']` 就没有 base → `symbolChg` 返回 null →
+             016532/016533（成分只有 QQQ 一只）估值直接显示 0.00%（用户 2026-10-08 报的 bug）。
+             修法：limit 提到 10000（一页最多 1 万行），20 个代码即使回溯 40 天（约 620 行）
+             也在**同一页**返回、不再翻页，从根上消除「翻页丢符号」。 */
         const bars = await alpacaPaged(
-          `${ACC_API}/v2/stocks/bars?symbols=${list.join(',')}&timeframe=1Day&start=${start}&limit=90`, 'bars', 5);
+          `${ACC_API}/v2/stocks/bars?symbols=${list.join(',')}&timeframe=1Day&start=${start}&limit=10000`, 'bars', 5);
         Object.entries(bars).forEach(([k, v]) => applyAlpacaBars(String(k).toUpperCase(), v, baseDate));
       } catch (e) { console.warn('[alpaca] 成分股基准拉取失败', e); }
     }
@@ -7079,6 +7185,35 @@ const applyMode = (mode, skipDraw) => {
       }
     }
 
+    /* 中/日/韩/港成分股的**实时现价**：qt.gtimg 一次批量查全部（2026-10-08 实测
+       `Access-Control-Allow-Origin: *` 放行、GBK 编码、支持多码逗号批量）。
+       背景：fund_holdings.py 的 _daily_quotes 每天只跑一次（21:30 cron，且 Actions 常延迟），
+       json 末根经常是昨天的收盘 → 明细「现价」显示昨收（用户 23:08 反馈「应该最新价」）。
+       这路收盘后 = 当天收盘价、盘中 = 最新价；失败保留上一轮值（不闪 --，不成造数）。 */
+    let dqLiveAt = 0;
+    async function loadDqLive() {
+      const syms = [...new Set(funds.flatMap((f) => (f.items || [])
+        .filter((it) => it.m && it.m !== 'us').map((it) => it.m + it.c)))];
+      if (!syms.length) return;
+      if (Date.now() - dqLiveAt < 30000) return;            // 30s 节流：15s 刷新轮不重复打
+      dqLiveAt = Date.now();
+      try {
+        const res = await withTimeout(fetch('https://qt.gtimg.cn/q=' + syms.join(',')), 8000);
+        if (!res.ok) return;
+        let txt;
+        try { txt = new TextDecoder('gbk').decode(await res.arrayBuffer()); }
+        catch (e) { txt = await res.text(); }               // 无 GBK 解码器时退默认：中文名乱码但数字段（ASCII）不受影响
+        syms.forEach((sym) => {
+          const m = txt.match(new RegExp('v_' + sym + '="([^"]*)"'));
+          if (!m) return;                                   // 该码失败 → 保留上一轮实时值
+          const p = m[1].split('~');
+          const c = parseFloat(p[3]);
+          if (!(c > 0)) return;
+          VAL.dqLive[sym] = { c, at: Date.now(), t: p[30] || '' };
+        });
+      } catch (e) { /* 网络失败 → 保留旧值，下轮再试 */ }
+    }
+
     /* 逐只基金算估值：返回 { navEst, chg, parts }，chg 为小数。 */
     /* 逐只基金算估值：返回 { chg（人民币口径，小数）, fxChg（纯汇率贡献）, parts }。 */
     function estimateFund(f, baseDate) {
@@ -7109,8 +7244,7 @@ const applyMode = (mode, skipDraw) => {
       items.forEach((it) => {
         let c = symbolChg(it.c, it.m, baseDate);
         let viaQqq = false;
-        if (c == null) { c = qc == null ? 0 : qc; viaQqq = true; }   // 未知 → QQQ
-        if (c == null) return;
+        if (c == null) return;                 // 该成分股读取失败 → 跳过（不再 QQQ 兜底，画 -）
         const cur = CUR_OF[it.m] || 'USD';
         const fx = FX_IN_VAL ? fxChgOn(cur, baseDate) : 0;
         const fxv = fx == null ? fxUsdV : fx;
@@ -7119,7 +7253,10 @@ const applyMode = (mode, skipDraw) => {
         acc += w * cn;
         fxAcc += w * fxv;                                 // 纯汇率贡献（拆开给用户看）
         wsum += it.p || 0;
-        parts.push({ code: it.c, m: it.m, w: it.p, chg: c, cnyChg: cn, fxChg: fxv, cur, viaQqq });
+        /* 现价/基准价：明细展开（持仓页点开基金行）要逐成分股展示，与 chg 同一套解析口径 */
+        const px = symbolPx(it.c, it.m, baseDate);
+        parts.push({ code: it.c, m: it.m, n: it.n, w: it.p, chg: c, cnyChg: cn, fxChg: fxv, cur, viaQqq,
+                     now: px.now, base: px.base });
       });
       // 未披露的股票仓位（stockW − 已列权重）同样按 QQQ 推算，并叠加美元汇率
       const residual = Math.max(0, stockW - wsum);
@@ -7134,6 +7271,7 @@ const applyMode = (mode, skipDraw) => {
       if (idleW > 0.01) { acc += idleW / 100 * fxUsdV; fxAcc += idleW / 100 * fxUsdV; }
       const chg = acc;
       return { chg, fxChg: fxAcc, parts, bondW, cashW, idleW, residual, qqq: qc, fxUsd: fxUsdV,
+               qqqPx: qc != null ? symbolPx('QQQ', 'us', baseDate) : {},   // QQQ近似行的现价/基准
                navEst: f.navL != null ? f.navL * (1 + chg) : null };
     }
 
@@ -7164,12 +7302,15 @@ const applyMode = (mode, skipDraw) => {
        并行后总耗时 = 最慢的那一只。 */
     await Promise.all(funds.map(async (f) => {
       const [l, p, d] = await accFundNav(f.code);
-      if (l != null) { f.navL = l; f.navP = p; f.navDate = d; }
+      if (l != null) { f.navL = l; f.navP = p; f.navDate = d; }   // 实时东财：官方净值 + 净值日
+      /* ⚠️ 2026-10-08：净值日（预测基准）只认实时东财，不再回退 fund_holdings.json（用户定稿）。
+         东财取不到 → f.navDate 留空 → 该基金不画预测净值（画 -），而非用 json 的陈旧净值日。
+         官方净值 navL/navP 仍允许 json 兜底（那是基金真实最新净值，与预测无关）。 */
       else if (fundH && fundH[f.code] && Array.isArray(fundH[f.code].nav) && fundH[f.code].nav.length >= 2) {
         const nav = fundH[f.code].nav;
         f.navL = nav[nav.length - 1][1];
         f.navP = nav[nav.length - 2][1];
-        f.navDate = navDate(nav[nav.length - 1][0]);      // 回退数据源同样带日期
+        // 不设 f.navDate → 预测估值不画（以实时东财为准）
       }
     }));
     /* 拉美股行情后逐只算估值（基准日 = 各基金自己的 navDate，即最新净值日）。
@@ -7194,13 +7335,14 @@ const applyMode = (mode, skipDraw) => {
             实测首屏从 4.6s 降到 ~0.6s，且数字与之前完全一致（只是估值口径先后升级）。 */
       const compo = usComponentCodes();
       const baseReady = () => !compo.length || compo.some((c) => {
-        const r = VAL.txUs[c]; return r && r.base != null;
+        const r = VAL.txUs[c]; return r && (r.alpacaBase != null || r.base != null);
       });
       /* 后台梯队：谁先到谁补一次估值。**不 await**（这是本次提速的关键）。 */
       const slowLane = () => Promise.all([
         loadUsQuotesAlpaca(usBase),
         loadOkxTradeQuotes(compo, { cacheMs: 60000 }),
         loadUsQuotes(usBase),
+        loadDqLive(),                              // 中/日/韩/港成分股实时现价（qt.gtimg 批量）
       ]).catch(() => {});
       slowLane().then(() => {
         if (!baseReady()) return;                 // 基准没到 → 等各自的兜底路径再处理
@@ -8221,11 +8363,13 @@ fundAmount += f.amount;
         const pRest = loadUsQuotesAlpaca(null);
         const pTx = withCap(loadUsQuotes(null, held2), 8000);
         const pAlp = withCap(accAlpacaQuotes(stockSyms, optSyms), 9000);
+        const pDq = withCap(loadDqLive(), 6000);   // 中/日/韩/港成分股实时现价（内置 30s 节流）
         pOkx.then(() => refreshPaint()).catch(() => {});
         pRest.then(() => refreshPaint()).catch(() => {});
         pTx.then(() => refreshPaint()).catch(() => {});
         pAlp.then((patch) => refreshPaint(patch)).catch(() => {});
-        await Promise.all([pOkx, pRest, pTx, pAlp]);
+        pDq.then(() => refreshPaint()).catch(() => {});
+        await Promise.all([pOkx, pRest, pTx, pAlp, pDq]);
       } catch (e) { /* 单次失败跳过，下个周期再试；页面仍显示上一轮的数据 */ }
       refreshing = false;                         // 三路都收工才放行下一轮，避免叠轮
     };

@@ -1521,30 +1521,6 @@ const TICKER_TTL = 15000;
   /* 默认时段 = 当前进行中的美东时段（与自选页分时同款规则：夜盘看夜盘、盘前看盘前） */
   let assetSessSel = currentSessionKey();
 
-  /* 拉单只美股期权的 1m 收盘价序列（Alpaca options/bars）。
-     ⚠️ OKX 不挂美股权期权 → 期权日内走势只能走 Alpaca。bar.t 是 **ISO 字符串**（如
-        "2026-10-05T19:59:00Z"，与同接口的 snapshots.minuteBar.t 同款），取收盘 c；
-        统一转成 ms 时间戳、升序，供 assetSeries 与正股腿一起做时间轴并集。 */
-  async function fetchAlpacaOptBars(occ, total, bar) {
-    try {
-      /* ⚠️ 日内周期必须带 start/end：Alpaca 对 intraday timeframes 要求显式时间窗，
-         否则可能直接返回空 bars。有 start 才会正常翻页（免费账号仍会因无期权日内
-         权限而为空 → 调用方退回实时 mark 兜底）。 */
-      const from = new Date(Date.now() - 26 * 3600 * 1000).toISOString().slice(0, 19) + 'Z';
-      const bars = await alpacaPaged(
-        `${ACC_API}/v1beta1/options/bars?symbols=${encodeURIComponent(occ)}&timeframe=${bar}`
-        + `&start=${encodeURIComponent(from)}&limit=300`, 'bars', 3);
-      const arr = bars && bars[occ];
-      if (!arr || !arr.length) return [];
-      const toMs = (bt) => {               // 兼容 ISO 字符串 / 数值时间戳（纳秒/毫秒/秒）
-        if (typeof bt === 'number') return bt > 1e15 ? Math.floor(bt / 1e6) : (bt < 1e12 ? bt * 1000 : bt);
-        const ms = Date.parse(bt); return isNaN(ms) ? 0 : ms;
-      };
-      return arr.map((b) => ({ ts: toMs(b.t), price: +b.c }))
-        .filter((p) => p.ts > 0 && p.price > 0).sort((a, b) => a.ts - b.ts);
-    } catch (e) { return []; }
-  }
-
   /* 取「该时段内」的持仓总资产分钟序列。
      返回 null = 数据不足/没持仓，调用方直接画空白。 */
   async function assetSeries(sess) {
@@ -1585,20 +1561,39 @@ const TICKER_TTL = 15000;
       const pts = await fetchLeg(inst2(s.code));       // 串行，不并发
       stockLegs.push({ s, pts });
     }
-    /* 期权腿：Alpaca options/bars 1m（OKX 无美股权期权，单独走 Alpaca）。
-       每条腿 s 带 mult（100），合成时按 qty × mult × 收盘价累加 USD 市值。
-       Alpaca 是另一个域、不与 OKX 抢限频桶，可以并发。 */
-    const optLegs = await Promise.all((p.opts || []).map(async (o) => {
-      /* ⚠️ 兜底价 prev 必须带上：prevOf 由 leg.s.prev 构建（见下方 prevOf）。这条腿在
-         Alpaca 无日内 bars 时（免费账号实测 1Min/5Min 全空）全靠它，否则整条期权腿
-         「无价格 → continue」消失，曲线凭空多出一份期权市值。
-         优先实时 mark（o.last），其次昨收 —— 见 renderTradeSum 里的说明。 */
+    /* 期权腿：按「实时直回推」（用户 2026-10-08：「期权按实时直回推就行了，不用抓取K」）。
+       OKX 不挂美股权期权、Alpaca 免费账号 1Min/5Min 又全空 → 原方案依赖 Alpaca options/bars
+       日内序列，几乎永远拿不到，曲线只能退化成「实时 mark 一根平线」，还白白多打一个域的请求。
+       改为**不再请求任何 K 线**，直接按实时 mark 回推期权 intraday 形状：
+         · 解析期权 OCC 根符号对应的正股（ORCL260918C00145000 → ORCL），
+           复用同图里已拉好的正股腿 OKX 1m 序列当「形状」（同属 OKX 限频桶，零额外请求）；
+         · 起点 = 昨收(o.prev)，末点 = 实时 mark(o.last)，中段沿正股 intraday 轨迹归一化插值
+           （正股日内几乎不动时退化成按时间线性，照样保证末点=实时 mark）；
+         · 正股腿取不到（非持仓正股）时 pts=[]：合成时按 prevOf(=实时 mark) 兜底成平线。
+       这样期权腿既省掉 Alpaca 抓取，又能跟随正股走势、末点对齐实时 mark。 */
+    const optLegs = (p.opts || []).map((o) => {
       const s = { code: o.occ, qty: o.qty, mult: o.mult || 100, prev: (o.last > 0 ? o.last : o.prev) };
-      try {
-        const pts = await fetchAlpacaOptBars(o.occ, 1440, '1Min');
-        return { s, pts };
-      } catch (e) { return { s, pts: [] }; }
-    }));
+      const liveMark = (o.last > 0 ? o.last : o.prev);     // 实时 mark：曲线末点要对齐它
+      const prevClose = (o.prev > 0 ? o.prev : o.last);     // 昨收：曲线起点基准
+      const undMatch = (o.occ || '').match(/^[A-Z]+/);
+      const undCode = undMatch ? undMatch[0] : null;
+      const undLeg = undCode ? stockLegs.find((l) => l.s && l.s.code === undCode) : null;
+      const undPts = (undLeg && undLeg.pts && undLeg.pts.length) ? undLeg.pts : null;
+      let pts = [];
+      if (undPts && prevClose > 0 && liveMark > 0) {
+        const u0 = undPts[0].price, uLast = undPts[undPts.length - 1].price;
+        const uRange = uLast - u0;
+        const firstTs = undPts[0].ts, lastTs = undPts[undPts.length - 1].ts;
+        const span = lastTs - firstTs;
+        const useShape = Math.abs(uRange) > 1e-9;           // 正股日内有波动才用形状
+        pts = undPts.map((pt) => {
+          const frac = useShape ? (pt.price - u0) / uRange
+            : (span > 0 ? (pt.ts - firstTs) / span : 1);    // 正股平 → 按时间线性（仍末点=liveMark）
+          return { ts: pt.ts, price: Math.max(0, prevClose + (liveMark - prevClose) * frac) };
+        });
+      }   // 无正股序列 / 无实时价 → pts=[]：合成时按 prevOf(=实时mark) 兜底成平线
+      return { s, pts };
+    });
     /* 基金段的成分股 K 线同样**串行**（走 OKX，与正股腿抢同一个限频桶）。 */
     const fundObjsPre = (TRADE_POS.fund || []).filter((f) => f.shares);
     let fundCandleMap = null;
@@ -6420,6 +6415,24 @@ const applyMode = (mode, skipDraw) => {
       return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
     }
 
+    /* 美东时区偏移（小时）：夏令 EDT=4（UTC-4），冬令 EST=5（UTC-5）。
+       仅用于把 OKX(UTC) K 线对齐到「美东 16:00 收盘」。边界按美国规则：
+       3 月第 2 周日 ~ 11 月第 1 周日 为夏令（切换日附近几小时误差可接受）。 */
+    function usEtOffset(d) {
+      const dt = new Date(d);
+      const y = dt.getUTCFullYear();
+      const nthSun = (month, n) => {
+        let c = 0;
+        for (let day = 1; day <= 31; day++) {
+          const x = new Date(Date.UTC(y, month, day));
+          if (x.getUTCDay() === 0 && ++c === n) return x;
+        }
+        return null;
+      };
+      const start = nthSun(2, 2), end = nthSun(10, 1);   // month 0-based：2=3月, 10=11月
+      return (dt >= start && dt < end) ? 4 : 5;
+    }
+
     /* 日期归一化：'2026-10-01'（带横线）与 '20261001'（8 位）两种写法在项目里都存在
        —— qqq_daily 是前者，_daily_quotes / navDate 是后者。比较前必须统一成 8 位字符串。
        ⚠️ 不归一化会全错：'2026-10-01' <= '20260929' 为 true（因为 '1' < '9'），
@@ -6705,27 +6718,48 @@ const applyMode = (mode, skipDraw) => {
               raw: (tj && tj.data && tj.data[0]) ? { code: '0', data: tj.data } : null,
             });
           }
-          let prevClose = null;
+          let prevClose = null, dayClose = null;
           if (needPrev) {
             /* 昨收（1Dutc 日线）**一天只变一次**，却每 15s 拉一次 —— 白占限频桶。
                两层缓存：① 模块级 _tickerCache（15s，跨页面复用）；② okxPrevCache（10 分钟）。
                10 分钟 TTL：跨日切日会自然过期，最坏晚 10 分钟更新一次昨收，可接受。 */
             const tk = _tickerCache.get(inst + '|p');
             if (tk && Date.now() - tk.at < TICKER_TTL) {
-              prevClose = tk.prev;
+              prevClose = tk.prev; dayClose = tk.dayClose;
             } else {
               const hit = okxPrevCache.get(inst);
               if (hit && Date.now() - hit.at < 10 * 60 * 1000) {
-                prevClose = hit.prev;
+                prevClose = hit.prev; dayClose = hit.dayClose;
               } else {
-                const j = await okxGet(`${OKX_API_BASE}/market/candles?instId=${inst}&bar=1Dutc&limit=6`);
-                const rows = ((j && j.data) || []).map((x) => ({
+                /* ① 日线 1Dutc(limit=15)：只取 prevClose（昨收），供个股 % 变化兜底。
+                   ② 分时 1H(limit=300)：提取每个美东交易日 16:00 的 OKX 开盘价，作为基金估值基准
+                      —— 用户 2026-10-08 定：基金净值用的是「美东 16:00 收盘」，而 1Dutc 日线收盘
+                      在美东 20:00（UTC 零点），差 4 小时；必须改用分时柱 16:00 那根。
+                      dayClose 按**美东交易日**归档（与 navDate 做日期比较的语义，沿用原 Alpaca 逻辑）。 */
+                const jd = await okxGet(`${OKX_API_BASE}/market/candles?instId=${inst}&bar=1Dutc&limit=15`);
+                const drows = ((jd && jd.data) || []).map((x) => ({
                   d: new Date(+x[0]).toISOString().slice(0, 10), close: +x[4],
                 })).sort((a, b) => (a.d < b.d ? -1 : 1));
-                for (const r of rows) if (r.d < todayUtc) prevClose = r.close;
-                if (prevClose != null) okxPrevCache.set(inst, { prev: prevClose, at: Date.now() });
+                for (const r of drows) if (r.d < todayUtc) prevClose = r.close;
+
+                const jh = await okxGet(`${OKX_API_BASE}/market/candles?instId=${inst}&bar=1H&limit=300`);
+                const dc = {};
+                for (const x of ((jh && jh.data) || [])) {
+                  const ts = +x[0];                       // 该 1H 柱起点（UTC ms）
+                  const off = usEtOffset(ts);             // 4=EDT / 5=EST
+                  const utcH = new Date(ts).getUTCHours();
+                  /* ET = UTC - off（夏令 off=4）→ 柱起点=美东16:00 时，UTC起点=(16+off)%24。
+                     夏令 UTC 20:00 / 冬令 UTC 21:00 即美东 16:00，取该柱 open 为当日收盘基准。 */
+                  if (utcH === (16 + off) % 24) {
+                    const et = new Date(ts - off * 3600 * 1000);
+                    dc[et.toISOString().slice(0, 10)] = +x[1];   // open = 16:00 ET 价
+                  }
+                }
+                dayClose = dc;
+                const okCache = prevClose != null || (dayClose && Object.keys(dayClose).length);
+                if (okCache) okxPrevCache.set(inst, { prev: prevClose, dayClose, at: Date.now() });
               }
-              if (prevClose != null) _tickerCache.set(inst + '|p', { prev: prevClose, at: Date.now() });
+              if (prevClose != null || (dayClose && Object.keys(dayClose).length)) _tickerCache.set(inst + '|p', { prev: prevClose, dayClose, at: Date.now() });
             }
           }
           /* ⚠️ 这里原来（并发版）是 `return` —— 那是 map 回调的 return，只跳过当前这个
@@ -6736,6 +6770,7 @@ const applyMode = (mode, skipDraw) => {
             VAL_OKX[c] = VAL_OKX[c] || {};
             if (now != null) VAL_OKX[c].now = now;
             if (prevClose != null) VAL_OKX[c].prevClose = prevClose;
+            if (dayClose) VAL_OKX[c].dayClose = dayClose;
           });
         } catch (e) { /* 单个失败就回落腾讯 / 账户价 */ }
       }
@@ -6861,17 +6896,30 @@ const applyMode = (mode, skipDraw) => {
       if (mkt === 'us') {
         const k = code.toUpperCase();
         /* 腾讯 A/C 两类股是两个独立代码，直接按各自代码取即可（不再需要 GOOG→GOOGL 别名） */
-        const q = VAL.txUs[k];                 // Alpaca：base = 净值日那天的收盘
-        /* ⚠️ 现价 = **OKX 永续**，基准 = Alpaca 净值日收盘（用户 2026-10-04 定稿：
-           「持仓里最新价格都用 okx 读，qqq 也是，成分股 nvda 之类也都用 okx，
-             只是基准按照基金最新更新的时间那天的 alpaca 收盘价」）。
-           OKX 永续 7×24 连续报价，**周末/休市也在动**，所以「一动不动」的问题从根上消失；
-           Alpaca 只负责提供那个固定的基准价。
-           取不到 OKX 时依次回落 Alpaca 现价 → OKX 昨收 → 文件日线（`qqqChgOn`）。 */
+        const q = VAL.txUs[k];                 // Alpaca：仅作兜底（OKX 日线没拉到时）
+        /* ⚠️ 2026-10-08：基准 = 「净值日那天的 OKX 美东 16:00 收盘」（用户定稿，彻底脱离 Alpaca）。
+           OKX 美股永续 7×24，loadOkxTradeQuotes 用 1H 拉 limit=300、提取每个美东交易日 16:00 的
+           open 归档进 dayClose（按美东交易日为 key）；dayClose[净值日] 即那天 16:00 ET 收盘，
+           作为估值基准。净值日若恰逢休市（节假日），baseOf 自动回退到之前最近的美东交易日
+           （原 Alpaca 逻辑：取 <= baseDate 的最后一根）。Alpaca 退居最后兜底，不再卡基金估值。 */
         const ok = VAL_OKX[k];
         const now = (ok && ok.now != null) ? ok.now : (q ? q.now : null);
-        if (q && q.base != null && now != null && q.base > 0) return now / q.base - 1;
-        if (ok && ok.now != null && ok.prevClose > 0) return ok.now / ok.prevClose - 1;
+        const bdd = String(baseDate || '').slice(0, 10);   // 净值日（YYYY-MM-DD），与 dayClose key 同格式
+        const baseOf = (dc, key) => {
+          if (dc && dc[key] != null && dc[key] > 0) return dc[key];
+          const p = key.split('-'); if (p.length !== 3) return null;
+          const dt = new Date(Date.UTC(+p[0], +p[1] - 1, +p[2]));
+          for (let s = 1; s <= 10; s++) {            // 向前回退最多 10 天找最近交易日
+            dt.setUTCDate(dt.getUTCDate() - 1);
+            const kk = dt.toISOString().slice(0, 10);
+            if (dc && dc[kk] != null && dc[kk] > 0) return dc[kk];
+          }
+          return null;
+        };
+        const b = ok && ok.dayClose ? baseOf(ok.dayClose, bdd) : null;
+        if (b != null && now != null) return now / b - 1;
+        if (now != null && ok && ok.prevClose > 0) return now / ok.prevClose - 1;   // 退化：OKX 昨收
+        if (q && q.base != null && now != null && q.base > 0) return now / q.base - 1; // 退化：Alpaca 净值日
         if (/^QQQ$/i.test(code)) return qqqChgOn(baseDate);   // 最后兜底：静态文件日线
         return null;
       }
@@ -7151,7 +7199,7 @@ const applyMode = (mode, skipDraw) => {
       /* 后台梯队：谁先到谁补一次估值。**不 await**（这是本次提速的关键）。 */
       const slowLane = () => Promise.all([
         loadUsQuotesAlpaca(usBase),
-        loadOkxTradeQuotes(compo, { nowOnly: true, cacheMs: 60000 }),
+        loadOkxTradeQuotes(compo, { cacheMs: 60000 }),
         loadUsQuotes(usBase),
       ]).catch(() => {});
       slowLane().then(() => {
@@ -7565,7 +7613,7 @@ fundAmount += f.amount;
     withCap(loadOkxTradeQuotes(heldCodes), 6000).then(() => stagePaint());
     /* 基金成分股的实时价也走 OKX（用户 2026-10-04 定稿：持仓里所有最新价格都用 OKX）。
        heldCodes 与成分股代码合并去重，一次拉完；只要现价不拉日线，省一半请求。 */
-    withCap(loadOkxTradeQuotes([...heldCodes, ...usComponentCodes()], { nowOnly: true, cacheMs: 60000, exclude: new Set(heldCodes) }), 6000)
+    withCap(loadOkxTradeQuotes([...heldCodes, ...usComponentCodes()], { cacheMs: 60000, exclude: new Set(heldCodes) }), 6000)
       .then(() => stagePaint());
     /* 第 2 梯队：腾讯 —— 账户页现价的第二级兜底（Alpaca 挂掉时靠它），慢但不阻塞前面 */
     withCap(loadUsQuotes(null, heldCodes), 8000).then(() => stagePaint());
@@ -8169,7 +8217,7 @@ fundAmount += f.amount;
               串行不影响体感。 */
         const pOkx = loadOkxTradeQuotes(held2)
           .then(() => loadOkxTradeQuotes([...held2, ...usComponentCodes()],
-            { nowOnly: true, cacheMs: 60000, exclude: new Set(held2) }));
+            { cacheMs: 60000, exclude: new Set(held2) }));
         const pRest = loadUsQuotesAlpaca(null);
         const pTx = withCap(loadUsQuotes(null, held2), 8000);
         const pAlp = withCap(accAlpacaQuotes(stockSyms, optSyms), 9000);

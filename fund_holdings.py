@@ -851,23 +851,16 @@ EM_PRICE_SCALE = 1000.0        # 美股 f2 是价格 ×1000
 EM_PCT_SCALE = 100.0           # f3 是涨跌幅 ×100
 
 
-def _em_clist(fs, limit, fid="f20", po=1, retries=3, timeout=25, fields=None):
-    """东财 clist/get：按 fid + po 排序取 limit 条。返回 list[原始 dict]，失败 None。
-
-    po=1 降序 / po=0 升序（跌幅榜就要 po=0）。
-    pz 上限实测 100 稳妥（超过会截断/超时），要 150 就分页；这里调用方按需传页号。
-    """
-    if fields is None:
-        fields = "f12,f13,f14,f2,f3,f20,f100"
+def _em_page(fs, pz, pn, fid, po, fields, retries, timeout):
+    """单页请求 + 域名回退（2026-10-08）：主域对 Actions 境外 IP 回 502，
+    每次重试换下一个 host；200 但 diff 为空也算失败继续换。成功返回该页 rows。"""
     last = None
-    # 域名回退（2026-10-08）：主域对 Actions 境外 IP 回 502，每次重试换下一个 host；
-    # 200 但 diff 为空也算失败继续换（防东财个别镜像抽风给空数据）。
     n = len(EM_LIST_HOSTS)
     total = retries * n
     for attempt in range(1, total + 1):
         host = EM_LIST_HOSTS[(attempt - 1) % n]
-        url = (host + "/api/qt/clist/get?pn=1&pz=%d&po=%d&fid=%s&fs=%s&fields=%s"
-               % (limit, po, fid, fs, fields))
+        url = (host + "/api/qt/clist/get?pn=%d&pz=%d&po=%d&fid=%s&fs=%s&fields=%s"
+               % (pn, pz, po, fid, fs, fields))
         try:
             req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
             raw = urllib.request.urlopen(req, timeout=timeout).read().decode("utf-8", "ignore")
@@ -882,9 +875,33 @@ def _em_clist(fs, limit, fid="f20", po=1, retries=3, timeout=25, fields=None):
             last = e
             if attempt < total:
                 time.sleep(1.2 * attempt)   # time 已在文件顶部 import
-    sys.stderr.write("  [东财] 请求失败(%s fid=%s po=%d, %d 次): %s\n"
-                     % (fs, fid, po, total, last))
+    sys.stderr.write("  [东财] 请求失败(%s pn=%d pz=%d fid=%s po=%d, %d 次): %s\n"
+                     % (fs, pn, pz, fid, po, total, last))
     return None
+
+
+def _em_clist(fs, limit, fid="f20", po=1, retries=3, timeout=25, fields=None):
+    """东财 clist/get：按 fid + po 排序取 limit 条。返回 list[原始 dict]，失败 None。
+
+    po=1 降序 / po=0 升序（跌幅榜就要 po=0）。
+    ⚠️ 分页（2026-10-08）：pz 上限实测 100，超了会被**静默截断**（140 只只回 100，
+    之前被 502 掩盖没暴露）——limit>100 自动 pn 翻页取满；某页返回不足说明见底。
+    中间页失败整体返回 None（半份名单比旧名单更糟，见 fetch_us_top 注释）。
+    """
+    if fields is None:
+        fields = "f12,f13,f14,f2,f3,f20,f100"
+    out = []
+    pn = 1
+    while len(out) < limit:
+        pz = min(100, limit - len(out))
+        page = _em_page(fs, pz, pn, fid, po, fields, retries, timeout)
+        if page is None:
+            return None
+        out.extend(page)
+        if len(page) < pz:
+            break                    # 不足整页 = 到底了
+        pn += 1
+    return out[:limit]
 
 
 def _em_clist_po(fs, limit, fid="f20", po=1, retries=3, timeout=25, fields=None):

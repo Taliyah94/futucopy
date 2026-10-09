@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<link rel="preload" href="app.js?v=20261008o" as="script" />
+<link rel="preload" href="app.js?v=20261009i" as="script" />
 <!-- ⚠️ 2026-10-07 用户要求「没读到数据就显示 --，别产生误导」：
      报价头/账户汇总的初始值一律 --（原来是硬编码的 137.790 / +5.190 / +3.91% 等假数字，
      页面刚加载、JS 还没跑到时就会显示出来）。真实值由 renderQuote / 账户页数据填充。 -->
@@ -2198,7 +2198,7 @@ html, body {
           <div class="acc-side__row">
             <svg class="acc-side__spark" viewBox="0 0 100 24" preserveAspectRatio="none"><path id="accSpark" d="" fill="none" stroke="#ff8f1f" stroke-width="1.5"/></svg>
             <div class="acc-side__pnl">
-              <div class="asp-col"><span>今日盈亏</span><div class="asp-vals"><i class="num" id="accTotalNote">--</i><i class="num" id="accTotalNotePct">--</i></div></div>
+              <div class="asp-col"><span id="accTotalPnlLbl">今日盈亏</span><div class="asp-vals"><i class="num" id="accTotalNote">--</i><i class="num" id="accTotalNotePct">--</i></div></div>
               <div class="asp-col"><span>累计盈亏 · TWR</span><div class="asp-vals"><i class="num" id="accTotalCum">--</i><i class="num" id="accTotalCumPct">--</i></div></div>
 </div>
           </div>
@@ -2208,12 +2208,12 @@ html, body {
             <div class="as-group">
               <div class="as-line as-line--3c is-active" data-cat="stock">
                 <div class="asl-col"><span>证券</span><b class="num" id="accStockVal">--</b></div>
-                <div class="asl-col asl-col--r"><span>今日盈亏</span><div class="asl-vals"><i class="num" id="accStockNote">--</i><i class="num" id="accStockPct">--</i></div></div>
+                <div class="asl-col asl-col--r"><span id="accStockPnlLbl">今日盈亏</span><div class="asl-vals"><i class="num" id="accStockNote">--</i><i class="num" id="accStockPct">--</i></div></div>
                 <div class="asl-col asl-col--r"><span>累计盈亏 · TWR</span><div class="asl-vals"><i class="num" id="accStockCum">--</i><i class="num" id="accStockCumPct">--</i></div></div>
 </div>
               <div class="as-line as-line--3c" data-cat="fund">
                 <div class="asl-col"><span>基金</span><b class="num" id="accFundVal">--</b></div>
-                <div class="asl-col asl-col--r"><span>昨日收益</span><div class="asl-vals"><i class="num" id="accFundNote">--</i><i class="num" id="accFundNotePct">--</i></div></div>
+                <div class="asl-col asl-col--r"><span id="accFundPnlLbl">昨日收益</span><div class="asl-vals"><i class="num" id="accFundNote">--</i><i class="num" id="accFundNotePct">--</i></div></div>
                 <div class="asl-col asl-col--r"><span>累计收益 · TWR</span><div class="asl-vals"><i class="num" id="accFundCum">--</i><i class="num" id="accFundCumPct">--</i></div></div>
 </div>
               <div class="as-line as-line--3c" data-cat="cash">
@@ -2857,6 +2857,6 @@ html, body {
 </div>
 </div>
 </div>
-<script defer src="app.js?v=20261008o"></script>
+<script defer src="app.js?v=20261009i"></script>
 </body>
 </html>

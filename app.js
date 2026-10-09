@@ -1418,8 +1418,15 @@ const TICKER_TTL = 15000;
           与汇总框第一行的「账户资产」差额巨大却看不出原因。 */
     let stockNow = 0;
     TRADE_POS.stock.forEach((r) => {
-      const v = r.tradeValueCny != null ? r.tradeValueCny
-        : (r.valueCny != null ? r.valueCny : null);
+      const isOpt = r.h && r.h.opt;
+      /* 期权（用户 2026-10-09 定调）：行内「市值」列用 liveValueCny（实时 Alpaca mid），
+         推算总资产必须同源走 liveValueCny —— 否则汇总末点和行内可见的 -70.37 对不上
+         （tradeValueCny 对期权回退成 pAcct=10-08 收盘，差一截）。
+         取不到实时价时回落 tradeValueCny → valueCny（与行内兜底链一致）。 */
+      const v = isOpt
+        ? (r.liveValueCny != null ? r.liveValueCny
+           : (r.tradeValueCny != null ? r.tradeValueCny : (r.valueCny != null ? r.valueCny : null)))
+        : (r.tradeValueCny != null ? r.tradeValueCny : (r.valueCny != null ? r.valueCny : null));
       if (v != null) stockNow += v;
     });
     let fundNow = 0;
@@ -1453,7 +1460,7 @@ const TICKER_TTL = 15000;
            这样曲线末点能和「推算总资产」对齐），退回昨收 prevClose。
            实测本账号 Alpaca 对期权 1Min/5Min 一律返回空 bars（只有 1Day 有数据），
            所以这条兜底路径是常态，必须用实时价而不是昨收。 */
-        last: (r.pTrade > 0 ? r.pTrade : (r.price > 0 ? r.price : null)),
+        last: (r.livePx > 0 ? r.livePx : (r.pTrade > 0 ? r.pTrade : (r.price > 0 ? r.price : null))),
         prev: r.prevClose,
       })),
       stocks: TRADE_POS.stock.filter((r) => !(r.h && r.h.opt))              // 期权不进 OKX 分钟线腿（已单独走 Alpaca）
@@ -2233,7 +2240,7 @@ const TICKER_TTL = 15000;
       /* 现价 = **OKX 永续**（7×24 连续报价，用户 2026-10-04 定稿）；取不到才回落账户价。
          期权例外（用户 2026-10-06）：OKX/腾讯都没有期权报价，所以期权现价**直接用账户口径**
          （Alpaca snapshots 的 mid），不再走 pTrade —— 数值其实相同，但语义要说清楚。 */
-      price: isOpt ? (r.pAcct != null ? r.pAcct : r.price)
+      price: isOpt ? (r.livePx != null ? r.livePx : (r.pAcct != null ? r.pAcct : r.price))
                    : (r.pTrade != null ? r.pTrade : r.price),
       cur: 'USD',
       /* 涨跌幅 = (OKX 现价 − Alpaca 日K收盘) ÷ 日K收盘（基准见 computeRow 的 pctBase）。
@@ -2242,12 +2249,17 @@ const TICKER_TTL = 15000;
       // 市值按交易页的 OKX 价算（= 现价 × 份额），与「现价」列自洽；
       // 取不到就空着（2026-10-05 起不再用 IBKR 快照市值 posVal0 兜底）
       // 期权走账户口径市值（valueCny），与它的现价列同源。
-      value: isOpt ? (r.valueCny != null ? r.valueCny : null)
+      value: isOpt ? (r.liveValueCny != null ? r.liveValueCny : (r.valueCny != null ? r.valueCny : null))
                    : (r.tradeValueCny != null ? r.tradeValueCny : (r.valueCny != null ? r.valueCny : null)),
       /* 「较基准」盈亏 = (基准价− 现价)× 数量 × 汇率（正股＝日K收盘基准）。
          期权改成**当日盈亏**（todayCny，与账户页同口径）—— 原来的较基准盈亏对期权恒为 0
          （pTrade ��好等于 pAcct），显示 +0.00 没意义。 */
-      pnl: isOpt ? (r.todayCny != null ? r.todayCny : null)
+      /* 期权盈亏 = **相对账户页市值**（用户 2026-10-09 定调）：当前实时市值(liveValueCny)
+         减账户页市值(valueCny，= 报告日 10-08 收盘 × 份额 × 100)。即 (livePx − pAcct)×qty×mult×FX，
+         不再用 todayCny（以 prevClose=10-07 收盘为基准的当日盈亏），也**不**以成本价(cost)为基准。
+         空头期权：livePx 涨 → 负债变大 → 相对账户市值亏（负）；livePx==pAcct 时正好为 0。 */
+      pnl: isOpt ? (r.liveValueCny != null && r.valueCny != null ? (r.liveValueCny - r.valueCny)
+                    : (r.todayCny != null ? r.todayCny : null))
                  : (r.tradeChgCny != null ? r.tradeChgCny : null),
       decimals: (r.mult === 100 ? 3 : 2),
     };});
@@ -3691,18 +3703,15 @@ const TICKER_TTL = 15000;
   /* ===================================================================
      选股器 · 「全部个股」tab：美股市值 top 150（含 OTC / ADR 巨头）
      -------------------------------------------------------------------
-     数据源：`fund_holdings.json` 的 `us_top` 键，由 `fund_holdings.py` 每天抓一次写入
-     （东财 push2 clist/get，按市值 f20 降序；含交易所 140 + OTC/ADR 10）。
+     数据源：浏览器打开页面时**实时**直连东方财富 push2（clist/get，按市值 f20 降序；
+     含交易所 140 + OTC/ADR 10）。不再依赖 fund_holdings.json 落盘快照（2026-10-09 清理）。
      为什么不用 FMP：用户原本指定 FMP，但实测其**免费版取不到 screener**
      （v3 两个命名都 403 Legacy、stable/company-screener 与 batch-quote 都 402 付费墙、
-       company-profile 404），而「全市场按市值排序」只能靠 screener。详见 fund_holdings.py 注释。
+       company-profile 404），而「全市场按市值排序」只能靠 screener。
 
-     ⚠️ 这份文件一天只变一次（workflow 每日提交），所以缓存 30 分钟与 FX 一致；
-        缓存期和源文件都不假装是「实时」—— 表头会显示数据日期（asOf）。
-     ⚠️ 没读到就显示 `--`/空态（与全站「没数据不显示数字」的铁律一致），
+     ⚠️ 东财 push2 为延迟行情（约 15 分钟），故称「实时」是相对每日快照而言。
+     ⚠️ 没读到就显示空态/报错（与全站「没数据不显示数字」的铁律一致），
         绝不拿旧值或占位数字糊弄。 */
-  const US_TOP_KEY = 'us_top';
-  const US_TOP_JSON = 'fund_holdings.json';
   const SCREEN_TABS = {
     'all-stocks': '美股市值 top 150（含 OTC / ADR）',
     'sp-500': 'S&P 500',
@@ -3710,23 +3719,173 @@ const TICKER_TTL = 15000;
     'sectors': '板块',
     'market': '市场',
   };
-  /* 缓存同时装 us_top（美股市值榜）与 us_mkt（市场榜）—— 同一个 json 文件、同一 TTL，
-     所以一次网络读取尽量复用（见 loadUsMkt 末尾）。 */
-  let usTopCache = { at: 0, data: null, mktAt: 0, mkt: null };
-  const US_TOP_CACHE_MS = 30 * 60 * 1000;
+  /* 实时数据内存缓存（EM_LIVE_TTL），避免反复打东财；fetch 失败直接报错不回退快照。 */
+
+  /* ===================================================================
+     浏览器实时拉东财（JSONP）：选股器「全部个股」+「市场」由前端浏览器直连东财 push2 拉取，
+     不依赖任何落盘快照。东财接口无 CORS 头，故走 JSONP 注入 <script>（cb= 全局回调）绕开同源策略
+     —— 东财自身网页与第三方嵌入均用此方式。
+     ⚠️ 东财 push2 本身为延迟行情（约 15 分钟），故称「实时」是相对每日快照而言。
+     ⚠️ JSONP 可能因东财 Referer 策略/网络在个别环境被拦，此时直接显示空态报错，不回退本地文件。 */
+  /* 东财 clist 多镜像节点：82.push2 是美股数据节点（本机 curl 已验证可达、按市值返回美股），
+     push2 主域在部分网络/节点下返回的并非美股（实测 b:MK0021 返回 ETF），故把 82.push2 放最前；
+     其余节点作为回退。emJsonp 会依次尝试，第一个返回有效 data.diff 的节点即用。 */
+  const EM_HOSTS = [
+    'https://82.push2.eastmoney.com',
+    'https://7.push2.eastmoney.com',
+    'https://14.push2.eastmoney.com',
+    'https://push2.eastmoney.com',
+    'https://push2delay.eastmoney.com',
+  ];
+  const EM_FS_EXCH = 'm:105,m:106,m:107';
+  const EM_FS_OTC = 'm:153';
+  const EM_TOP_FIELDS = 'f12,f13,f14,f2,f3,f20,f100';
+  const EM_MKT_FIELDS = 'f12,f13,f14,f2,f3,f6,f8';
+  const EM_LIVE_TTL = 2 * 60 * 1000;       // 实时数据内存缓存 2 分钟，避免反复打东财
+  let emLiveTop = { at: 0, data: null };
+  let emLiveMkt = { at: 0, data: null };
+  const emLiveInFlight = { top: null, mkt: null };
+
+  function emNum(v) {
+    if (typeof v === 'number') return v;
+    if (v == null) return null;
+    const n = parseFloat(v);
+    return isFinite(n) ? n : null;
+  }
+  /* 单次 JSONP（一个 host）：注入 <script>，cb= 全局回调；超时/出错 reject。 */
+  function emJsonpOne(url, timeoutMs) {
+    return new Promise((resolve, reject) => {
+      const cb = 'emjp_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+      const sep = url.indexOf('?') >= 0 ? '&' : '?';
+      const s = document.createElement('script');
+      let done = false;
+      const clean = () => { try { delete window[cb]; } catch (e) {} if (s.parentNode) s.parentNode.removeChild(s); };
+      const timer = setTimeout(() => {
+        if (done) return; done = true; clean();
+        reject(new Error('em jsonp timeout'));
+      }, timeoutMs || 15000);
+      window[cb] = (data) => {
+        if (done) return; done = true; clearTimeout(timer); clean();
+        resolve(data);
+      };
+      s.onerror = () => {
+        if (done) return; done = true; clearTimeout(timer); clean();
+        reject(new Error('em jsonp error'));
+      };
+      s.src = url + sep + 'cb=' + cb;
+      (document.head || document.body).appendChild(s);
+    });
+  }
+  /* 多镜像回退：query 为不含 host 的查询串（以 ? 开头）；依次试 EM_HOSTS，
+     第一个返回有效数据（data.diff 非空）即 resolve；全部失败 reject。 */
+  async function emJsonp(query, timeoutMs) {
+    const per = Math.min(timeoutMs || 15000, 6000);
+    let lastErr = null;
+    for (const host of EM_HOSTS) {
+      try {
+        const d = await emJsonpOne(host + '/api/qt/clist/get' + query, per);
+        if (d && d.data && d.data.diff) return d;
+        lastErr = new Error('em empty diff');
+      } catch (e) { lastErr = e; }
+    }
+    throw lastErr || new Error('em jsonp all hosts failed');
+  }
+  /* 从 clist 响应里抽出原始行数组（diff 可能是对象或数组） */
+  function emDiff(d) {
+    const diff = d && d.data && d.data.diff;
+    if (!diff) return [];
+    const rows = (diff && typeof diff === 'object' && !Array.isArray(diff))
+      ? Object.values(diff) : (Array.isArray(diff) ? diff : []);
+    return rows.filter((r) => r && typeof r === 'object');
+  }
+  function emNormTop(rows) {
+    const out = [];
+    for (const r of rows) {
+      const code = (r.f12 == null ? '' : String(r.f12)).trim();
+      if (!code) continue;
+      const mkt = parseInt(r.f13, 10) || 0;
+      const f2 = emNum(r.f2), f3 = emNum(r.f3), f20 = emNum(r.f20);
+      out.push({
+        c: code,
+        n: (r.f14 == null ? '' : String(r.f14)).trim(),
+        m: mkt,
+        p: f2 != null ? +(f2 / 1000).toFixed(4) : null,
+        pct: f3 != null ? +(f3 / 100).toFixed(2) : null,
+        mc: f20 != null ? Math.round(f20) : null,
+        ind: (r.f100 == null ? '' : String(r.f100)).trim() || null,
+        otc: mkt === 153,
+      });
+    }
+    return out;
+  }
+  function emNormMkt(rows) {
+    const out = [];
+    for (const r of rows) {
+      const code = (r.f12 == null ? '' : String(r.f12)).trim();
+      if (!code) continue;
+      const mkt = parseInt(r.f13, 10) || 0;
+      const f2 = emNum(r.f2), f3 = emNum(r.f3), f6 = emNum(r.f6), f8 = emNum(r.f8);
+      out.push({
+        c: code,
+        n: (r.f14 == null ? '' : String(r.f14)).trim(),
+        m: mkt,
+        p: f2 != null ? +(f2 / 1000).toFixed(4) : null,
+        pct: f3 != null ? +(f3 / 100).toFixed(2) : null,
+        vol: f6 != null ? Math.round(f6) : null,
+        amt: f8 != null ? Math.round(f8) : null,
+      });
+    }
+    return out;
+  }
+  async function emLiveFetchTop() {
+    if (emLiveInFlight.top) return emLiveInFlight.top;
+    emLiveInFlight.top = (async () => {
+      const exQ = (pn, pz) => '?pn=' + pn + '&pz=' + pz + '&po=1&fid=f20&fs=' + EM_FS_EXCH + '&fields=' + EM_TOP_FIELDS;
+      const otcQ = '?pn=1&pz=10&po=1&fid=f20&fs=' + EM_FS_OTC + '&fields=' + EM_TOP_FIELDS;
+      const [ex1, ex2, otcRaw] = await Promise.all([
+        emJsonp(exQ(1, 100), 9000),
+        emJsonp(exQ(2, 40), 9000),
+        emJsonp(otcQ, 9000),
+      ]);
+      const exRaw = emDiff(ex1).concat(emDiff(ex2));
+      const otc = emDiff(otcRaw);
+      if (!exRaw.length || !otc.length) throw new Error('东财市值榜缺页');
+      const all = emNormTop(exRaw).concat(emNormTop(otc));
+      all.sort((a, b) => -(a.mc || 0) + (b.mc || 0));
+      return { asOf: new Date().toISOString(), source: 'eastmoney live jsonp', rows: all.slice(0, 150) };
+    })().finally(() => { emLiveInFlight.top = null; });
+    return emLiveInFlight.top;
+  }
+  async function emLiveFetchMkt() {
+    if (emLiveInFlight.mkt) return emLiveInFlight.mkt;
+    emLiveInFlight.mkt = (async () => {
+      const cfgs = [['turnover', 'f6', 1], ['gainer', 'f3', 1], ['loser', 'f3', 0]];
+      const boards = {};
+      const got = await Promise.all(cfgs.map(([key, fid, po]) => {
+        const u = '?pn=1&pz=10&po=' + po + '&fid=' + fid + '&fs=' + EM_FS_EXCH + '&fields=' + EM_MKT_FIELDS;
+        return emJsonp(u, 9000).then((d) => ({ key, rows: emNormMkt(emDiff(d)).slice(0, 10) }))
+          .catch(() => null);
+      }));
+      got.forEach((g) => { if (g && g.rows.length) boards[g.key] = g.rows; });
+      if (!Object.keys(boards).length) throw new Error('东财市场榜全空');
+      return { asOf: new Date().toISOString(), source: 'eastmoney live jsonp', boards };
+    })().finally(() => { emLiveInFlight.mkt = null; });
+    return emLiveInFlight.mkt;
+  }
+  /* 页面加载即后台预拉，打开选股器时大概率已在内存（仍受 EM_LIVE_TTL 约束） */
+  function prefetchScreener() {
+    emLiveFetchTop().catch(() => {});
+    emLiveFetchMkt().catch(() => {});
+  }
 
   async function loadUsTop(force) {
-    if (!force && usTopCache.data && Date.now() - usTopCache.at < US_TOP_CACHE_MS) return usTopCache.data;
-    const r = await Promise.race([
-      fetch(US_TOP_JSON + '?t=' + Date.now()),
-      new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 12000)),
-    ]);
-    if (!r.ok) throw new Error('fund_holdings.json http ' + r.status);
-    const d = await r.json();
-    const src = d && d[US_TOP_KEY];
-    if (!src || !Array.isArray(src.rows) || !src.rows.length) throw new Error('us_top 缺失或为空');
-    usTopCache = { at: Date.now(), data: src };
-    return src;
+    // 浏览器实时拉东财（JSONP）；失败直接抛错，不回退本地快照
+    if (!force && emLiveTop.data && Date.now() - emLiveTop.at < EM_LIVE_TTL) {
+      return Object.assign({}, emLiveTop.data, { live: true });
+    }
+    const d = await emLiveFetchTop();
+    emLiveTop = { at: Date.now(), data: d };
+    return Object.assign({}, d, { live: true });
   }
 
   /* 大市值用「万亿 / 亿」中文单位，比 5719653000000 这种原始数字好读一个量级 */
@@ -3739,16 +3898,8 @@ const TICKER_TTL = 15000;
   }
 
   /* ---------------- 市场榜（选股器「市场」tab）----------------
-     成交榜 / 涨幅榜 / 跌幅榜，各 top 10 —— 同一份 fund_holdings.json 的 us_mkt 键
-     （与美股市值榜同一文件、同一次 workflow 更新，所以共用 US_TOP_JSON 与 30 分钟缓存）。
-
-     ⚠️ 为什么是「每天一次快照」而不是前端实时拉东财：
-        东财 push2 **技术上允许浏览器直连**（实测 OPTIONS 预检回显 ACAO），
-        但本机实测它的 DNS 首选 IPv6（2402:4e00:… trafficmanager.cn）而 IPv6 通路有问题 →
-        `net::ERR_EMPTY_RESPONSE` / curl 000，**同一时刻 fund.eastmoney.com 完全正常**。
-        用户的浏览器可能命中同样问题，所以不赌前端直连，统一走 workflow 落文件。
-        页面上的 asOf 会明确显示数据日期，不假装是实时。 */
-  const US_MKT_KEY = 'us_mkt';
+     成交榜 / 涨幅榜 / 跌幅榜，各 top 10 —— 与「全部个股」共用同一套浏览器实时东财 JSONP
+     （emLiveFetchMkt），不再依赖 fund_holdings.json 落盘快照（2026-10-09 清理）。 */
   /* 三栏的展示顺序 = 用户指定顺序：成交榜、涨幅榜、跌幅榜 */
   const US_MKT_BOARDS = [
     { key: 'turnover', label: '成交榜', hint: '按成交量' },
@@ -3771,29 +3922,13 @@ const TICKER_TTL = 15000;
   }
 
   async function loadUsMkt(force) {
-    if (!force && usTopCache.mkt && Date.now() - usTopCache.mktAt < US_TOP_CACHE_MS) return usTopCache.mkt;
-    const r = await Promise.race([
-      fetch(US_TOP_JSON + '?t=' + Date.now()),
-      new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 12000)),
-    ]);
-    if (!r.ok) throw new Error('fund_holdings.json http ' + r.status);
-    const d = await r.json();
-    const src = d && d[US_MKT_KEY];
-    if (!src || !src.boards || !Object.keys(src.boards).length) throw new Error('us_mkt 缺失或为空');
-    // 与 us_top 共用一次网络读取：谁先读谁缓存，另一路复用（同一份 json、同一 TTL）
-    if (!usTopCache.data || Date.now() - usTopCache.at >= US_TOP_CACHE_MS) {
-      const t = d && d[US_TOP_KEY];
-      if (t && Array.isArray(t.rows) && t.rows.length) {
-        usTopCache = { at: Date.now(), data: t, mkt: src, mktAt: Date.now() };
-      } else {
-        usTopCache.mkt = src;
-        usTopCache.mktAt = Date.now();
-      }
-    } else {
-      usTopCache.mkt = src;
-      usTopCache.mktAt = Date.now();
+    // 浏览器实时拉东财（JSONP）；失败直接抛错，不回退本地快照
+    if (!force && emLiveMkt.data && Date.now() - emLiveMkt.at < EM_LIVE_TTL) {
+      return Object.assign({}, emLiveMkt.data, { live: true });
     }
-    return src;
+    const d = await emLiveFetchMkt();
+    emLiveMkt = { at: Date.now(), data: d };
+    return Object.assign({}, d, { live: true });
   }
 
   async function renderUsMarket() {
@@ -3806,11 +3941,12 @@ const TICKER_TTL = 15000;
       data = await loadUsMkt(false);
     } catch (e) {
       host.innerHTML = '<div class="screen-empty">市场榜读取失败：' + cpEsc(String(e.message || e))
-        + '<br>（数据由每日 workflow 写入 fund_holdings.json，若当天还没跑过会是这样）</div>';
+        + '<br>（实时东财拉取失败，可稍后刷新重试）</div>';
       return;
     }
     const boards = data.boards || {};
     const asOf = data.asOf ? String(data.asOf).slice(0, 10) : '';
+    const srcTag = '浏览器实时（东财 push2，延迟约 15 分钟）';
     const cells = US_MKT_BOARDS.map((b) => {
       const rows = boards[b.key] || [];
       const head = `<div class="mkt__hd">${cpEsc(b.label)}<i>${cpEsc(b.hint)}</i></div>`;
@@ -3843,7 +3979,7 @@ const TICKER_TTL = 15000;
         <b>成交榜 / 涨幅榜 / 跌幅榜</b>
         <span>各 top ${(boards.turnover || boards.gainer || boards.loser || []).length} · 覆盖美股三大交易所</span>
         ${asOf ? `<span>数据日期 ${asOf}</span>` : ''}
-        <span class="screen-bar__src">来源：东方财富（每日 workflow 更新，非实时）</span>
+        <span class="screen-bar__src">来源：东方财富（${srcTag}）</span>
       </div>
       <div class="mkt">${cells}</div>`;
   }
@@ -3858,18 +3994,19 @@ const TICKER_TTL = 15000;
       data = await loadUsTop(false);
     } catch (e) {
       host.innerHTML = '<div class="screen-empty">美股榜读取失败：' + cpEsc(String(e.message || e))
-        + '<br>（数据由每日 workflow 写入 fund_holdings.json，若当天还没跑过会是这样）</div>';
+        + '<br>（实时东财拉取失败，可稍后刷新重试）</div>';
       return;
     }
     const rows = data.rows || [];
     const asOf = data.asOf ? String(data.asOf).slice(0, 10) : '';
+    const srcTag = '浏览器实时（东财 push2，延迟约 15 分钟）';
     const nOtc = rows.filter((x) => x.otc).length;
     host.innerHTML = `
       <div class="screen-bar">
         <b>共 ${rows.length} 只</b>
         <span>其中 OTC / ADR ${nOtc} 只</span>
         ${asOf ? `<span>数据日期 ${asOf}</span>` : ''}
-        <span class="screen-bar__src">来源：东方财富（每日 workflow 更新，非实时）</span>
+        <span class="screen-bar__src">来源：东方财富（${srcTag}）</span>
       </div>
       <div class="us-top">
         <div class="us-top__hd"><span>#</span><span>代码</span><span>名称</span>
@@ -3912,6 +4049,9 @@ const TICKER_TTL = 15000;
       renderScreenTab(b.dataset.screenKey);
     });
   })();
+
+  // 选股器：页面加载即后台实时预拉东财（打开 tab 时大概率已在内存，仍受 EM_LIVE_TTL 约束）
+  prefetchScreener();
 
     // 支持 #account / #trade 直达（用正则取 hash，避免带上后面的查询串）
     const hash = (location.hash || '').replace(/^#/, '').split('?')[0];
@@ -4582,7 +4722,7 @@ const applyMode = (mode, skipDraw) => {
         抓取侧：财政部 XML **一次只给一年**（?field_tdr_date_value=2026），所以 fund_holdings.py
         按年份分段请求再合并，起点 2025-01-02 与 usdcnh_daily / qqq_daily 对齐。 */
   const UST_KEY = 'ust10y_daily';   // fund_holdings.json 顶层键（非基金代码，遍历时忽略）
-  // ⚠️ 用 FX_JSON 而不是选股器那个 US_TOP_JSON —— 后者定义在另一个作用域块里，这里取不到（ReferenceError 过一次）
+  // ⚠️ 共用 FX_JSON 这个 fund_holdings.json 常量（账户/行情区定义，全站唯一入口）
   let ustCache = { at: 0, rows: null };
   const UST_CACHE_MS = 30 * 60 * 1000;   // 与 FX 一致：源文件一天才变一次
   async function loadUsTreasurySeries() {
@@ -5686,7 +5826,7 @@ const applyMode = (mode, skipDraw) => {
       /* 基金当日值：`fundByDate`（detailState.fund = nav 文件的最后一条）。
          ⚠️ 2026-10-07（用户「收益日历金额又和累计盈亏不一致了，累计盈亏是对的」）：
             QDII 净值 T+2 滞后，`detailState.fund` 的最后一条往往停在两天前，
-            而侧栏「基金」市值用的是**最新净值**（pingzhongdata / fund_holdings）。
+            而侧栏「基金」市值用的是**最新净值**（f10/lsjz 实时接口 / fund_holdings）。
             于是日历累计比侧栏少一截（实测 157,857 vs 167,848，差 ≈9,992）。
             修法：在**最新净值日**那一天把基金段替换成侧栏的实时市值 CAL_FUND_LIVE.amount，
             这样末值同源、累计就对上了。⚠️ 只替换「最新净值日」这一天，不动更早的历史
@@ -6413,86 +6553,55 @@ const applyMode = (mode, skipDraw) => {
           alpacaPaged(`${ACC_API}/v1beta1/options/bars?symbols=${optSyms.join(',')}&timeframe=1Day&start=${start}&limit=30`, 'bars', 3), 9000,
         )        .then((bars) => {
           for (const [k, v] of Object.entries(bars || {})) {
-            /* 期权同样存 dayClose（日线最后一根收盘）—— 夜盘分支要把今日盈亏基准换成它。 */
+            /* 期权同样存 dayClose + **series**（2026-10-09）：报告日收盘口径要从期权日线里
+               取「≤报告日」那根，与正股同款；只有 dayClose 不够（报告日≠最后一根时取不到）。 */
             const [now, prev] = prevCloseOf(v);
-            put(res.opt, k, { prevClose: prev, dayClose: now });
+            const series = {};
+            (v || []).forEach((b) => { if (b && b.t) series[String(b.t).slice(0, 10)] = b.c; });
+            put(res.opt, k, { prevClose: prev, dayClose: now, series });
           }
         }),
       ]);
-      /* 夜盘（ET 20:00–04:00）→ 用**隔夜场** snapshot 覆盖现价。
-         为什么必须放在 Promise.all **之后**：夜盘时 SIP 那一根日线停在上一交易日收盘（不动），
-         若两条并行，谁后写谁赢 → 会出现「有时夜盘价、有时收盘价」的抖动。串在后面才确定。
-         盘中/盘前/盘后不进来，保持「账户账面 = SIP 全市场收盘」的口径不变。 */
-      /* ⚠️ 夜盘的「今日」已经是**下一个交易日**（用户 2026-10-07 定稿：
-         「夜盘开始应该就算下一天 10-7 的今日盈亏了吧。上一天 10-6 的盘后已经结束了，
-          已经有 alpaca 日 k 收盘价了」）。
-         → 今日盈亏基准从「倒数第二根日K」（= 上上交易日收盘）换成**最近一根日K收盘**
-           （= 上一交易日收盘，SIP 日线此刻就停在它不动）。这样：
-           · 正股：今日盈亏 =（夜盘实时价 − 上一交易日收盘）→ 夜盘一开盘就从 0 起算新一天；
-           · 期权：没有夜盘、价格冻结在收盘 → 基准同样换成最近一根后今日盈亏归 0，
-             不再挂着旧基准「把上一交易日的涨跌重复算进新一天」。 */
-      if (inEtNight()) {
-        if (stockSyms.length) {
-          const snaps = await accRace(
-            accJson(`${ACC_API}/v2/stocks/snapshots?symbols=${stockSyms.join(',')}&feed=overnight`, { headers: ACC_HDR }),
-            9000,
-          );
-          /* ⚠️ 这个端点的响应是 **{SYMBOL:{...}} 直接摊在顶层**（不是 {snapshots:{...}}）。 */
-          for (const [k, s] of Object.entries(snaps || {})) {
-            if (!s) continue;
-            const p = (s.minuteBar && s.minuteBar.c > 0 ? s.minuteBar.c
-              : (s.dailyBar && s.dailyBar.c > 0 ? s.dailyBar.c : null));
-            if (p) put(res.stock, k, { price: p, overnight: true });
-            /* 基准切换：优先 bars 那路存下的 dayClose（SIP 日线最后一根），
-               拿不到（bars 超时）再退 snapshot 自带的 dailyBar，都没有就维持旧基准。 */
-            const dayC = (res.stock[k] && res.stock[k].dayClose > 0) ? res.stock[k].dayClose
-              : (s.dailyBar && s.dailyBar.c > 0 ? s.dailyBar.c : null);
-            if (dayC) put(res.stock, k, { prevClose: dayC });
-          }
-        }
-        /* 期权没有夜盘：把今日盈亏基准换成最近一根日K收盘（上一交易日收盘）。
-           价格冻结在收盘 → 夜盘期间期权今日盈亏显示 0（真实状态）。 */
-        for (const o of Object.values(res.opt)) {
-          if (o && o.dayClose > 0) o.prevClose = o.dayClose;
-        }
-      }
+      /* ⚠️ 夜盘覆盖块已删（2026-10-09 用户定稿「不再显示实时价」）：原逻辑在 ET 20:00-04:00
+         用 overnight snapshot 的隔夜实时价覆盖现价、并把盈亏基准切到最近日K ——
+         现在账户价恒为「报告日日K收盘」（见 computeRow ①′），报告日切换由
+         accReportDate()（美东 20:00 界）统一处理，夜盘实时价不再进任何数字。 */
       return res;
     }
 
-    /* ---- 东方财富 pingzhongdata（script 标签引入，免 CORS）取最新两日净值 ----
-       返回 [最新净值, 前一日净值, 净值日期文本]。
-       ⚠️ QDII 基金净值有 1~3 天滞后，必须把日期带出来让用户看到数据到几号。 */
+    /* ---- 东方财富 f10/lsjz 历史净值 API（JSONP script 标签，免 CORS）取最新两日净值 ----
+       返回 [最新净值, 前一日净值, 净值日期文本]。⚠️ QDII 净值滞后 1~3 天，日期必须带出来。
+       2026-10-09 弃用 pingzhongdata/<code>.js（整包 300KB+，含全历史净值/持仓/评级一堆用不到的），
+       改走轻量接口 api.fund.eastmoney.com/f10/lsjz（实测 pageSize=3 响应 <1KB）。
+       ⚠️ 该接口裸请求回 ErrCode:-999，要求**存在 Referer 头**（内容不限，本地/https 页面都行，
+          script 标签自动带页面 Referer）；不支持 CORS 头，但支持 callback= JSONP —— 走 JSONP。
+       LSJZList 按日期倒序：[0] 最新、[1] 前一日。FSRQ=日期(YYYY-MM-DD)、DWJZ=单位净值。 */
     function accFundNav(code) {
       return new Promise((resolve) => {
+        const cbName = '_emLsjz' + String(code).replace(/\W/g, '') + '_' + Date.now();
         const s = document.createElement('script');
-        s.src = 'https://fund.eastmoney.com/pingzhongdata/' + code + '.js';
         let settled = false;
         const finish = (l, p, d) => {
           if (settled) return;
           settled = true;
           s.remove();
-          try { delete window.Data_netWorthTrend; } catch (e) { window.Data_netWorthTrend = undefined; }
+          try { delete window[cbName]; } catch (e) { window[cbName] = undefined; }
           resolve([l, p, d || null]);
         };
-        s.onload = () => {
-          const arr = window.Data_netWorthTrend;
-          // Data_netWorthTrend 每项是 { x: 时间戳(ms), y: 净值 }
-          if (arr && arr.length >= 2) finish(arr[arr.length - 1].y, arr[arr.length - 2].y, navDate(arr[arr.length - 1].x));
-          else finish(null, null);
+        window[cbName] = (json) => {
+          try {
+            const list = json && json.Data && json.Data.LSJZList;
+            if (list && list.length >= 2 && +list[0].DWJZ > 0 && +list[1].DWJZ > 0) {
+              finish(+list[0].DWJZ, +list[1].DWJZ, list[0].FSRQ);   // FSRQ 本身就是 'YYYY-MM-DD'
+            } else finish(null, null);
+          } catch (e) { finish(null, null); }
         };
         s.onerror = () => finish(null, null);
         setTimeout(() => finish(null, null), 4000);
+        s.src = 'https://api.fund.eastmoney.com/f10/lsjz?fundCode=' + code
+              + '&pageIndex=1&pageSize=3&callback=' + cbName + '&_=' + Date.now();
         document.head.appendChild(s);
       });
-    }
-
-    /* 净值时间戳 → 'MM-DD' 或 'YYYY-MM-DD'（按东财口径，x 是当日 0 点） */
-    function navDate(ts) {
-      const n = Number(ts);
-      if (!isFinite(n) || n <= 0) return null;
-      const d = new Date(n);
-      if (isNaN(d.getTime())) return null;
-      return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
     }
 
     /* 美东时区偏移（小时）：夏令 EDT=4（UTC-4），冬令 EST=5（UTC-5）。
@@ -7291,7 +7400,7 @@ const applyMode = (mode, skipDraw) => {
                navEst: f.navL != null ? f.navL * (1 + chg) : null };
     }
 
-    /* ---- 基金：份额 × 最新净值（pingzhongdata，失败回退 fund_holdings.json） ---- */
+    /* ---- 基金：份额 × 最新净值（f10/lsjz 实时接口，失败回退 fund_holdings.json） ---- */
     const funds = (seed.pa_funds || []).map((f) => {
       const t = (f.trades && f.trades[0]) || {};
       return { code: f.code, name: f.name, shares: t.shares || 0, cost: t.price || 0, navL: null, navP: null,
@@ -7313,7 +7422,7 @@ const applyMode = (mode, skipDraw) => {
       if (typeof rebuildAoDist === 'function') rebuildAoDist();
       if (typeof refreshAoTail === 'function') refreshAoTail();
     }).catch(() => {});
-    /* 6 只基金的 pingzhongdata 并行拉取 —— 原来串行时每只不可达要等 8s 超时，
+    /* 6 只基金净值并行拉取 —— 原来串行时每只不可达要等 8s 超时，
        6×8=48s，导致「总资产」要半分钟才出数（基金/现金反而是齐的）。
        并行后总耗时 = 最慢的那一只。 */
     await Promise.all(funds.map(async (f) => {
@@ -7403,7 +7512,7 @@ fundAmount += f.amount;
     /* 把基金实时口径发布出去，供**收益日历**对齐末值（用户 2026-10-07 16:32 反馈：
        「收益日历金额又和累计盈亏不一致了，累计盈亏是对的」）。
        差 ~9,992 的原因：日历的基金段读 `detailState.fund`（= fund_holdings.json 的 nav
-       最后一条，QDII 净值 T+2 会滞后一到两天），而侧栏这里用的是 pingzhongdata /
+       最后一条，QDII 净值 T+2 会滞后一到两天），而侧栏这里用的是 f10/lsjz 实时接口 /
        fund_holdings 里的**最新净值**。两者末值不同 → 累计差一截。
        发布两样：总市值 fundAmount（直接对标侧栏）、以及每只基金的最新净值日
        navDateToday（日历要把该日的基金段值替换成实时市值才同源）。 */
@@ -7440,6 +7549,12 @@ fundAmount += f.amount;
          QDII 各基金滞后天数不同，集中取「最旧」那个会掩盖差异）。见 fund 渲染器里的 td-navdate。 */
       setTxt('accFundVal', f2(fundAmount));
       setTxt('accFundNote', f2(fundYesterday, true), fundYesterday);
+      /* 标签（2026-10-09 用户定稿）：「昨日收益」→「收益（10-08）」，日期 = **最新净值日**
+         （各基金各自的 navDate 取最新；净值还没拉到时维持「昨日收益」）。 */
+      const navDays = funds.map((f) => f.navDate).filter(Boolean).sort();
+      const fDay = navDays.length ? navDays[navDays.length - 1] : null;
+      const lbFund = $id('accFundPnlLbl');
+      if (lbFund) lbFund.textContent = fDay ? '收益（' + fDay.slice(5) + '）' : '昨日收益';
       // 昨日涨跌幅 = 昨日收益 ÷ 昨日市值（今日市值 − 昨日收益）
       const fundYestBase = fundAmount - fundYesterday;
       setTxt('accFundNotePct', fundYestBase ? pctS(fundYesterday / fundYestBase) : '--', fundYesterday);
@@ -7600,6 +7715,45 @@ fundAmount += f.amount;
     const ibkrInterest = +asset.ibkrAccruedInterest || 0;
     const ibkrCashAll = ibkrCash + ibkrInterest;
 
+    /* ---- 报告交易日（2026-10-09 用户定稿）----
+       以**美东 20:00** 为界：当前 ET 已过当日 20:00 → 报告日 = 当日；否则 = 前一日。
+       例：ET 10-09 上午（未到 20:00）→ 报告日 10-08；ET 10-09 21:00 → 报告日 10-09。
+       这与「1D 窗口起点 = 最近一个 ET 20:00」（etLast20Ts）同一条界。
+       周末回退到周五（美股无交易；具体某日是假日时由日K序列自然再退一天）。
+       60s 记忆化：computeRow 每行每刷都调，别反复做时区换算。 */
+    let _repDate = { at: 0, v: null };
+    function accReportDate() {
+      if (_repDate.v && Date.now() - _repDate.at < 60000) return _repDate.v;
+      const t20 = etLast20Ts(Date.now());                     // 最近一个已过的 ET 20:00
+      const off = usEtOffset(new Date(t20));
+      const loc = new Date(t20 - off * 3600e3);               // UTC 字段即 ET 钟面
+      let y = loc.getUTCFullYear(), m = loc.getUTCMonth(), d = loc.getUTCDate();
+      const wd = new Date(Date.UTC(y, m, d)).getUTCDay();
+      if (wd === 0) d -= 2; else if (wd === 6) d -= 1;        // 周日/周六 → 周五
+      const dt = new Date(Date.UTC(y, m, d));
+      _repDate = { at: Date.now(),
+        v: dt.getUTCFullYear() + '-' + String(dt.getUTCMonth() + 1).padStart(2, '0') + '-' + String(dt.getUTCDate()).padStart(2, '0') };
+      return _repDate.v;
+    }
+
+    /* 证券侧的**实际日期**（renderStockSum 与 renderAccTotal 共用，2026-10-09）：
+       报告日碰上美股假日/日线未更新时，以各持仓日K里 ≤报告日 的**最新一根**为准 ——
+       这也是「盈亏（MM-DD）」标签实际显示的日期。 */
+    function stockActualDay() {
+      let day = accReportDate();
+      let actual = null;
+      rows.forEach((r) => {
+        const ser = r.series;
+        if (!ser) return;
+        const keys = Object.keys(ser).sort();
+        let last = null;
+        for (let i = 0; i < keys.length; i++) { if (keys[i] <= day) last = keys[i]; else break; }
+        if (last && (!actual || last > actual)) actual = last;
+      });
+      if (actual) day = actual;
+      return day;
+    }
+
     let rtPosVal = 0, todayPnlUsd = 0;
     const stockTbody = $id('stockTbody');
     const rows = [];
@@ -7608,10 +7762,11 @@ fundAmount += f.amount;
        （用户 2026-10-04 报「现价还是 142.41」）。刷新时用 Object.assign 原地更新，
        rows 的元素引用不变，ACC_RENDERERS.stock / TRADE_POS.stock 都能看到新值。 */
     const computeRow = (h, qq) => {
-      let pAcct = null, prevClose = null, qty = 0, cost = 0, mult = 1, src = '';
+      let pAcct = null, prevClose = null, qty = 0, cost = 0, mult = 1, src = '', livePx = null;
       if (h.opt) {
         const o = (qq && qq.opt && qq.opt[h.occ]) || {};
         pAcct = o.price; prevClose = o.prevClose;
+        livePx = o.price;          // 期权实时价 = Alpaca snapshot mid（持仓视图用；账户页仍用 pAcct 报告日收盘）
         qty = h.pos; cost = h.cost; mult = 100;
       } else if (h.tqqqShares != null) {
         const s = (qq && qq.stock && qq.stock[h.code]) || {};
@@ -7635,7 +7790,35 @@ fundAmount += f.amount;
          ⚠️ 绝不能把 `seed.pa_us[0].price`（= 71.69，建仓当时的旧价）当兜底 ——
             那会算出「看着正常但完全错误」的数字（TQQQ 真实 81.01，市值差 3,585）。 */
       const k = String(h.code || '').toUpperCase();
-      if (pAcct > 0) src = ((qq && qq.stock && qq.stock[k] && qq.stock[k].overnight) ? 'Alpaca 隔夜' : 'Alpaca');
+      /* ①′ **报告日收盘口径**（2026-10-09 用户定稿）：账户页现价/今日盈亏只认 Alpaca
+         「报告交易日」的日K收盘，**不再显示实时价**。
+         现价 = ≤报告日 的最后一根日K收盘；今日盈亏基准 = 它的**前一根**（报告前一交易日收盘）。
+         → 「今日盈亏」实际是「报告日盈亏」（标签同步改「盈亏（MM-DD）」）。
+         期权同理用期权日线 series（snapshot 的实时 mid 弃用）。
+         日线缺失（Alpaca 挂了）→ 保持 QBOX 旧值不动（数字不闪跳）。 */
+      const repDate = accReportDate();
+      const seriesClose = (ser) => {
+        const keys = Object.keys(ser).sort();
+        let ci = -1;
+        for (let i = 0; i < keys.length; i++) { if (keys[i] <= repDate) ci = i; else break; }
+        return ci >= 0 ? { close: ser[keys[ci]], prev: ci >= 1 ? ser[keys[ci - 1]] : null } : null;
+      };
+      if (h.opt) {
+        const o = (qq && qq.opt && qq.opt[h.occ]) || {};
+        if (o && o.series) {
+          const rc = seriesClose(o.series);
+          if (rc && rc.close > 0) pAcct = rc.close;
+          if (rc && rc.prev > 0) prevClose = rc.prev;
+        }
+      } else {
+        const s = (qq && qq.stock && (qq.stock[h.code] || qq.stock[k])) || {};
+        if (s && s.series) {
+          const rc = seriesClose(s.series);
+          if (rc && rc.close > 0) pAcct = rc.close;
+          if (rc && rc.prev > 0) prevClose = rc.prev;
+        }
+      }
+      if (pAcct > 0) src = 'Alpaca';
       /* ② 持仓页现价 pTrade：**OKX 永续优先**（用户 2026-10-04 定稿：
          「持仓里面 orcl 和 tqqq 的现价应该用 okx 的」）。
          OKX 永续 7×24 连续报价，盘中/周末都在动，反映当下真实价格；
@@ -7666,8 +7849,10 @@ fundAmount += f.amount;
          ⚠️ 只改**涨跌幅与较基准盈亏**的基准；现价（pTrade/OKX）、市值、汇总三行口径一律不动，
             所以账户资产 / 推算总资产 / 差额不受影响。 */
       const isOpt = !!h.opt;
-      const isNightQ = !!(qq && qq.stock && qq.stock[k] && qq.stock[k].overnight);
-      const pctBase = ((inEtRegular() || isNightQ) ? prevClose : pAcct);
+      /* 「较基准」基准 = **最近完结日K收盘**（= 上面的 pAcct，报告日收盘口径）。
+         2026-10-09 起账户价恒为报告日收盘、不随盘中跳动，
+         旧「盘中取昨收 / 其他取 pAcct / 夜盘特殊分支」都不再需要。 */
+      const pctBase = pAcct;
       const tradeChgUsd = (isOpt || pTrade == null || pctBase == null || pctBase <= 0)
         ? null : (pTrade - pctBase) * qty * mult;
       const tradePct = (isOpt || pTrade == null || !pctBase) ? null : (pTrade - pctBase) / pctBase;
@@ -7682,6 +7867,8 @@ fundAmount += f.amount;
         code: h.code, name: h.name,
         valueCny: cny(value), pnlCny: cny(pnl), todayCny: cny(todayPnl),
         tradeValueCny: cny(tradeValue), tradeChgCny: cny(tradeChgUsd),
+        // 期权实时价（Alpaca snapshot mid）：持仓视图期权现价/市值用；账户页仍用 pAcct（报告日收盘）
+        livePx, liveValueCny: (livePx != null ? cny(qty * livePx * mult) : null),
       };
     };
     /* ---- 证券表「画一遍」抽成函数，一共画两遍：
@@ -7838,6 +8025,12 @@ fundAmount += f.amount;
          ⚠️ 证券段 02-06 无 IBKR 数据，链式从首个有效证券日起算。 */
       const stockTwr = calTwrOf('twrStock');
       setTxt('accStockCumPct', pctAbs(stockTwr), stockTwr == null ? stockCumCny : stockTwr);
+      /* 标签（2026-10-09 用户定稿）：「今日盈亏」→「盈亏（10-08）」，日期 = 报告交易日。
+         证券日期用**实际日线的最新一根**（≤报告日）校正 —— 报告日碰上美股假日时以真实交易日为准。 */
+      const stockDay = stockActualDay();
+      const md = (s) => String(s || '').slice(5);
+      const lb1 = $id('accTotalPnlLbl'); if (lb1) lb1.textContent = '盈亏（' + md(stockDay) + '）';
+      const lb2 = $id('accStockPnlLbl'); if (lb2) lb2.textContent = '盈亏（' + md(stockDay) + '）';
     }
     renderStockSum();
     /* ⚠️ 下面四个口径改成 `let`：分梯队刷新时每个梯队都要**重算**一遍
@@ -7858,10 +8051,9 @@ fundAmount += f.amount;
          不再兜 IBKR 快照价）—— 所以日历末点与侧栏 accStockVal 同源同刻。 */
       TRADE_POS.rtStockCny = stockEquityCny;
       /* **收盘价口径权益**（收益日历「昨天」那格补点用，2026-10-07）：IBKR 现金 +
-         持仓按 **prevClose**（最近一根日K收盘）估值。夜盘时段 prevClose 已被换成
-         上一交易日收盘（夜盘今日盈亏修复同源），所以日历用它补「昨天」= 纯收盘口径，
-         不会把夜盘涨幅重复挂上去；盘中时段 prevClose = 昨收，同样是收盘口径。 */
-      const closePosVal = rows.reduce((s, r) => s + (r.prevClose != null ? r.prevClose * r.qty * r.mult : 0), 0);
+         持仓按**报告日收盘**估值（2026-10-09 起账户价 pAcct = 报告日日K收盘，
+         直接用它 —— 美东 20:00 越界自动切到新一天的收盘，与报告日本身同一天）。 */
+      const closePosVal = rows.reduce((s, r) => s + (r.price != null ? r.price * r.qty * r.mult : 0), 0);
       TRADE_POS.closeStockCny = (ibkrCashAll + closePosVal) * FX;
       /* **按指定日期的日K收盘估值**（收益日历补「中间缺快照日」用，2026-10-07 16:32）。
          为什么需要它：上面那个 closeStockCny 只反映**最近一根**日K（实测只到 10-05），
@@ -7982,12 +8174,16 @@ fundAmount += f.amount;
     function renderAccTotal() {
       const rtVal = rows.reduce((s, r) => s + (r.value != null ? r.value : 0), 0)   // 2026-10-05 起不再兜 IBKR 快照市值;
       const eqCny = (ibkrCashAll + rtVal) * FX;
-      /* ⚠️ 2026-10-09 用户定调：「今日盈亏只算今日的，通常应该只算证券，因为基金总是延迟」——
-         基金净值 T-1（QDII 甚至 T-3）才更新，把它那笔 fundYesterday（实为「昨日盈亏」）
-         混进「今日盈亏」会失真（涨的是昨天的钱，却记在今天头上）。
-         所以总资产卡只累计证券（rows = 美股正股 + 期权，实时价驱动）的今日盈亏；
-         基金页自己的 accFundNote / fundMYest 仍显示 fundYesterday（那是基金分类页自己的口径，不动）。 */
-      const todayCny = rows.reduce((s, r) => s + (r.todayPnl || 0), 0) * FX;
+      /* ⚠️ 2026-10-09 用户定稿（第二版）：总资产盈亏 = 证券盈亏 + 基金收益，但**逐项对日期**——
+         「是 10-08 的才加，不是就不加」：
+         · 证券：口径日期就是标签日期本身（stockActualDay，报告日假日时自动跟到真实交易日），恒计入；
+         · 基金：**逐只**判断 navDate 是否等于标签日期（⚠️ 不能只看「最新净值日」——QDII 与
+           场内基金净值日经常不同步，只比最大值会把滞后的那只 10-07 收益混进 10-08）。
+           净值日对不上 / 东财没取到 navDate → 该基金这天的收益**不计入**（宁缺勿错）。
+         基金页自己的 accFundNote / fundMYest 仍显示全量 fundYesterday（那是基金分类页自己的口径，不动）。 */
+      const day = stockActualDay();
+      const fundIn = funds.reduce((s, f) => s + ((f.yest != null && f.navDate === day) ? f.yest : 0), 0);
+      const todayCny = rows.reduce((s, r) => s + (r.todayPnl || 0), 0) * FX + fundIn;
       const tot = eqCny + fundAmount + cashCny;
       const yestBase = tot - todayCny;
       setTxt('accTotalVal', f2(tot));

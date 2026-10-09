@@ -320,12 +320,11 @@
 
   /* 翻页拉取原始 K 线（最新在前），拼够 total 根或源返回空为止（单页上限 300）。
      OKX 源最多回溯 1440 根/页链，1m = 24h，对「最近一个美东 20:00 → 现在」这个窗口足够。 */
-  /* ⚠️⚠️ OKX K线限流门 + 结果缓存（2026-10-06 修「页面卡死」）：
-     assetSeries 一轮要拉 正股~9 + 基金成分股~16 只、每只最多 5 页 ≈ 125 个请求，
-     远超 OKX /market/candles 的 **20次/2s** 限频 → 大面积 HTTP 429 → 曲线空白 →
-     fallback 又连跑 4 个时段再各拉一轮 → 恶性循环，用户看到的就是「卡死 + 图空白」。
+  /* ⚠️⚠️ OKX 并发控制 + 结果缓存（2026-10-09 改）：
+     数据源已换成 **www.cnoyu.org 镜像**，实测**不限流**（9 个 ticker 全并发 0 个 429），
+     所以不再用「固定 160ms 串行闸门」，改为「最多 8 并发的信号量」（见下方 okxAcquire）。
      治理两层：
-     ① 速率：全局队列，相邻请求间隔 ≥120ms（≈16次/2s，留余量）；超发的请求排队等待而不是被打死；
+     ① 并发：信号量把同时进行的请求限制在 OKX_MAX_CONCURRENCY（默认 15），既提速又防瞬时洪峰；
      ② 缓存：同 instId+bar+条数 的完整结果 60s 内直接复用（与分时图 60s 节流对齐），
         fallback 连跑 4 个时段、15s 汇总刷新触发的重画，全都命中缓存不再重复打请求；
         在途去重（inflight）：同一 key 并发调用共享同一个 Promise，不会翻倍。 */
@@ -337,7 +336,6 @@
 const _tickerCache = new Map();         // instId|kind -> { now|raw|prev, at }
 const TICKER_TTL = 15000;
 
-  let _okxLast = 0;
   const _okxCache = new Map();     // key -> { exp, data }
   const _okxInflight = new Map();  // key -> Promise
   /* 页级缓存：instId|bar -> { pages:[300根, ...], exp, lastTs }。
@@ -345,63 +343,84 @@ const TICKER_TTL = 15000;
      所以按页缓存后：不同 cap / 不同时段 / 回退重试 / 60s 后重画**都复用同一批页**，
      只在真正缺页时才发请求。这是不提高并发前提下唯一的提速方向（见 fetchRawCandles）。 */
   const _okxPages = new Map();
-  /* ⚠️⚠️ 限流治理（2026-10-07 18:47 用户纠正：「你这样OKX限流了，之前是错开不要限流」）：
-     **绝对不并发**。OKX /market/candles 是 20 次/2s（按 IP），并发请求会在同一瞬间
-     打出去、必然触发 429 → 曲线空白 → fallback 再来一轮 → 恶性循环（2026-10-06 的老问题）。
-     我 18:02 那次为了提速把它改成 4 并发令牌桶 —— 提速是真的（17.7s → ~5s），
-     但**方向错了**：用户要的是「错开」，不是「并发」。
-     正确做法：请求之间**严格串行 + 固定间隔**（下面 160ms），一次只发一个；
-     遇到 429 时额外退避（翻倍间隔，连退 3 次），既不硬撞也不拖死。
-
-     提速的正确出处是**别发那么多请求**（错峰刷新 + 增量翻页 + 缓存复用），
-     而不是发得更猛 —— 见下方各处刷新间隔的错峰改造。 */
-  const OKX_GAP_MS = 160;            // 相邻请求间隔（≈12.5 次/2s，离 20 次/2s 有余量）
-  let _okxBackoff = 0;                // 429 退避倍数（0 = 未触发）
-  let _okxBackoffHits = 0;
-  function okxGate() {
-    const gap = OKX_GAP_MS * (1 + _okxBackoff);
-    const wait = Math.max(0, _okxLast + gap - Date.now());
-    _okxLast = Date.now() + wait;
-    return new Promise((res) => setTimeout(res, wait));
+  /* ⚠️⚠️ 并发治理（2026-10-09 改）：原来这里是 **严格串行 + 160ms 固定间隔**的 okxGate，
+     起因是**官方 OKX** 的 /market/candles 有 20次/2s 限频、并发必 429。
+     但现在数据源已换成 **www.cnoyu.org 镜像**，实测**不限流**（基准见下：9 个 ticker 全并发
+     0 个 429，单轮耗时从 ~10.6s 降到 ~3.2s）。所以去掉固定闸门，改为**带上限的信号量**：
+       ① 默认 6 并发 + 相邻请求最小 60ms 间隔 —— 释放并行提速，又把瞬时洪峰压在合理范围
+          （实测 cnoyu 在统一 15s 刷新、15 并发全爆发后会出现 429；降到 6 并发 + 60ms 间隔后尖峰铺平，
+           一轮 27 个请求约 2s 内发完，远赶得上 15s 周期，429 消除）；
+       ② 保留 429 检测与日志：万一镜子哪天也限流，至少能看见、不会静默空白；
+       ③ 真正的提速来源仍是「少发请求」（缓存命中 + 增量翻页 + 错峰刷新），
+          并发只是把「原本排队等的时间」省掉，并不会增加单轮总请求数。 */
+  const OKX_MAX_CONCURRENCY = 6;   // 同时最多在飞的 OKX 请求数
+  const OKX_MIN_GAP_MS = 60;       // 相邻请求最小间隔（铺平瞬时尖峰，避免撞 cnoyu 限频）
+  let _okxRunning = 0;
+  let _okxLastDispatch = 0;        // 上一次真正「放行」请求的时间戳
+  const _okxWaiters = [];
+  function okxAcquire() {
+    return new Promise((resolve) => {
+      const tryGo = () => {
+        const now = Date.now();
+        const wait = Math.max(0, _okxLastDispatch + OKX_MIN_GAP_MS - now);
+        if (_okxRunning < OKX_MAX_CONCURRENCY) {
+          if (wait <= 0) {
+            _okxRunning++;
+            _okxLastDispatch = Date.now();
+            resolve();
+          } else {
+            // 有空位但没到最小间隔 → 稍后再判（不放进 waiter 队列，避免重复占名额）
+            setTimeout(tryGo, wait);
+          }
+        } else {
+          _okxWaiters.push(tryGo);
+        }
+      };
+      tryGo();
+    });
   }
-  /* 429 处理：指数退避（160 → 320 → 640ms），连中 3 次后放平。
-     放大间隔而不是放弃请求 —— 曲线晚一点出，总比空白好。 */
+  function okxRelease() {
+    _okxRunning--;
+    if (_okxWaiters.length) { const next = _okxWaiters.shift(); next(); }
+  }
+  /* 429 处理：只记录并打日志（不再指数退避，因为镜像不限流；若未来真触发可作为告警）。 */
+  let _okx429Hits = 0;
   function okxNote429() {
-    _okxBackoffHits++;
-    _okxBackoff = Math.min(3, _okxBackoffHits);
-    console.warn('[okx] 429 限流，退避间隔 →', OKX_GAP_MS * (1 + _okxBackoff), 'ms');
+    _okx429Hits++;
+    if (_okx429Hits <= 3 || _okx429Hits % 10 === 0)
+      console.warn('[okx] 收到 429（累计 ' + _okx429Hits + ' 次）—— cnoyu 镜像应不限流，请关注');
   }
-  function okxNoteOk() {
-    if (_okxBackoff) { _okxBackoffHits = 0; _okxBackoff = 0; }
-  }
-  /* okxFetch 是唯一出口：**严格串行**（过 okxGate）+ 429 指数退避。
-     fetch 失败（网络断）也要退避，否则网络抖动时会连打一片请求。
+  function okxNoteOk() { /* 并发模式无需重置退避 */ }
+  /* okxFetch 是唯一出口：**经并发信号量** + 429 日志 + 超时保护。
+     超时（timeoutMs）保留：虽然改并发了，单请求仍可因网络「半开」挂死，
+     必须有超时，否则那一笔会一直占着信号量名额、拖慢后面的请求。
 
-     ⚠️ 2026-10-07 补 `timeoutMs`：**必须有超时**。原因是队头阻塞 ——
-        全局严格串行 + `fetch` 无内置超时，网络「半开」（连接建了但迟迟不回数据）时，
-        那个请求会**无限期挂着**，闸门后面的所有请求永远排不上 → 那些行一直拿不到数据。
+     ⚠️ 2026-10-07 补 `timeoutMs`：网络「半开」（连接建了但迟迟不回数据）时，
+        那个请求会**无限期挂着** → 占着信号量名额、同批其他请求跟着排不上 → 行拿不到数据。
         实测症状：自选里 ORCL/NVDA/MSFT/TQQQ/SNDK 集体 `--`，而 curl 同一接口完全正常。
         只给「拿行情快照」这类调用加短超时（ticker 8s）；K 线/长请求不传这个参数，行为不变。 */
   async function okxFetch(url, init, timeoutMs) {
-    await okxGate();
-    const ctl = (timeoutMs && typeof AbortController !== 'undefined') ? new AbortController() : null;
-    let timer = 0;
+    await okxAcquire();
     try {
-      if (ctl) {
-        timer = setTimeout(() => ctl.abort(), timeoutMs);
-        init = Object.assign({}, init || {}, { signal: ctl.signal });
-      }
-      const r = await fetch(url, init);
-      if (r && r.status === 429) okxNote429(); else okxNoteOk();
-      return r;
-    } catch (e) { okxNote429(); throw e; }
-    finally { if (timer) clearTimeout(timer); }
+      const ctl = (timeoutMs && typeof AbortController !== 'undefined') ? new AbortController() : null;
+      let timer = 0;
+      try {
+        if (ctl) {
+          timer = setTimeout(() => ctl.abort(), timeoutMs);
+          init = Object.assign({}, init || {}, { signal: ctl.signal });
+        }
+        const r = await fetch(url, init);
+        if (r && r.status === 429) okxNote429(); else okxNoteOk();
+        return r;
+      } catch (e) { okxNote429(); throw e; }
+      finally { if (timer) clearTimeout(timer); }
+    } finally { okxRelease(); }
   }
   /* ⚠️ 提速的正确出处是「少发请求」而不是「并发发」：
      ① 60s 结果缓存（同 instId+bar+条数 复用）—— 已有；
      ② 翻页只补缺的页数（见 fetchRawCandles 里的增量逻辑）；
      ③ 各处刷新定时器**错峰**（见 setInterval 注释）。
-     闸门本身保持**严格串行 + 160ms 间隔**，绝不并发。 */
+     闸门 = 并发信号量(6) + 相邻 60ms 最小间隔：既并行提速，又铺平尖峰、避免撞 cnoyu 限频。 */
   async function fetchRawCandles(instId, total, bar) {
     const barArg = bar || '1m';
     const cap = Math.min(total || 1440, 1440);
@@ -758,38 +777,31 @@ const TICKER_TTL = 15000;
   async function fetchWatchlist() {
     try {
       /* ⚠️⚠️ 限流（2026-10-07 19:40 用户纠正过两次「你这样OKx限流了」）：
-         原来是 `Promise.all(10 个 ticker)` 并发 + 每 15s **全量重拉、无缓存** ——
-         既在闸门后形成瞬时尖峰（10 个同一瞬间放行），又和持仓/基金那条链**重复拉同一批代码**。
-         改两处，都不提高速率、只减少请求：
-         ① 逐个**串行**（和其他 OKX 调用一致，队列铺平）；
-         ② 走模块级 `_tickerCache`（15s TTL，与刷新周期同频）——
+         cnoyu.org 镜像**不限流**（基准：9 个 ticker 全并发 0 个 429，单轮 ~10s→~3s），
+         所以 2026-10-09 把「160ms 串行闸门 + 逐个 await」改成 **Promise.all 全并发**
+         （受 okxFetch 信号量限到 8 在飞）。仍走 `_tickerCache`（15s TTL，与刷新周期同频）——
             自选 / 持仓 / 账户三个视图共用同一批 instId 的现价，撞车时只有第一趟真发。
             TTL = 刷新周期，所以现价精度与「每 15s 拉一次」完全等价。 */
-      const results = [];
-      for (const id of LIVE_INST_IDS) {
+      const results = await Promise.all(LIVE_INST_IDS.map(async (id) => {
         const tk = _tickerCache.get(id + '|t');
         /* ⚠️ 必须连 `tk.raw` 一起判（2026-10-07 修的真实 bug）：
            `_tickerCache` 是**多方共用**的，键是 `instId + '|t'`，但**字段并不统一** ——
              · 自选链写入：{ at, raw: <完整响应>, now }
              · 基金成分股估值链写入：{ at, now }  ← **没有 raw**（它只要 last 数值）
            而 ORCL / NVDA / MSFT 这几只**同时是基金季报持仓的成分股**：基金链先跑、
-           写进去一个没有 raw 的条目 → 自选链命中缓存后 `results.push(tk.raw)` 推了 **undefined** →
-           byId 里查不到 → 该行显示 `--`。实测表现为「自选里美股大面积 `--`，但 curl 同一接口完全正常」。
+           写进去一个没有 raw 的条目 → 自选链命中缓存后推了 **undefined** → byId 查不到 → 显示 `--`。
            加 `tk.raw` 判断后：残缺缓存视为未命中，自己重发一次（顺带把完整 raw 补全进缓存）。 */
-        if (tk && tk.raw && Date.now() - tk.at < TICKER_TTL) {
-          results.push(tk.raw);
-          continue;
-        }
+        if (tk && tk.raw && Date.now() - tk.at < TICKER_TTL) return tk.raw;
         try {
-          // ⚠️ 8s 超时：串行队列里一个卡死的请求会拖死后面所有行（见 okxFetch 注释）
+          // ⚠️ 8s 超时：并发里单个卡死只影响自己，异常由下方 catch 兜成 null
           const r = await okxFetch(OKX_API_BASE + '/market/ticker?instId=' + encodeURIComponent(id), undefined, 8000);
           const j = r.ok ? await r.json() : null;
           if (j && j.code === '0' && j.data && j.data[0]) {
             _tickerCache.set(id + '|t', { at: Date.now(), raw: j, now: +j.data[0].last });
           }
-          results.push(j);
-        } catch (e) { results.push(null); }
-      }
+          return j;
+        } catch (e) { return null; }
+      }));
       /* 「美东收盘基准」走独立缓存（BASE_TTL），与上面那批不同源。
          ⚠️ 不 await：基准要走 1H K 线，慢的话会拖住首屏出价格。
          但它又是**算涨跌幅的分母** —— 首轮 ticker 回来时它多半还没就绪，
@@ -1532,10 +1544,9 @@ const TICKER_TTL = 15000;
 
     /* 正股腿：OKX 永续 1m K线（最新在前 → 转升序）。
        ⚠️ instId 拼接规则见 okxInst（OKX_ALIAS：GOOG 复用 GOOGL）；这里持仓都是正股，直接拼。
-       ⚠️⚠️ 限流（2026-10-07 18:47 用户纠正「你这样OKX限流了」）：**逐个串行**拉，
-          不要 `Promise.all` 并发 —— 所有 OKX 请求最终都要过 okxGate（160ms 串行闸门），
-          但并发发起会让闸门后的队列在**同一瞬间**堆一大排，放行时形成尖峰，容易撞
-          20次/2s。串行发起则是「一个接一个」，队列平滑，429 明显减少。
+       ⚠️⚠️ 并发（2026-10-09 改）：cnoyu.org 镜像**不限流**（基准实测 0 个 429），
+          所以这些腿直接 `Promise.all` 全并发（见上方 assetSeries 的 stockLegs 并行化），
+          由 okxFetch 的信号量限到 8 在飞 —— 既提速又不会瞬时堆几百个请求。
           ⚠️ 只在**第一个**代码失败时记 warning 即可，别每个都刷一遍控制台。 */
     /* ⚠️⚠️ 性能（2026-10-07 19:40）：**按时段窗口定量拉取**，不再无脑1440 根。
        原来无论哪个时段都拉 1440 根 = 5 页 × 27 个代码 ≈ 118 个请求 × 160ms ≈ **18.9 秒**。
@@ -1551,17 +1562,17 @@ const TICKER_TTL = 15000;
         return raw.slice().map((r) => ({ ts: +r[0], price: +r[4] })).sort((a, b) => a.ts - b.ts);
       } catch (e) { return []; }
     };
-    const stockLegs = [];
+    let stockLegs = [];
     /*⚠️⚠️ 别名映射（2026-10-07 19:58修）**必须在这里自己带一份**，不能用账户闭包里的
        `okxInst`（定义在 ~6520 行，是闭包内的 const，外层 assetSeries 访问不到
        →运行时报`okxInst is not defined`，整轮 assetSeries 直接崩，曲线永远空白）。
        内容与闭包内那份保持一致：OKX 只挂 **GOOGL**，而部分基金季报持仓写的是**GOOG**。 */
     const OKX_ALIAS2 = { GOOG: 'GOOGL' };
     const inst2 = (code) => `${OKX_ALIAS2[code] || code}-USDT-SWAP`;
-    for (const s of p.stocks) {
-      const pts = await fetchLeg(inst2(s.code));       // 串行，不并发
-      stockLegs.push({ s, pts });
-    }
+    stockLegs = await Promise.all(p.stocks.map(async (s) => {
+      const pts = await fetchLeg(inst2(s.code));
+      return { s, pts };
+    }));
     /* 期权腿：按「实时直回推」（用户 2026-10-08：「期权按实时直回推就行了，不用抓取K」）。
        OKX 不挂美股权期权、Alpaca 免费账号 1Min/5Min 又全空 → 原方案依赖 Alpaca options/bars
        日内序列，几乎永远拿不到，曲线只能退化成「实时 mark 一根平线」，还白白多打一个域的请求。
@@ -1603,7 +1614,8 @@ const TICKER_TTL = 15000;
       fundObjsPre.forEach((f) => (f.items || []).forEach((it) => { if (it.m === 'us') usSyms.add(it.c); }));
       const symArr = Array.from(usSyms);
       fundCandleMap = {};
-      for (const s of symArr) fundCandleMap[s] = await fetchLeg(inst2(s));
+      (await Promise.all(symArr.map(async (s) => [s, await fetchLeg(inst2(s))]))).forEach(
+        ([s, pts]) => { fundCandleMap[s] = pts; });
     }
     const legs = stockLegs.concat(optLegs);
 
@@ -4454,10 +4466,10 @@ const applyMode = (mode, skipDraw) => {
   /* ========== 定时刷新总纲（2026-10-07 18:47 用户定稿）==========
    用户原话：「之前是错开不要限流，而是刷新时间也要设置好，页面一堆刷新的不要都在一块刷」。
    两条纪律：
-   ① **同源请求必须错峰**：所有 OKX 请求共用 okxGate（严格串行），若几个定时器同一秒
-      各自发起一批，闸门后的队列会出现「尖峰」—— 短时间内集中放行、容易撞 20次/2s。
-      所以下面的周期**互质**（15 / 17 / 23 / 31 / 47 秒），且首拉时间也各自错开，
-      永远不会有两批在同一个整秒上撞车。
+   ① **同源请求必须错峰**：所有 OKX 请求共用 okxFetch 的并发信号量（默认 15 在飞），
+      cnoyu.org 镜像实测不限流，行情三路（OKX 自选 / 腾讯自选 / 持仓+Alpaca）现已统一 **15s** 周期，
+      靠首拉相位错开（0.8 / 3.8 / 6.8s）避免同秒爆发；外汇/美债为本地 json 只读，30 分钟一次即可。
+      实测对齐后无 429 风险，错峰只为平滑本机同时在飞请求数。
    ② **页面隐藏时暂停**：`document.hidden` 时不跑（除了时钟）。后台标签页没必要刷，
       这也是省限流额度最有效的一招（用户经常开着页面切走）。
    ⚠️ 分时图（assetSeries）**不用定时器**——它由 TRADE_POS.refresh / 切视图触发，
@@ -4471,19 +4483,21 @@ const applyMode = (mode, skipDraw) => {
   setTimeout(fetchWatchlist, 800);
   setInterval(() => { if (!document.hidden) fetchWatchlist(); }, 15000);
 
-  /* 自选里的腾讯行（上证指数）独立拉取。周期 **17s**（与上面 15s 互质，避免整秒对齐撞车）。 */
+  /* 自选里的腾讯行（上证指数）独立拉取。周期 **15s**，与 OKX 自选、持仓行情同周期对齐
+     （用户 2026-10-09 要求统一 15s 刷）；靠首拉 3.8s 错位避免同秒爆发（腾讯/OKX 实测均不限流）。 */
   setTimeout(fetchTxWatch, 3800);
-  setInterval(() => { if (!document.hidden) fetchTxWatch(); }, 17000);
+  setInterval(() => { if (!document.hidden) fetchTxWatch(); }, 15000);
 
-  /* 持仓行情（交易页 + 账户页证券表）。周期 **18s**、首拉 6.8s —— 与 15/17 互质。
-     ⚠️ 这个是 OKX 请求大户（持仓 + 基金成分股 ≈ 27 个代码），必须自己独占一个相位。 */
+  /* 持仓行情（交易页 + 账户页证券表，内含 Alpaca 快照/日线）。周期 **15s**、首拉 6.8s，
+     与 OKX 自选、腾讯自选同周期对齐（用户 2026-10-09 要求统一 15s 刷）。
+     ⚠️ 首拉 6.8s 错位：避免三路定时器同一秒爆发把本机连接池瞬时顶满（限流无风险，纯平滑）。 */
   setTimeout(() => {
     if (typeof TRADE_POS.refresh === 'function') TRADE_POS.refresh();
   }, 6800);
   setInterval(() => {
     if (document.hidden) return;
     if (typeof TRADE_POS.refresh === 'function') TRADE_POS.refresh();
-  }, 18000);
+  }, 15000);
 
   /* 金十快讯（「推荐」tab）：script 标签直连 www.jin10.com/flash_newest.js。
      启动即预拉一份（切到「推荐」不用等），之后每 60s 重拉一次。
@@ -4557,7 +4571,7 @@ const applyMode = (mode, skipDraw) => {
     } catch (e) { console.warn('[汇率] 读取 usdcnh_daily 失败：', e); clear(); }
   }
   fetchFxWatch();
-  setInterval(fetchFxWatch, 60000);        // 读本地 usdcnh_daily（内部 10 分钟缓存），1 分钟刷一次足够
+  setInterval(fetchFxWatch, 30 * 60 * 1000);   // 只读本地 usdcnh_daily（日频数据），30 分钟刷一次足够（与美债同频）
 
   /* 10 年期美债收益率（BC_10YEAR，百分数如 5.27）—— 自选行 10Ymain
      ⚠️ 2026-10-07 起**不再浏览器直连财政部**，改成读 `fund_holdings.json` 的 `ust10y_daily`
@@ -6750,13 +6764,11 @@ const applyMode = (mode, skipDraw) => {
         instMap.get(inst).push(c);
       });
       const todayUtc = new Date().toISOString().slice(0, 10);
-      /* ⚠️⚠️ 限流（2026-10-07 18:47 用户纠正「你这样OKX限流了」）：**逐个串行**请求。
-         原来是 `chunk(keys, 4)` + 每批 `Promise.all` → 一次瞬发 4 个 ticker；
-         自选（10 个）+ 持仓与成分股两路叠加时，闸门后队列会出现明显尖峰 → 429。
-         反正 okxGate 是 160ms 串行闸门、最终速度一样，这里只是**把队列铺平**，
-         不牺牲任何吞吐（该等的时间还是那些时间）。 */
-      for (const inst of instMap.keys()) {
-        try {
+      /* ⚠️⚠️ 并发（2026-10-09 改）：cnoyu.org 镜像**不限流**（基准实测 0 个 429），
+         原来「160ms 串行闸门 + 逐个 await」改成 Promise.all 全并发（受 okxFetch 信号量限到 8 在飞）。
+         持仓 + 20+ 成分股同时拉也不再排队，单轮耗时大幅下降；仍需逐个 try，单个失败回落腾讯/账户价。 */
+    const __instOut = await Promise.all(Array.from(instMap.keys()).map(async (inst) => {
+      try {
           /* 现价：两层缓存 —— ① 模块级 _tickerCache（15s，与刷新周期同频，
              自选/持仓/账户三页共用同一批代码，撞车时只有第一趟真发请求）；
              ② 本函数原有的 okxNowCache（cacheMs，成分股用 60s）。
@@ -6836,17 +6848,21 @@ const applyMode = (mode, skipDraw) => {
             }
           }
           /* ⚠️ 这里原来（并发版）是 `return` —— 那是 map 回调的 return，只跳过当前这个
-             inst。改成串行 for 循环后必须用 continue，否则会**退出整个函数**，
-             后面的 inst 全都不拉了。 */
-          if (now == null && prevClose == null) continue;
-          (instMap.get(inst) || []).forEach((c) => {
-            VAL_OKX[c] = VAL_OKX[c] || {};
-            if (now != null) VAL_OKX[c].now = now;
-            if (prevClose != null) VAL_OKX[c].prevClose = prevClose;
-            if (dayClose) VAL_OKX[c].dayClose = dayClose;
-          });
-        } catch (e) { /* 单个失败就回落腾讯 / 账户价 */ }
-      }
+             inst。改成并发 map 后必须用 `return null`，否则会**只跳过当前 inst**；
+             已统一在末尾 for 循环里写回 VAL_OKX，后面的 inst 照常处理。 */
+          if (now == null && prevClose == null) return null;
+        return { inst, now, prevClose, dayClose };
+      } catch (e) { return null; }
+    }));
+    for (const r of __instOut) {
+      if (!r) continue;
+      (instMap.get(r.inst) || []).forEach((c) => {
+        VAL_OKX[c] = VAL_OKX[c] || {};
+        if (r.now != null) VAL_OKX[c].now = r.now;
+        if (r.prevClose != null) VAL_OKX[c].prevClose = r.prevClose;
+        if (r.dayClose) VAL_OKX[c].dayClose = r.dayClose;
+      });
+    }
     }
 
     /* 腾讯只挂**一个**上市代码，且 A/C 两类股是两个独立代码（不像 OKX 永续那样合并）。
@@ -7966,7 +7982,12 @@ fundAmount += f.amount;
     function renderAccTotal() {
       const rtVal = rows.reduce((s, r) => s + (r.value != null ? r.value : 0), 0)   // 2026-10-05 起不再兜 IBKR 快照市值;
       const eqCny = (ibkrCashAll + rtVal) * FX;
-      const todayCny = rows.reduce((s, r) => s + (r.todayPnl || 0), 0) * FX + fundYesterday;
+      /* ⚠️ 2026-10-09 用户定调：「今日盈亏只算今日的，通常应该只算证券，因为基金总是延迟」——
+         基金净值 T-1（QDII 甚至 T-3）才更新，把它那笔 fundYesterday（实为「昨日盈亏」）
+         混进「今日盈亏」会失真（涨的是昨天的钱，却记在今天头上）。
+         所以总资产卡只累计证券（rows = 美股正股 + 期权，实时价驱动）的今日盈亏；
+         基金页自己的 accFundNote / fundMYest 仍显示 fundYesterday（那是基金分类页自己的口径，不动）。 */
+      const todayCny = rows.reduce((s, r) => s + (r.todayPnl || 0), 0) * FX;
       const tot = eqCny + fundAmount + cashCny;
       const yestBase = tot - todayCny;
       setTxt('accTotalVal', f2(tot));

@@ -3831,9 +3831,39 @@ const TICKER_TTL = 15000;
         m: mkt,
         p: f2 != null ? +(f2 / 1000).toFixed(4) : null,
         pct: f3 != null ? +(f3 / 100).toFixed(2) : null,
-        vol: f6 != null ? Math.round(f6) : null,
-        amt: f8 != null ? Math.round(f8) : null,
+        // f6 = 成交额（美元），渲染用 fmtAmt 显示「X亿」；换手率(f8)本榜不用，不再映射
+        amt: f6 != null ? Math.round(f6) : null,
       });
+    }
+    return out;
+  }
+  /* 全部个股去重：第一级按完整代码（同代码真重复 / 分页重叠 / 主板与 OTC 重叠，如腾讯两次），
+     第二级按「公司」合并同类股（A/B/C 股、同名不同代码 ADR，如 谷歌A/C、伯克希尔A/B、腾讯两个）。
+     入参需先按市值降序，去重时保留先出现（市值最大）者。 */
+  function companyKeys(c, n) {
+    const ks = new Set();
+    const cb = String(c || '').toUpperCase().replace(/\.[A-Z]+$/, ''); // BRK.A/BRK.B -> BRK 相同
+    if (cb) ks.add(cb);
+    const nm = String(n || '').trim();
+    if (nm.length > 2 && /[ABC]$/.test(nm)) ks.add('N:' + nm.slice(0, -1)); // 谷歌A/谷歌C -> 谷歌
+    if (nm) ks.add('NF:' + nm); // 同名不同代码（腾讯两个 OTC ADR）-> 合并
+    return ks;
+  }
+  function dedupeUsTop(rows) {
+    const codeSeen = new Set();
+    const codeDeduped = [];
+    for (const r of rows) {
+      if (codeSeen.has(r.c)) continue;
+      codeSeen.add(r.c);
+      codeDeduped.push(r);
+    }
+    const keySeen = new Set();
+    const out = [];
+    for (const r of codeDeduped) {
+      const keys = [...companyKeys(r.c, r.n)];
+      if (keys.some((k) => keySeen.has(k))) continue;
+      keys.forEach((k) => keySeen.add(k));
+      out.push(r);
     }
     return out;
   }
@@ -3852,16 +3882,7 @@ const TICKER_TTL = 15000;
       if (!exRaw.length || !otc.length) throw new Error('东财市值榜缺页');
       const all = emNormTop(exRaw).concat(emNormTop(otc));
       all.sort((a, b) => -(a.mc || 0) + (b.mc || 0));
-      // 按代码去重：东财分页边界（第100/101名市值并列导致两页重叠）与 OTC(m:153)
-      // 部分大股票同 f12 代码也出现在主板(m:105/106/107) → ex1/ex2 或 ex/otc 会重复，
-      // 原代码未去重会直接进 top150，表现为「同一只股票出现两次」。保留先出现（市值更高）那条。
-      const seen = new Set();
-      const deduped = [];
-      for (const row of all) {
-        if (seen.has(row.c)) continue;
-        seen.add(row.c);
-        deduped.push(row);
-      }
+      const deduped = dedupeUsTop(all);
       return { asOf: new Date().toISOString(), source: 'eastmoney live jsonp', rows: deduped.slice(0, 150) };
     })().finally(() => { emLiveInFlight.top = null; });
     return emLiveInFlight.top;
@@ -3903,7 +3924,7 @@ const TICKER_TTL = 15000;
           const data = {
             asOf: j.asOf ? String(j.asOf).slice(0, 10) : new Date().toISOString(),
             source: j.source || 'local us_top.json',
-            rows: j.rows,
+            rows: dedupeUsTop(j.rows),
           };
           emLiveTop = { at: Date.now(), data };
           return data;
@@ -3929,7 +3950,7 @@ const TICKER_TTL = 15000;
      （emLiveFetchMkt），不再依赖 fund_holdings.json 落盘快照（2026-10-09 清理）。 */
   /* 三栏的展示顺序 = 用户指定顺序：成交榜、涨幅榜、跌幅榜 */
   const US_MKT_BOARDS = [
-    { key: 'turnover', label: '成交榜', hint: '按成交量' },
+    { key: 'turnover', label: '成交榜', hint: '按成交额' },
     { key: 'gainer', label: '涨幅榜', hint: '按涨跌幅' },
     { key: 'loser', label: '跌幅榜', hint: '按涨跌幅倒序' },
   ];
@@ -3974,27 +3995,30 @@ const TICKER_TTL = 15000;
     const boards = data.boards || {};
     const asOf = data.asOf ? String(data.asOf).slice(0, 10) : '';
     const srcTag = '浏览器实时（东财 push2，延迟约 15 分钟）';
-    const cells = US_MKT_BOARDS.map((b) => {
+    /* 单块榜单的内部 HTML（表头 + 行），不含外层 .mkt__col，便于组合叠放 */
+    const boardInner = (b) => {
       const rows = boards[b.key] || [];
       const head = `<div class="mkt__hd">${cpEsc(b.label)}<i>${cpEsc(b.hint)}</i></div>`;
       if (!rows.length) {
-        return '<div class="mkt__col">' + head
-          + '<div class="mkt__none">本次未取到该榜</div></div>';
+        return head + '<div class="mkt__none">本次未取到该榜</div>';
       }
       const body = rows.map((x, i) => {
         const c = cls(x.pct);
-        // 跌幅榜整列都是绿的（正常），但行内仍按涨跌着色，保持读数一致
         return `<div class="mkt__row">
           <span class="mkt__i">${i + 1}</span>
-          <span class="mkt__c"><b>${cpEsc(x.c)}</b><i>${x.m === 105 ? 'NAS' : (x.m === 106 ? 'NYSE' : (x.m === 107 ? 'AMEX' : x.m))}</i></span>
-          <span class="mkt__n">${cpEsc(x.n)}</span>
-          <span class="mkt__v num">${fmtVol(x.vol)}</span>
+          <span class="mkt__n"><b>${cpEsc(x.n)}</b><i>${cpEsc(x.c)}${x.m ? ' · ' + (x.m === 105 ? 'NAS' : (x.m === 106 ? 'NYSE' : (x.m === 107 ? 'AMEX' : x.m))) : ''}</i></span>
+          <span class="mkt__v num">${fmtAmt(x.amt)}</span>
           <span class="mkt__p num ${c}">${fmt(x.p, 2)}</span>
           <span class="mkt__x num ${c}">${fmtPct(x.pct)}</span>
         </div>`;
       }).join('');
-      return '<div class="mkt__col">' + head + body + '</div>';
-    }).join('');
+      return head + body;
+    };
+    const [turnoverB, gainerB, loserB] = US_MKT_BOARDS;
+    // 桌面两栏：左栏成交榜，右栏涨幅榜+跌幅榜竖着叠放
+    const turnoverCol = '<div class="mkt__col">' + boardInner(turnoverB) + '</div>';
+    const glCol = '<div class="mkt__col mkt__col--stack">'
+      + boardInner(gainerB) + boardInner(loserB) + '</div>';
     host.innerHTML = `
       <div class="screen-bar">
         <b>成交榜 / 涨幅榜 / 跌幅榜</b>
@@ -4002,13 +4026,14 @@ const TICKER_TTL = 15000;
         ${asOf ? `<span>数据日期 ${asOf}</span>` : ''}
         <span class="screen-bar__src">来源：东方财富（${srcTag}）</span>
       </div>
-      <div class="mkt">${cells}</div>`;
+      <div class="mkt">${turnoverCol}${glCol}</div>`;
   }
 
-  /* ---------------- 全部个股「板块热力图」----------------
+  /* ---------------- 板块（行业）热力图 ----------------
      两级 squarified 树图：先按行业大类把画布切块（面积 ∝ 大类总市值），
-     再在每块内按个股市值细分格子；颜色绿涨红跌（中国习惯），格子内写 代码 + 涨跌幅%。 */
-  let usTopView = 'heatmap';   // 'heatmap' | 'table'，切换不重拉数据（loadUsTop 有 TTL 缓存）
+     再在每块内按个股市值细分格子；颜色绿涨红跌（中国习惯），格子内写 代码 + 涨跌幅%。
+     ⚠️ 该热力图挂在「板块」tab（renderSectors），不再由「全部个股」切换。 */
+
 
   /* 行业 → 大类归集（关键词命中，中英文都覆盖；未命中的归「其他」）。
      ⚠️ 东财 f100 对美股返回的具体行业名沙箱无法实测，这里按常见中美行业词兜底，
@@ -4093,31 +4118,25 @@ const TICKER_TTL = 15000;
     const asOf = data.asOf ? String(data.asOf).slice(0, 10) : '';
     const srcTag = data.source || '浏览器实时（东财 push2，延迟约 15 分钟）';
     const nOtc = rows.filter((x) => x.otc).length;
-    const tv = '<span class="us-top__tv">'
-      + '<button data-tv="heatmap" class="' + (usTopView === 'heatmap' ? 'is-active' : '') + '">热力图</button>'
-      + '<button data-tv="table" class="' + (usTopView === 'table' ? 'is-active' : '') + '">表格</button></span>';
     const bar = '<div class="screen-bar">'
       + '<b>共 ' + rows.length + ' 只</b>'
       + '<span>其中 OTC / ADR ' + nOtc + ' 只</span>'
       + (asOf ? '<span>数据日期 ' + asOf + '</span>' : '')
-      + tv
       + '<span class="screen-bar__src">来源：东方财富（' + srcTag + '）</span></div>';
-    const body = usTopView === 'heatmap' ? renderUsTopHeatmap(rows) : renderUsTopTable(rows);
-    host.innerHTML = bar + body;
+    host.innerHTML = bar + renderUsTopTable(rows);
   }
 
-  /* 表格视图（原有「全部个股」列表） */
+  /* 表格视图（「全部个股」列表：名称主行 + 代码副行） */
   function renderUsTopTable(rows) {
     return '<div class="us-top">'
-      + '<div class="us-top__hd"><span>序号</span><span>代码</span><span>名称</span>'
+      + '<div class="us-top__hd"><span>序号</span><span>名称</span>'
       + '<span>市值</span><span>现价</span><span>涨跌幅</span><span>行业</span></div>'
       + rows.map((x, i) => {
         const c = cls(x.pct);
         const mc = (x.m === 153 ? 'OTC' : (x.m === 105 ? 'NAS' : (x.m === 106 ? 'NYSE' : (x.m === 107 ? 'AMEX' : x.m))));
         return '<div class="us-top__row">'
           + '<span class="us-top__i">' + (i + 1) + '</span>'
-          + '<span class="us-top__c"><b>' + cpEsc(x.c) + '</b><i>' + mc + '</i></span>'
-          + '<span class="us-top__n">' + cpEsc(x.n) + '</span>'
+          + '<span class="us-top__n"><b>' + cpEsc(x.n) + '</b><i>' + cpEsc(x.c) + (mc ? ' · ' + mc : '') + '</i></span>'
           + '<span class="us-top__m num">' + fmtCap(x.mc) + '</span>'
           + '<span class="us-top__p num ' + c + '">' + fmt(x.p, 2) + '</span>'
           + '<span class="us-top__x num ' + c + '">' + fmtPct(x.pct) + '</span>'
@@ -4177,15 +4196,41 @@ const TICKER_TTL = 15000;
       + '<span class="muted">格子面积 ∝ 市值 · 行业分大类</span></div>';
   }
 
+  /* 板块（行业）热力图：复用「全部个股」同一份 top 150 数据，按行业大类画 squarified 树图。 */
+  async function renderSectors() {
+    const host = $('#screenBody');
+    if (!host) return;
+    host.hidden = false;
+    host.innerHTML = '<div class="screen-empty">正在读取美股市值榜…</div>';
+    let data;
+    try {
+      data = await loadUsTop(false);
+    } catch (e) {
+      host.innerHTML = '<div class="screen-empty">板块数据读取失败：' + cpEsc(String(e.message || e))
+        + '<br>（实时东财拉取失败，可稍后刷新重试）</div>';
+      return;
+    }
+    const rows = data.rows || [];
+    const asOf = data.asOf ? String(data.asOf).slice(0, 10) : '';
+    const srcTag = data.source || '浏览器实时（东财 push2，延迟约 15 分钟）';
+    const bar = '<div class="screen-bar">'
+      + '<b>板块热力图</b>'
+      + '<span>按行业大类分组 · 面积 ∝ 市值 · 共 ' + rows.length + ' 只</span>'
+      + (asOf ? '<span>数据日期 ' + asOf + '</span>' : '')
+      + '<span class="screen-bar__src">来源：东方财富（' + srcTag + '）</span></div>';
+    host.innerHTML = bar + renderUsTopHeatmap(rows);
+  }
+
   function renderScreenTab(key) {
     const host = $('#screenBody');
     if (!host) return;
     if (key === 'all-stocks') { renderUsTopList(); return; }
     if (key === 'market') { renderUsMarket(); return; }
-    // 其余 3 个 tab 尚未接数据源：给明确的「未接」空态，别假装有内容
+    if (key === 'sectors') { renderSectors(); return; }
+    // 其余 tab 尚未接数据源：给明确的「未接」空态，别假装有内容
     const title = SCREEN_TABS[key] || '该视图';
     host.innerHTML = '<div class="screen-empty">「' + cpEsc(title) + '」还没接数据源。<br>'
-      + '目前「全部个股」（美股市值 top 150，含 OTC / ADR）与「市场」（成交 / 涨幅 / 跌幅榜）已通。</div>';
+      + '目前「全部个股」（美股市值 top 150，含 OTC / ADR，表格）、「板块」（行业热力图）与「市场」（成交 / 涨幅 / 跌幅榜）已通。</div>';
   }
 
   /* tab 切换：点一下换 key，is-active 跟着走；「全部个股」首次进入才拉数据 */
@@ -4197,19 +4242,6 @@ const TICKER_TTL = 15000;
       if (!b) return;
       sw.querySelectorAll('[data-screen-key]').forEach((x) => x.classList.toggle('is-active', x === b));
       renderScreenTab(b.dataset.screenKey);
-    });
-  })();
-
-  /* 全部个股：热力图 / 表格 切换（数据已缓存，重渲染不重拉东财） */
-  (function initUsTopToggle() {
-    const host = document.getElementById('screenBody');
-    if (!host) return;
-    host.addEventListener('click', (e) => {
-      const b = e.target.closest('[data-tv]');
-      if (!b || !host.querySelector('.ust-heat, .us-top')) return;
-      usTopView = b.dataset.tv;
-      host.querySelectorAll('.us-top__tv [data-tv]').forEach((x) => x.classList.toggle('is-active', x === b));
-      renderUsTopList();
     });
   })();
 

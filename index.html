@@ -1204,9 +1204,11 @@ html, body {
 }
 /* ---- 市场榜：三栏并排（成交/涨幅/跌幅）---- */
 .mkt {
-  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0; padding: 0; min-width: 860px;
 }
+/* 右栏：涨幅榜 + 跌幅榜 竖着叠放。第二个表头取消吸顶并加分隔线，避免两个 sticky 表头重叠 */
+.mkt__col--stack > .mkt__hd:not(:first-of-type) { position: static; border-top: 1px solid var(--border); }
 .mkt__col { min-width: 0; border-right: 1px solid var(--border); }
 .mkt__col:last-child { border-right: 0; }
 .mkt__hd {
@@ -1219,17 +1221,16 @@ html, body {
 .mkt__hd i { font-style: normal; font-weight: 400; font-size: 10px; color: var(--text-3); }
 .mkt__row {
   display: grid;
-  grid-template-columns: 22px 78px 1fr 84px 72px 64px;
+  grid-template-columns: 22px 1fr 84px 72px 64px;
   align-items: center; gap: 6px;
   padding: 5px 12px; font-size: 12px;
   border-bottom: 1px solid var(--border);
 }
 .mkt__row:hover { background: var(--panel-2); }
 .mkt__i { color: var(--text-3); text-align: right; font-variant-numeric: tabular-nums; }
-.mkt__c { display: flex; align-items: baseline; gap: 4px; min-width: 0; }
-.mkt__c b { font-weight: 500; color: var(--text); overflow: hidden; text-overflow: ellipsis; }
-.mkt__c i { font-style: normal; font-size: 9px; color: var(--text-3); flex: 0 0 auto; }
-.mkt__n { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mkt__n { min-width: 0; display: flex; flex-direction: column; justify-content: center; line-height: 1.18; }
+.mkt__n b { font-weight: 500; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mkt__n i { font-style: normal; font-size: 9px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mkt__p, .mkt__x { text-align: right; font-variant-numeric: tabular-nums; }
 .mkt__v { text-align: right; font-variant-numeric: tabular-nums; color: var(--text-2); }
 .mkt__p.up, .mkt__x.up { color: var(--up); }
@@ -1253,10 +1254,10 @@ html, body {
   font-size: 13px; line-height: 1.9; color: var(--text-3);
 }
 /* 美股榜：7 列定宽表。窄屏整体横向滚动，不换行（宁可横滑也不要挤成一团）。 */
-.us-top { padding: 0 16px; min-width: 780px; }
+.us-top { padding: 0 16px; min-width: 720px; }
 .us-top__hd, .us-top__row {
   display: grid;
-  grid-template-columns: 44px 132px 1fr 108px 96px 84px 132px;
+  grid-template-columns: 44px 1fr 108px 96px 84px 132px;
   align-items: center; gap: 8px;
   padding: 6px 0; font-size: 12px;
 }
@@ -1268,23 +1269,16 @@ html, body {
 .us-top__row { border-bottom: 1px solid var(--border); }
 .us-top__row:hover { background: var(--panel-2); }
 .us-top__i { color: var(--text-3); text-align: right; font-variant-numeric: tabular-nums; }
-.us-top__c { display: flex; align-items: baseline; gap: 5px; }
-.us-top__c b { font-weight: 500; color: var(--text); }
-.us-top__c i { font-style: normal; font-size: 10px; color: var(--text-3); }
-.us-top__n { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 名称列：主行名称 + 副行（代码 · 交易所），代码当作副行显示，名称列占掉原代码列宽度 */
+.us-top__n { min-width: 0; display: flex; flex-direction: column; justify-content: center; line-height: 1.2; }
+.us-top__n b { font-weight: 500; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.us-top__n i { font-style: normal; font-size: 9px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .us-top__p, .us-top__x, .us-top__m { text-align: right; font-variant-numeric: tabular-nums; }
 .us-top__m { color: var(--text-2); }
 .us-top__i2 { color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .us-top__p.up, .us-top__x.up { color: var(--up); }
 .us-top__p.down, .us-top__x.down { color: var(--down); }
 
-/* 全部个股 · 热力图 / 表格 切换 */
-.us-top__tv { display: inline-flex; gap: 4px; margin-left: 2px; }
-.us-top__tv button {
-  border: 1px solid var(--border); background: var(--panel-2); color: var(--text-2);
-  border-radius: 6px; padding: 2px 10px; font-size: 11px; cursor: pointer; line-height: 1.4;
-}
-.us-top__tv button.is-active { background: #3a7afe; color: #fff; border-color: transparent; }
 /* 板块热力图（两级 squarified 树图） */
 .ust-heat { position: relative; width: 100%; height: clamp(420px, 64vh, 680px);
   border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--panel); }
@@ -1322,7 +1316,9 @@ html, body {
   .screen-switch button { flex: 0 0 auto; padding: 3px 8px; font-size: 11px; }
   .screen-bar { padding: 7px 12px; gap: 10px; font-size: 11px; }
   .screen-bar__src { margin-left: 0; width: 100%; }
-  .us-top { padding: 0 12px; }
+  .us-top { min-width: 0; padding: 0 10px; }
+  /* 移动端：取消最小宽度、固定列收窄、字号缩小，使表格能塞进手机屏宽 */
+  .us-top__hd, .us-top__row { grid-template-columns: 24px 1fr 64px 56px 54px 64px; gap: 5px; font-size: 11px; }
   /* 三栏在窄屏改为纵向堆叠：横排时每栏不足 130px，代码与名称都会挤掉 */
   .mkt { grid-template-columns: 1fr; min-width: 0; }
   .mkt__col { border-right: 0; border-bottom: 1px solid var(--border); }

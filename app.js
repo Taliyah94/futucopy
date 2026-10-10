@@ -5826,7 +5826,7 @@ const applyMode = (mode, skipDraw) => {
       /* 基金当日值：`fundByDate`（detailState.fund = nav 文件的最后一条）。
          ⚠️ 2026-10-07（用户「收益日历金额又和累计盈亏不一致了，累计盈亏是对的」）：
             QDII 净值 T+2 滞后，`detailState.fund` 的最后一条往往停在两天前，
-            而侧栏「基金」市值用的是**最新净值**（f10/lsjz 实时接口 / fund_holdings）。
+            而侧栏「基金」市值用的是**最新净值**（fundmobapi 实时接口 / fund_holdings）。
             于是日历累计比侧栏少一截（实测 157,857 vs 167,848，差 ≈9,992）。
             修法：在**最新净值日**那一天把基金段替换成侧栏的实时市值 CAL_FUND_LIVE.amount，
             这样末值同源、累计就对上了。⚠️ 只替换「最新净值日」这一天，不动更早的历史
@@ -6569,38 +6569,34 @@ const applyMode = (mode, skipDraw) => {
       return res;
     }
 
-    /* ---- 东方财富 f10/lsjz 历史净值 API（JSONP script 标签，免 CORS）取最新两日净值 ----
+    /* ---- 东方财富移动端 API（fundmobapi，CORS:* 可直接 fetch+JSON）取最新净值 + 前一日净值 + 净值日 ----
        返回 [最新净值, 前一日净值, 净值日期文本]。⚠️ QDII 净值滞后 1~3 天，日期必须带出来。
-       2026-10-09 弃用 pingzhongdata/<code>.js（整包 300KB+，含全历史净值/持仓/评级一堆用不到的），
-       改走轻量接口 api.fund.eastmoney.com/f10/lsjz（实测 pageSize=3 响应 <1KB）。
-       ⚠️ 该接口裸请求回 ErrCode:-999，要求**存在 Referer 头**（内容不限，本地/https 页面都行，
-          script 标签自动带页面 Referer）；不支持 CORS 头，但支持 callback= JSONP —— 走 JSONP。
-       LSJZList 按日期倒序：[0] 最新、[1] 前一日。FSRQ=日期(YYYY-MM-DD)、DWJZ=单位净值。 */
+       2026-10-09 弃用 f10/lsjz（<script> JSONP，github.io Referer 被白名单拒 → 净值日恒画杠），
+       改走 fundmobapi 移动端接口：CORS:* 支持跨域 fetch，github.io / 任意静态托管均可直连，
+       不受 Referer 限制。实测字段：Datas.DWJZ=单位净值、RZDF=日涨跌幅(%)、FSRQ=净值日期(YYYY-MM-DD)。
+       前一日净值 = DWJZ ÷ (1 + RZDF/100)（移动端不单独给前一日单位净值，用日涨跌幅反推）。
+       失败（网络不可达/超时 5s/字段异常）→ 返回 [null,null,null] → 上层不置 f.navDate → 净值日期画杠(--)。 */
     function accFundNav(code) {
       return new Promise((resolve) => {
-        const cbName = '_emLsjz' + String(code).replace(/\W/g, '') + '_' + Date.now();
-        const s = document.createElement('script');
-        let settled = false;
-        const finish = (l, p, d) => {
-          if (settled) return;
-          settled = true;
-          s.remove();
-          try { delete window[cbName]; } catch (e) { window[cbName] = undefined; }
-          resolve([l, p, d || null]);
-        };
-        window[cbName] = (json) => {
-          try {
-            const list = json && json.Data && json.Data.LSJZList;
-            if (list && list.length >= 2 && +list[0].DWJZ > 0 && +list[1].DWJZ > 0) {
-              finish(+list[0].DWJZ, +list[1].DWJZ, list[0].FSRQ);   // FSRQ 本身就是 'YYYY-MM-DD'
-            } else finish(null, null);
-          } catch (e) { finish(null, null); }
-        };
-        s.onerror = () => finish(null, null);
-        setTimeout(() => finish(null, null), 4000);
-        s.src = 'https://api.fund.eastmoney.com/f10/lsjz?fundCode=' + code
-              + '&pageIndex=1&pageSize=3&callback=' + cbName + '&_=' + Date.now();
-        document.head.appendChild(s);
+        const finish = (l, p, d) => resolve([l, p, d || null]);
+        const ac = new AbortController();
+        const to = setTimeout(() => { try { ac.abort(); } catch (e) {} }, 5000);
+        fetch('https://fundmobapi.eastmoney.com/FundMNewApi/FundMNNBasicInformation?FCODE=' + code
+            + '&deviceid=Wap&plat=Wap&product=EFund&version=6.2.5', { cache: 'no-store', signal: ac.signal })
+          .then((r) => { if (!r.ok) throw new Error('http ' + r.status); return r.json(); })
+          .then((j) => {
+            clearTimeout(to);
+            const d = j && j.Datas;
+            if (!d) return finish(null, null);
+            const nav = parseFloat(d.DWJZ);
+            const dt = d.FSRQ;
+            const rzdf = parseFloat(d.RZDF);
+            if (!(nav > 0) || !dt) return finish(null, null);
+            // 前一日净值：移动端只给当日净值 DWJZ + 日涨跌幅 RZDF，用涨跌幅反推昨日净值
+            const prev = (isFinite(rzdf) && rzdf > -100) ? nav / (1 + rzdf / 100) : nav;
+            finish(nav, prev, dt);
+          })
+          .catch(() => { clearTimeout(to); finish(null, null); });
       });
     }
 
@@ -7400,7 +7396,7 @@ const applyMode = (mode, skipDraw) => {
                navEst: f.navL != null ? f.navL * (1 + chg) : null };
     }
 
-    /* ---- 基金：份额 × 最新净值（f10/lsjz 实时接口，失败回退 fund_holdings.json） ---- */
+    /* ---- 基金：份额 × 最新净值（fundmobapi 实时接口，失败回退 fund_holdings.json） ---- */
     const funds = (seed.pa_funds || []).map((f) => {
       const t = (f.trades && f.trades[0]) || {};
       return { code: f.code, name: f.name, shares: t.shares || 0, cost: t.price || 0, navL: null, navP: null,
@@ -7512,7 +7508,7 @@ fundAmount += f.amount;
     /* 把基金实时口径发布出去，供**收益日历**对齐末值（用户 2026-10-07 16:32 反馈：
        「收益日历金额又和累计盈亏不一致了，累计盈亏是对的」）。
        差 ~9,992 的原因：日历的基金段读 `detailState.fund`（= fund_holdings.json 的 nav
-       最后一条，QDII 净值 T+2 会滞后一到两天），而侧栏这里用的是 f10/lsjz 实时接口 /
+       最后一条，QDII 净值 T+2 会滞后一到两天），而侧栏这里用的是 fundmobapi 实时接口 /
        fund_holdings 里的**最新净值**。两者末值不同 → 累计差一截。
        发布两样：总市值 fundAmount（直接对标侧栏）、以及每只基金的最新净值日
        navDateToday（日历要把该日的基金段值替换成实时市值才同源）。 */

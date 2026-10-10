@@ -1219,21 +1219,19 @@ html, body {
 .mkt__hd i { font-style: normal; font-weight: 400; font-size: 10px; color: var(--text-3); }
 .mkt__row {
   display: grid;
-  grid-template-columns: 22px 78px 1fr 72px 64px;
+  grid-template-columns: 22px 78px 1fr 84px 72px 64px;
   align-items: center; gap: 6px;
   padding: 5px 12px; font-size: 12px;
   border-bottom: 1px solid var(--border);
 }
 .mkt__row:hover { background: var(--panel-2); }
-/* 成交榜的「量/额」基准行：斜体弱化，与逐只股票区分开 */
-.mkt__row--sub { font-size: 10px; color: var(--text-3); background: var(--panel-2); }
-.mkt__row--sub .mkt__p, .mkt__row--sub .mkt__x { font-size: 10px; }
 .mkt__i { color: var(--text-3); text-align: right; font-variant-numeric: tabular-nums; }
 .mkt__c { display: flex; align-items: baseline; gap: 4px; min-width: 0; }
 .mkt__c b { font-weight: 500; color: var(--text); overflow: hidden; text-overflow: ellipsis; }
 .mkt__c i { font-style: normal; font-size: 9px; color: var(--text-3); flex: 0 0 auto; }
 .mkt__n { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mkt__p, .mkt__x { text-align: right; font-variant-numeric: tabular-nums; }
+.mkt__v { text-align: right; font-variant-numeric: tabular-nums; color: var(--text-2); }
 .mkt__p.up, .mkt__x.up { color: var(--up); }
 .mkt__p.down, .mkt__x.down { color: var(--down); }
 .mkt__none { padding: 20px 12px; font-size: 11px; color: var(--text-3); text-align: center; }
@@ -1258,7 +1256,7 @@ html, body {
 .us-top { padding: 0 16px; min-width: 780px; }
 .us-top__hd, .us-top__row {
   display: grid;
-  grid-template-columns: 44px 132px 1fr 96px 84px 108px 132px;
+  grid-template-columns: 44px 132px 1fr 108px 96px 84px 132px;
   align-items: center; gap: 8px;
   padding: 6px 0; font-size: 12px;
 }

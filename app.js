@@ -3713,7 +3713,7 @@ const TICKER_TTL = 15000;
      ⚠️ 没读到就显示空态/报错（与全站「没数据不显示数字」的铁律一致），
         绝不拿旧值或占位数字糊弄。 */
   const SCREEN_TABS = {
-    'all-stocks': '美股市值 top 150（含 OTC / ADR）',
+    'all-stocks': '美股市值 top 150（含 OTC / ADR，已按代码去重）',
     'sp-500': 'S&P 500',
     'nasdaq-100': 'Nasdaq 100',
     'sectors': '板块',
@@ -3852,18 +3852,28 @@ const TICKER_TTL = 15000;
       if (!exRaw.length || !otc.length) throw new Error('东财市值榜缺页');
       const all = emNormTop(exRaw).concat(emNormTop(otc));
       all.sort((a, b) => -(a.mc || 0) + (b.mc || 0));
-      return { asOf: new Date().toISOString(), source: 'eastmoney live jsonp', rows: all.slice(0, 150) };
+      // 按代码去重：东财分页边界（第100/101名市值并列导致两页重叠）与 OTC(m:153)
+      // 部分大股票同 f12 代码也出现在主板(m:105/106/107) → ex1/ex2 或 ex/otc 会重复，
+      // 原代码未去重会直接进 top150，表现为「同一只股票出现两次」。保留先出现（市值更高）那条。
+      const seen = new Set();
+      const deduped = [];
+      for (const row of all) {
+        if (seen.has(row.c)) continue;
+        seen.add(row.c);
+        deduped.push(row);
+      }
+      return { asOf: new Date().toISOString(), source: 'eastmoney live jsonp', rows: deduped.slice(0, 150) };
     })().finally(() => { emLiveInFlight.top = null; });
     return emLiveInFlight.top;
   }
   async function emLiveFetchMkt() {
     if (emLiveInFlight.mkt) return emLiveInFlight.mkt;
     emLiveInFlight.mkt = (async () => {
-      const cfgs = [['turnover', 'f6', 1], ['gainer', 'f3', 1], ['loser', 'f3', 0]];
+      const cfgs = [['turnover', 'f6', 1, 30], ['gainer', 'f3', 1, 10], ['loser', 'f3', 0, 10]];
       const boards = {};
-      const got = await Promise.all(cfgs.map(([key, fid, po]) => {
-        const u = '?pn=1&pz=10&po=' + po + '&fid=' + fid + '&fs=' + EM_FS_EXCH + '&fields=' + EM_MKT_FIELDS;
-        return emJsonp(u, 9000).then((d) => ({ key, rows: emNormMkt(emDiff(d)).slice(0, 10) }))
+      const got = await Promise.all(cfgs.map(([key, fid, po, pz]) => {
+        const u = '?pn=1&pz=' + pz + '&po=' + po + '&fid=' + fid + '&fs=' + EM_FS_EXCH + '&fields=' + EM_MKT_FIELDS;
+        return emJsonp(u, 9000).then((d) => ({ key, rows: emNormMkt(emDiff(d)).slice(0, pz) }))
           .catch(() => null);
       }));
       got.forEach((g) => { if (g && g.rows.length) boards[g.key] = g.rows; });
@@ -3961,18 +3971,12 @@ const TICKER_TTL = 15000;
           <span class="mkt__i">${i + 1}</span>
           <span class="mkt__c"><b>${cpEsc(x.c)}</b><i>${x.m === 105 ? 'NAS' : (x.m === 106 ? 'NYSE' : (x.m === 107 ? 'AMEX' : x.m))}</i></span>
           <span class="mkt__n">${cpEsc(x.n)}</span>
+          <span class="mkt__v num">${fmtVol(x.vol)}</span>
           <span class="mkt__p num ${c}">${fmt(x.p, 2)}</span>
           <span class="mkt__x num ${c}">${fmtPct(x.pct)}</span>
         </div>`;
       }).join('');
-      /* 成交榜额外给量（成交量/成交额），涨幅/跌幅榜这两列没意义 → 不渲染 */
-      const extra = b.key === 'turnover'
-        ? '<div class="mkt__row mkt__row--sub"><span class="mkt__i"></span>'
-          + '<span class="mkt__c"></span><span class="mkt__n">量 / 额</span>'
-          + '<span class="mkt__p num">' + fmtVol((rows[0] || {}).vol) + '</span>'
-          + '<span class="mkt__x num">' + fmtAmt((rows[0] || {}).amt) + '</span></div>'
-        : '';
-      return '<div class="mkt__col">' + head + extra + body + '</div>';
+      return '<div class="mkt__col">' + head + body + '</div>';
     }).join('');
     host.innerHTML = `
       <div class="screen-bar">
@@ -4009,8 +4013,8 @@ const TICKER_TTL = 15000;
         <span class="screen-bar__src">来源：东方财富（${srcTag}）</span>
       </div>
       <div class="us-top">
-        <div class="us-top__hd"><span>#</span><span>代码</span><span>名称</span>
-          <span>现价</span><span>涨跌幅</span><span>市值</span><span>行业</span></div>
+        <div class="us-top__hd"><span>序号</span><span>代码</span><span>名称</span>
+          <span>市值</span><span>现价</span><span>涨跌幅</span><span>行业</span></div>
         ${rows.map((x, i) => {
           const c = cls(x.pct);
           const mc = (x.m === 153 ? 'OTC' : (x.m === 105 ? 'NAS' : (x.m === 106 ? 'NYSE' : (x.m === 107 ? 'AMEX' : x.m))));
@@ -4018,9 +4022,9 @@ const TICKER_TTL = 15000;
             <span class="us-top__i">${i + 1}</span>
             <span class="us-top__c"><b>${cpEsc(x.c)}</b><i>${mc}</i></span>
             <span class="us-top__n">${cpEsc(x.n)}</span>
+            <span class="us-top__m num">${fmtCap(x.mc)}</span>
             <span class="us-top__p num ${c}">${fmt(x.p, 2)}</span>
             <span class="us-top__x num ${c}">${fmtPct(x.pct)}</span>
-            <span class="us-top__m num">${fmtCap(x.mc)}</span>
             <span class="us-top__i2">${x.ind ? cpEsc(x.ind) : '--'}</span>
           </div>`;
         }).join('')}

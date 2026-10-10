@@ -98,10 +98,6 @@ html, body {
   background: var(--panel);
   border-bottom: 1px solid var(--border);
 }
-/* 账户页侧栏**展开态**下，顶栏整条就是「收起」热区（app.js 在展开态给 .topbar 挂 is-foldable）。
-   ⚠️ 只在窄屏账户视图生效（JS 里按 AC_MQ 加/摘 class），别把桌面顶栏也变成假可点。 */
-.topbar.is-foldable { cursor: pointer; }
-.topbar.is-foldable .topbar__search input { cursor: text; }   /* 搜索框仍是输入光标 */
 .topbar__left { display: flex; gap: 2px; }
 
 .topbar__search {
@@ -820,6 +816,23 @@ html, body {
      - 自选列表变成**可切换的抽屉**：默认显示列表，点行后收起列表、显示该标的图表
      - 顶栏精简：隐藏返回/前进/刷新/搜索，只留品牌 + 美东时钟
      ⚠️ 不要再 display:none 掉 .watchlist —— 那样移动端就没有自选入口了。 */
+  /* 2026-10-10：累计收益 / TWR 读数行已移到时间范围（1月）之前，且与范围档位并成一行。
+     ⚠️ 特异度陷阱（本块第一版一直没生效，白改了两轮）：本文件的基础规则
+        `.ao-stats{gap:44px}` / `.ao-ranges{margin-left:auto}` / `.ao-ranges button{font-size:12px}`
+        写在 680px 媒体查询**之后**（基础规则在 1728+ 行），同特异度下后者胜出
+        → 媒体查询里的裸类名覆盖会被后写的基础规则吃掉。
+        所以下面每条都必须带 `.ao-chart-head ` 前缀提高特异度（0,2,0 > 0,1,0），改了才生效。
+     一行化做法：stats 可收缩(flex 0 1 auto + min-width:0)且内部 nowrap，
+     ranges 不换行不收缩(flex 0 0 auto)，由 ranges 的 margin-left:auto 顶到行尾。 */
+  .ao-chart-head { gap: 6px 8px; padding: 10px 10px 0; }
+  .ao-chart-head .ao-stats { flex: 0 1 auto; min-width: 0; flex-wrap: nowrap;
+                             gap: 6px; padding: 0; align-items: baseline; }
+  .ao-chart-head .ao-stat { min-width: 0; }
+  .ao-chart-head .ao-stat span { font-size: 9px; margin-bottom: 1px; white-space: nowrap; }
+  .ao-chart-head .ao-stat b { font-size: 14px; }
+  .ao-chart-head .ao-ranges { flex: 0 0 auto; flex-wrap: nowrap; margin-left: auto; gap: 5px; }
+  .ao-chart-head .ao-ranges button { font-size: 12px; padding: 5px 9px; }
+
   .topbar__left { display: flex !important; }   /* 保留容器，里面只放行「刷新」 */
   .topbar__left .icon-btn:nth-child(1),
   .topbar__left .icon-btn:nth-child(2) { display: none; }   /* 返回/前进：移动端用不到 */
@@ -1025,42 +1038,39 @@ html, body {
   }
   .acc-main { width: 100%; min-width: 0; flex: 1 1 auto; }
   .acc-side__spark { height: 26px; }        /* 触屏略矮一点，整体更紧凑 */
-  /* 侧栏总资产卡窄屏布局：**三列并排 —— 总资产 | 走势曲线 | 盈亏**（用户 2026-10-04 定稿）。
-     原来「总资产」独占一行、曲线+盈亏在下一行左右并排，共两行约 94px；
-     现在三列同处一行（约 44px），省下一整行高度给下面的分类列表。
-     各列宽度按内容分配：总资产按最长金额（105 万级 ≈ 130px）、曲线吃掉剩余、盈亏按两行数字。 */
-  .acc-side__card { padding: 8px 10px 6px; }
-  .acc-side__label { font-size: 10px; }                 /* 让「总资产 · CNY」小一号，给数字让位 */
-  /* 账户名窄屏用缩写「IBKR（U18576039）」（用户 2026-10-04），比全称短不少，
-     不再需要 ellipsis 截断（原来 62px 会把「盈透证券账户(U1857…」砍掉一半）。 */
-  .acc-side__account { font-size: 10px; }
-  .acc-side__total { font-size: 17px; margin: 1px 0 0; white-space: nowrap; }
-  .acc-side__row { display: contents; }                 /* 曲线与盈亏脱离 flex 流，交给下面的三列网格 */
-  .acc-side__body { display: block; }
-  .acc-side__card {
-    display: grid;
-    grid-template-columns: auto minmax(60px, 1fr) auto;
-    grid-template-areas: 'label label label' 'total spark pnl';
-    align-items: end; column-gap: 8px; row-gap: 2px;
-  }
-  .acc-side__label { grid-area: label; }
-  /* 总资产数字靠**上**（用户 2026-10-04：「总资产这个数靠上点」）：原来跟曲线/盈亏一起
-     `align-self:end` 沉在底部，17px 的字压在 26px 曲线的下方显得下坠。改成 start 顶到网格行顶部，
-     与上方「总资产 · CNY」标签间距更紧凑；曲线与盈亏仍保持底部对齐（数字才有共同的基线）。 */
-  .acc-side__total { grid-area: total; align-self: start; margin-top: -2px; }
-  .acc-side__spark { grid-area: spark; width: auto; height: 26px; align-self: end; margin-bottom: 1px; }
-  /* 盈亏列：两行间距 1→0、标签行高压到 12px，让整列降到 ~50px 与曲线底部齐平 */
-  .acc-side__pnl { grid-area: pnl; align-self: end; gap: 0; }
-  .asp-col { gap: 0; }
-  .asp-col span { font-size: 10px; line-height: 12px; }
-  .asp-col i { font-size: 11px; line-height: 14px; }
-  .asp-col i + i { font-size: 10px; }
+  /* 侧栏总资产卡窄屏：**已改为与下方证券/基金行完全同构的结构与类名**
+     （`.as-line.as-line--3c` + `.asl-col` + `.asl-vals`，见 index.html 的 .acc-side__card）。
+     所以这里**不再有任何列宽/对齐/字号的硬凑规则** —— 全部沿用 `.as-line--3c` 那套，
+     字体、列宽、space-between 落位天然与分类行一致，也不会多占一行。
+     本段只保留移动端专属的一点：隐藏迷你走势图（曲线在窄屏只占 60px 却把数字挤窄，信息量低）。
+     ⚠️ 2026-10-10：原来这里还有一条 `.acc-side__card .asl-col span{font-size:10px}`，
+        但用户对比截图指出「总资产 · CNY / 盈亏（10-09）/ 累计盈亏 · TWR 比下面证券行小一号」，
+        已删除 → 标签统一沿用基础规则 `.asl-col span{font-size:11px}`，与证券/基金行**完全同号**。
+        （本卡与分类行本就是同一套 `.asl-col` 类名，字号一致后视觉才真正同构。） */
+  .acc-side__card.acc-side__card { margin: 0; padding: 9px; border-radius: 8px; }
+  .acc-side__card .acc-side__spark { display: none; }
+  /* 主数字移动端 **17px**（用户 2026-10-10：「总资产字体可以大一点，醒目一点」）。
+     ⚠️ 不破坏结构的关键：只放大字号，**不加宽度/边距/换行**规则 —— 本卡与下方分类行共用
+        `.as-line--3c` 的 space-between 落位，首列 `flex:0 0 auto` 按内容宽度自适应，
+        数字变大只是首列变宽一点，盈亏两列仍贴右缘（第3列右缘 = 内容区右界，实测恒为 408）。
+     ⚠️ 特异度：需覆盖桌面 `.acc-side__card .asl-col b{font-size:20px}`，故重复类名提特异度。 */
+  .acc-side__card.acc-side__card .asl-col b { font-size: 17px; }
   /* 侧栏分类行：盈亏金额与百分比并排（省一行高度），金额加粗
      ⚠️ 选择器要带 `.asl-col--r` 提高特异度 —— 基础规则 `.asl-vals{display:contents}`
         写在媒体查询之后，同特异度会覆盖掉这里的 flex。 */
   .asl-col--r .asl-vals { display: flex; align-items: baseline; gap: 5px; }
-  .asl-col--r .asl-vals i:first-child { font-size: 12px; font-weight: 700; }
-  .asl-col--r .asl-vals i + i { font-size: 10px; font-weight: 500; }
+  /* 2026-10-10 用户二轮反馈：移动端盈亏金额/百分比再大一档（原 12px / 10px）。
+     这条同时作用于**总资产卡**与**证券/基金/现金分类行** —— 两处本就是同一套类名，
+     保持同号才不会出现「卡片里的 +11850.04 比证券行里的 +11850.04 大一号」的割裂感。 */
+  .asl-col--r .asl-vals i:first-child { font-size: 14px; font-weight: 700; }
+  .asl-col--r .asl-vals i + i { font-size: 12px; font-weight: 500; }
+  /* 证券/基金/现金 三行的「总额」主数字再大一档（用户 2026-10-10「下面的总额那个数也大一些」）。
+     ⚠️ 必须写成 3 段类名：基础规则 `.as-group .as-line b{font-size:12px}`（基础区 1447 行）
+        排在媒体查询之后、且同为 (0,2,1)，裸写 `.asl-col b` 会被它吃掉 —— 实测这三行现在
+        渲染的正是 12px 而非 `.asl-col b` 的 14px。加一段 `.asl-col` 提到 (0,3,1) 才稳。
+     ⚠️ 只作用于 `.as-group` 内的分类行，总资产卡（`.acc-side__card`，不在 .as-group 里）
+        不受影响，仍是上面的 17px。 */
+  .as-group .as-line .asl-col b { font-size: 16px; }
   /* 账户页 4 个 tab（持仓/资产/历史/资金明细）窄屏不溢出 */
   .acc-tabs { gap: 14px; }
   /* 汇总行：段数变多后窄屏放不下，允许横向滚动（标签已 nowrap 不会竖排） */
@@ -1086,42 +1096,26 @@ html, body {
   .ao-cal .ao-cal__grid--year { grid-template-columns: repeat(3, 1fr); }
   .ao-cal .ao-cal__cell { padding: 10px 4px; }
   .ao-cal .ao-cal__cell .n { font-size: 12px; }
-  .ao-cal .ao-cal__bar { gap: 10px 12px; padding: 8px 0 12px; }
-  .ao-cal .ao-cal__sum { margin-left: 0; width: 100%; justify-content: space-between; gap: 12px; }
-  .ao-cal .ao-cal__sum b { font-size: 15px; }
+  /* 日历工具条：月/年 + 月份导航 + 收益/TWR **一行排下**（用户 2026-10-10）。
+     原来移动端给 `.ao-cal__sum` 写了 `width:100%` 强制换行，且 `flex-wrap:wrap` 会把三块拆成两行。
+     现在：`flex-wrap:nowrap` + 间距收紧 + sum 不再占满宽度、由 `margin-left:auto` 顶到最右。
+     标签隐藏只留数值（窄屏省宽度）：`ao-cal__sum span{display:none}`，读数更醒目。 */
+  /* align-items:center —— 三块高度不同（switch 高、nav 中、sum 只有数值行），
+     默认 center 已对齐，但 sum 的 span 隐藏后基线仍偏低，这里给 sum 显式 line-height 对齐视觉中线。 */
+  .ao-cal .ao-cal__bar { flex-wrap: nowrap; gap: 6px; padding: 6px 0 10px; align-items: center; }
+  .ao-cal .ao-cal__sum b { line-height: 20px; }
+  .ao-cal .ao-cal__switch { flex: 0 0 auto; }
+  .ao-cal .ao-cal__nav { flex: 0 0 auto; }
+  .ao-cal .ao-cal__nav b { min-width: 56px; font-size: 13px; }
+  .ao-cal .ao-cal__sum { margin-left: auto; width: auto; flex: 0 0 auto;
+                         justify-content: flex-end; gap: 10px; }
+  .ao-cal .ao-cal__sum span { display: none; }
+  .ao-cal .ao-cal__sum b { font-size: 13px; }
   .ao-cal .ao-cal__day { min-height: 56px; padding: 5px 2px; }
   .ao-cal .ao-cal__day .n { font-size: 10px; }
   .ao-cal .ao-cal__day .p { font-size: 10px; }
 
-  /* 侧栏折叠条：折叠态下总资产一行 + 箭头，点一下展开明细。
-     收起后侧栏 313px → 44px，总览页走势图从只露 45px 变成约 354px。 */
-  .acc-side .acc-side__fold {
-    display: flex; align-items: center; gap: 4px; flex: none;
-    border: none; background: none; padding: 2px 0 2px 8px;
-    cursor: pointer; color: var(--text-2);
-  }
-  .acc-side__fold-ic {
-    display: inline-flex; align-items: center; justify-content: center;
-    width: 18px; height: 18px; flex: none;
-    transition: transform .2s ease;
-  }
-  .acc-side__fold-ic svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-  .acc-side__fold-ic { transform: rotate(180deg); }        /* 展开时箭头朝上 */
-  .acc-side.is-folded .acc-side__fold-ic { transform: rotate(0deg); }
-
-  /* 折叠条：左「总资产 + 金额」是总览页入口（替代被收起的总资产卡），右折叠按钮 */
-  .acc-side__foldbar { display: flex; align-items: center; gap: 8px; }
-  .acc-side__toTotal {
-    display: flex; align-items: baseline; gap: 6px; min-width: 0; flex: 1 1 auto;
-    border: none; background: none; padding: 2px 0; cursor: pointer; text-align: left;
-  }
-  .acc-side__toTotal-lbl { font-size: 11px; color: var(--text-2); flex: none; }
-  .acc-side__toTotal-sum { font-size: 15px; font-weight: 700; color: var(--text); white-space: nowrap; }
-  /* 展开态：左侧总览入口与下方总资产卡重复，只留折叠箭头 —— 且居中（下面已经有个总资产大标题，不需要再写文字说明） */
-  .acc-side:not(.is-folded) .acc-side__toTotal { display: none; }
-  /* 展开态：左侧总览入口隐藏，只剩居中箭头；整条撑到 34px 高（原来 22px，
-     用户 2026-10-05 反馈「收起点击范围太小」—— 加上顶栏那条热区才够手指点） */
-  .acc-side:not(.is-folded) .acc-side__fold { flex: 1 1 auto; justify-content: center; padding: 2px 0; min-height: 34px; }
+  /* 2026-10-10：账户侧栏「收起/展开」功能已按用户要求移除，折叠条样式一并删除（见 MEMORY）。 */
 }
 
 /* ===================== 账户视图（仿富途账户页） ===================== */
@@ -1255,6 +1249,9 @@ html, body {
 .us-top__i2 { color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .us-top__p.up, .us-top__x.up { color: var(--up); }
 .us-top__p.down, .us-top__x.down { color: var(--down); }
+/* 指数成分股表（S&P 500 / Nasdaq 100）：6 列 = 序号 / 名称 / 市值 / 现价 / 1年回报 / 权重
+   （覆盖 .us-top 默认的 7 列市值榜网格，列数对齐渲染的 6 个 span） */
+.idx-const .us-top__hd, .idx-const .us-top__row { grid-template-columns: 44px 1fr 108px 92px 96px 80px; }
 
 @media (max-width: 720px) {
   .screen-head { padding: 8px 12px; gap: 6px; flex-wrap: nowrap; }
@@ -1291,7 +1288,7 @@ html, body {
   pointer-events: none;
 }
 /* 收起按钮只在桌面端出现（移动端侧栏本来就是全宽，没有可收的空间）。
-   ⚠️ 基础规则写 `display:none` + **反向**媒体查询打开 —— 与 .acc-side__foldbar 同一个坑：
+   ⚠️ 基础规则写 `display:none` + **反向**媒体查询打开（与本文件其他「反向媒体查询」写法同一个坑）：
    直接在 680px 媒体查询里写会被后面的基础规则（同 specificity）覆盖掉。 */
 .watchlist--trade .wl__actions { display: none; }
 @media (min-width: 681px) {
@@ -1380,25 +1377,23 @@ html, body {
   padding: 14px 12px;
   overflow-y: auto;
 }
-/* 折叠按钮只在移动端出现（桌面侧栏有独立空间，不需要折叠）。
-   ⚠️ 这里用 `min-width: 681px` 而不是基础 `display:none`：
-   基础规则写在 680px 媒体查询**之后**，同选择器会覆盖掉媒体查询里的 `display:flex`（实测按钮 0×0 不可见）。
-   改成反向媒体查询后，两边互不干扰，不需要拼 specificity。 */
+/* 2026-10-10：总资产卡已改为与分类行同构（`.as-line--3c` + `.asl-col` + `.asl-vals`），
+   原 `.acc-side__label/.acc-side__total/.acc-side__row/.acc-side__pnl` 对应元素已删除，故规则一并移除。
+   桌面端只需给主数字保留大字号 + 曲线留出高度。 */
+.acc-side__card .asl-col b { font-size: 20px; color: var(--text); }   /* 主数字大字号 */
+/* 总资产卡「两段式标签」（用户 2026-10-10 桌面端反馈）：
+   桌面侧栏固定 302px，卡内中间列实测只有 66.6px，而整串「盈亏（10-09）」需 ~72px，
+   于是断在「（」里面 → 显示成「盈亏（10-」/「09）」，很难看。
+   解决：把标签拆成两个节点（`.acc-lbl2 > span`），桌面端竖排成
+   「盈亏」+「（10-09）」、「累计盈亏」+「TWR」两行（各 ≤53px，稳稳放得下）。
+   ⚠️ 只在 min-width:681px 里竖排 —— 移动端侧栏满宽，标签要保持在**一行**并排；
+      且 `.as-line` 那套基础规则排在 680px 媒体查询之后，裸写基础规则会波及移动端。
+   ⚠️ 中段的 `<i class="acc-lbl2__sep">` 是移动端的「 · 」分隔符（沿用旧文案写法），
+      桌面竖排时必须隐藏，否则「·」会独占一行。 */
 @media (min-width: 681px) {
-  .acc-side__foldbar { display: none; }
+  .acc-side__card .acc-lbl2 { display: flex; flex-direction: column; align-items: flex-end; }
+  .acc-side__card .acc-lbl2__sep { display: none; }
 }
-/* 折叠态：侧栏只剩折叠条（省 313px 给图表） */
-.acc-side.is-folded { padding: 6px 12px 8px; overflow: visible; }
-.acc-side.is-folded > .acc-side__body { display: none; }
-.acc-side__label { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text-2); }
-/* 「总资产 · CNY」后面的账户名：靠最右、灰一档。
-   字号与左侧「总资产 · CNY」对齐（11px，用户 2026-10-04：「字体大小和总资产CNY一样大」），
-   原来 10px 显得比旁边的标题小一号。 */
-.acc-side__account { margin-left: auto; color: var(--text-3); font-size: 11px; white-space: nowrap; }
-.acc-side__total { font-size: 22px; font-weight: 700; color: var(--text); margin: 1px 0 3px; }
-/* 总资产下方一行：左边走势曲线，右边今日/累计盈亏上下排（仿富途） */
-.acc-side__row { display: flex; align-items: flex-end; gap: 12px; }
-.acc-side__pnl { display: flex; flex-direction: column; gap: 1px; flex: 0 0 auto; }  /* 2 → 1 */
 .asp-col { display: flex; flex-direction: column; gap: 1px; }
 .asp-col span { font-size: 11px; color: var(--text-2); }
 .asp-col i { font-size: 12px; font-style: normal; font-weight: 600; }
@@ -1406,7 +1401,9 @@ html, body {
 .asp-vals { display: flex; align-items: baseline; gap: 6px; }
 .asp-vals i + i { font-size: 11px; font-weight: 500; }
 /* 走势图：高度给足（30→38），线宽不随 viewBox 缩放 */
-.acc-side__spark { flex: 1 1 auto; min-width: 0; height: 30px; display: block; }   /* 38 → 30 */
+/* 曲线：2026-10-10 起它是 `.acc-side__card`（block 容器）的直接子元素、不再是 flex item，
+   所以 `flex:1 1 auto` 已无意义，改成普通块级 + 负左右边距让它贴到卡片内边缘。 */
+.acc-side__spark { width: auto; height: 30px; display: block; margin: 2px 0 -2px; }
 .acc-side__spark path { vector-effect: non-scaling-stroke; }
 .acc-side__list { list-style: none; margin: 6px 0 0; padding: 0; }   /* 12 → 6 */
 .acc-side__list > li { padding: 7px 9px; border-radius: 8px; }          /* 10px → 7px */
@@ -1797,17 +1794,15 @@ html, body {
 .ao-cal .ao-cal__down { color: var(--down); }
 .ao-cal .ao-cal__flat { color: var(--text-3); }
 .ao-cal .ao-cal__none { color: #ccd2dd; font-weight: 400 !important; }
-/* 全屏按钮：放在「时间范围」那一行的最左侧（移动端专用）。
-   ⚠️ 桌面隐藏用 `@media (min-width: 681px)` 反向查询，而不是在基础规则写 `display:none` ——
-   本文件的基础规则普遍写在 680px 媒体查询之后，同特异度下会覆盖媒体查询里的 `display:flex`。 */
+/* 全屏按钮：用户 2026-10-10 要求「移动端资产走势 / 收益率走势不要全屏按钮」。
+   原本为移动端专用（桌面 min-width:681px 已隐藏），现改为全尺寸隐藏。
+   全屏浮层（#aoFs）逻辑保留，仅无入口触发。 */
 .ao-ranges .ao-ranges__fs {
-  display: flex; align-items: center; justify-content: center; flex: none;
+  display: none;
+  align-items: center; justify-content: center; flex: none;
   width: 28px; height: 28px; padding: 0;
   border: 1px solid var(--border); border-radius: 6px;
   background: var(--panel); color: var(--text-2); cursor: pointer;
-}
-@media (min-width: 681px) {
-  .ao-ranges .ao-ranges__fs { display: none; }
 }
 /* svg 用 viewBox="4 4 16 16" 裁到路径边界（路径只占 0 0 24 24 的中间 16px），
    所以这里要给到 19px 才显得跟旁边 12px 文字按钮的视觉重量匹配。 */

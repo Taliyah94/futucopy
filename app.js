@@ -2506,7 +2506,13 @@ const TICKER_TTL = 15000;
       const view = btn.dataset.view;
       if (view === 'market') { showMobileList(); return; }
       if (view === 'comment') {
-        // 资讯：撤掉图表态、标记资讯态、**并隐藏账户页**（否则从账户页切过来会两者同屏叠加）。
+        // 资讯：撤掉图表态、标记资讯态、**并隐藏账户/持仓/选股三个独立视图**。
+        // ⚠️ 这三个视图都是 .workspace 的直接子元素、各自 flex:1 铺满主区；而本分支是
+        //    移动端专属的「不走 switchView」旁路（见上面的 return 守卫），switchView 里
+        //    那句 `screenView.hidden = !isScreen` 根本轮不到 —— 所以必须在这里逐个 hidden。
+        //    原来只藏了 accountView，实测「选股 → 资讯」会漏下 #screenView：它被
+        //    comment-panel 挤成 14px 细条卡在底部 tab bar 上方（用户 2026-10-10 截图
+        //    反馈的「下面有一块多的东西」，露出的就是选股 tab 排的橙色选中药丸）。
         // 还要移除桌面「默认收起」逻辑加的 .is-collapsed，否则面板被压成 0 宽。
         document.body.classList.remove('is-chart-mode');
         document.body.classList.add('is-comment-mode');
@@ -2514,8 +2520,10 @@ const TICKER_TTL = 15000;
         if (wl) wl.classList.add('is-collapsed');
         const cp = document.querySelector('.comment-panel');
         if (cp) cp.classList.remove('is-collapsed');
-        const acc = document.getElementById('accountView');
-        if (acc) acc.hidden = true;
+        ['accountView', 'tradeView', 'screenView'].forEach((id) => {
+          const el = document.getElementById(id);
+          if (el) el.hidden = true;
+        });
         // 自己管高亮：switchView 被守卫跳过，资讯按钮的 is-active 没人更新
         document.querySelectorAll('.rail__item[data-view]').forEach((b) => {
           b.classList.toggle('is-active', b.dataset.view === 'comment');
@@ -3745,6 +3753,10 @@ const TICKER_TTL = 15000;
   let emLiveTop = { at: 0, data: null };
   let emLiveMkt = { at: 0, data: null };
   const emLiveInFlight = { top: null, mkt: null };
+  /* 选股器各 tab 异步渲染串行化：每次切 tab 自增 seq，异步结果写出前比对，
+     避免慢/失败的旧 tab（如东财拉取超时）把已切到的新 tab 内容覆盖掉
+     （实测：进选股器先渲染 all-stocks，东财超时失败后才回写，会盖掉已切到 SP500 的内容）。 */
+  let screenRenderSeq = 0;
 
   function emNum(v) {
     if (typeof v === 'number') return v;
@@ -3983,15 +3995,18 @@ const TICKER_TTL = 15000;
     const host = $('#screenBody');
     if (!host) return;
     host.hidden = false;
+    const seq = ++screenRenderSeq;
     host.innerHTML = '<div class="screen-empty">正在读取市场榜…</div>';
     let data;
     try {
       data = await loadUsMkt(false);
     } catch (e) {
+      if (seq !== screenRenderSeq) return;
       host.innerHTML = '<div class="screen-empty">市场榜读取失败：' + cpEsc(String(e.message || e))
         + '<br>（实时东财拉取失败，可稍后刷新重试）</div>';
       return;
     }
+    if (seq !== screenRenderSeq) return;
     const boards = data.boards || {};
     const asOf = data.asOf ? String(data.asOf).slice(0, 10) : '';
     const srcTag = '浏览器实时（东财 push2，延迟约 15 分钟）';
@@ -4105,15 +4120,18 @@ const TICKER_TTL = 15000;
     const host = $('#screenBody');
     if (!host) return;
     host.hidden = false;
+    const seq = ++screenRenderSeq;
     host.innerHTML = '<div class="screen-empty">正在读取美股市值榜…</div>';
     let data;
     try {
       data = await loadUsTop(false);
     } catch (e) {
+      if (seq !== screenRenderSeq) return;
       host.innerHTML = '<div class="screen-empty">美股榜读取失败：' + cpEsc(String(e.message || e))
         + '<br>（实时东财拉取失败，可稍后刷新重试）</div>';
       return;
     }
+    if (seq !== screenRenderSeq) return;
     const rows = data.rows || [];
     const asOf = data.asOf ? String(data.asOf).slice(0, 10) : '';
     const srcTag = data.source || '浏览器实时（东财 push2，延迟约 15 分钟）';
@@ -4201,15 +4219,18 @@ const TICKER_TTL = 15000;
     const host = $('#screenBody');
     if (!host) return;
     host.hidden = false;
+    const seq = ++screenRenderSeq;
     host.innerHTML = '<div class="screen-empty">正在读取美股市值榜…</div>';
     let data;
     try {
       data = await loadUsTop(false);
     } catch (e) {
+      if (seq !== screenRenderSeq) return;
       host.innerHTML = '<div class="screen-empty">板块数据读取失败：' + cpEsc(String(e.message || e))
         + '<br>（实时东财拉取失败，可稍后刷新重试）</div>';
       return;
     }
+    if (seq !== screenRenderSeq) return;
     const rows = data.rows || [];
     const asOf = data.asOf ? String(data.asOf).slice(0, 10) : '';
     const srcTag = data.source || '浏览器实时（东财 push2，延迟约 15 分钟）';
@@ -4221,12 +4242,159 @@ const TICKER_TTL = 15000;
     host.innerHTML = bar + renderUsTopHeatmap(rows);
   }
 
+  /* ---------------- 指数成分股（选股器「S&P 500」/「Nasdaq 100」tab）----------------
+     数据源：historyofmarket.com 公开 API（无 key、CORS 免费、CC BY 4.0）：
+       S&P 500  ：https://historyofmarket.com/api/sp500/constituents.json   → 数组键 stocks
+       Nasdaq100：https://historyofmarket.com/api/nasdaq/100.json           → 数组键 companies
+     每个文件是预生成的静态 JSON（每天美股收盘后刷新），实测字段：
+       SP500 stocks[].{ ticker, name, marketCap, return1y, equity, weight, price, nameEn }
+         —— 注意：无 sector、无每日涨跌幅；weight 是百分数（如 0.116 = 0.12%）。
+       Nasdaq companies[].{ ticker, name, industry, subsector, price, marketCap,
+         return1y, qqqWeight(=在 QQQ 中的权重%), return1w/1m/ytd... }
+         —— 成分股权重用 qqqWeight（顶层 weight 是行业汇总，不能当个股权重）。
+     ⚠️ 该站走 Cloudflare，部分网络环境可能连不上（与东财 push2 同命运）。
+        取数策略（实时优先，本地兜底）：① 先实时拉 historyofmarket；
+        ② 失败则回退同目录 sp500.json / nasdaq100.json 本地快照（由本机抓取后随仓库发布）；
+        两层皆失败 → 标准「读取失败」空态（不编数字，守铁律）。
+     ⚠️ 实测 historyofmarket 无每日 change 字段，故「涨跌幅」列改为「1年回报」(return1y，小数如 0.0952=+9.52%)。
+        列：序号 / 名称 / 市值 / 现价 / 1年回报 / 权重。字段解析见 parseIndexRows（已按实测结构容错）。 */
+  const HM_BASE = 'https://historyofmarket.com/api';
+  const HM_INDEX = {
+    'sp-500': { url: HM_BASE + '/sp500/constituents.json', label: 'S&P 500', file: 'sp500.json', arrKey: 'stocks' },
+    'nasdaq-100': { url: HM_BASE + '/nasdaq/100.json', label: 'Nasdaq 100', file: 'nasdaq100.json', arrKey: 'companies' },
+  };
+  /* 把可能是字符串/带 %/$ 的字段转成数字；空/-- 返回 null */
+  function hmIdxNum(v) {
+    if (v == null) return null;
+    const s = String(v).replace(/[%,$\s]/g, '').trim();
+    if (s === '' || s === '--' || s === '-') return null;
+    const n = parseFloat(s);
+    return isFinite(n) ? n : null;
+  }
+  function hmIdxField(r, names) {
+    for (const nm of names) {
+      const v = r[nm];
+      if (v != null && String(v).trim() !== '') return v;
+    }
+    return null;
+  }
+  /* 在任意嵌套层级找第一个非空数组（historyofmarket 顶层结构未固定） */
+  function hmFirstArray(o, depth) {
+    if (Array.isArray(o)) return o;
+    if (o && typeof o === 'object' && (depth || 4) > 0) {
+      for (const v of Object.values(o)) {
+        const a = hmFirstArray(v, (depth || 4) - 1);
+        if (a && a.length) return a;
+      }
+    }
+    return null;
+  }
+  function parseIndexRows(rows) {
+    const out = [];
+    for (const r of rows) {
+      if (!r || typeof r !== 'object') continue;
+      const c = hmIdxField(r, ['ticker', 'symbol', 'code', 's', 't', 'Ticker', 'Symbol', 'Code']);
+      const n = hmIdxField(r, ['name', 'companyName', 'company', 'n', 'Name', 'CompanyName', 'Company']);
+      if (!c && !n) continue;
+      /* SP500 用 weight；Nasdaq100 用 qqqWeight（个股权重，顶层 weight 是行业汇总不能当个股权重） */
+      const w = hmIdxNum(hmIdxField(r, ['weight', 'qqqWeight', 'indexWeight', 'IndexWeight', 'w', 'Weight']));
+      const mc = hmIdxNum(hmIdxField(r, ['marketCap', 'market_cap', 'MarketCap', 'mc', 'MarketCapUSD']));
+      const ind = hmIdxField(r, ['industry', 'sector', 'gicsSector', 'subsector', 'Sector', 'Industry']);
+      const p = hmIdxNum(hmIdxField(r, ['price', 'last', 'close', 'Last', 'p', 'Price']));
+      /* 年/区间回报（historyofmarket 给的是小数，如 0.0952 = +9.52%；无每日涨跌幅字段） */
+      const ret = hmIdxNum(hmIdxField(r, ['return1y', 'returnYtd', 'ytdReturn', 'return1m', 'Return1Y', 'annualReturn']));
+      out.push({
+        c: String(c || '').trim() || String(n || '').trim(),
+        n: String(n || '').trim(),
+        ind: ind != null ? String(ind).trim() : null,
+        w: w, mc: mc, p: p, ret: ret,
+      });
+    }
+    return out;
+  }
+  function fetchJsonTimeout(url, timeoutMs) {
+    const ac = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    const to = setTimeout(() => { if (ac) ac.abort(); }, timeoutMs || 12000);
+    return fetch(url, { cache: 'no-store', signal: ac ? ac.signal : undefined })
+      .then((r) => { if (!r.ok) throw new Error('http ' + r.status); return r.json(); })
+      .finally(() => clearTimeout(to));
+  }
+  async function loadIndexConstituents(key) {
+    const cfg = HM_INDEX[key];
+    if (!cfg) throw new Error('未知指数 tab: ' + key);
+    /* 实时优先：拉 historyofmarket（CORS 免费，无 key）；失败再回退本地快照 */
+    let j = null;
+    try {
+      j = await fetchJsonTimeout(cfg.url, 12000);
+    } catch (e) {
+      /* 实时被 Cloudflare 拦 → 试本地快照 sp500.json / nasdaq100.json */
+      try {
+        const r = await fetch(cfg.file, { cache: 'no-store' });
+        if (r.ok) j = await r.json();
+      } catch (_) { /* 无本地文件 */ }
+    }
+    if (!j) throw new Error('historyofmarket 实时与本地快照均不可达');
+    /* 成分股数组：显式用 arrKey 定位（Nasdaq 顶层还有 sectors/countries 等数组，不能靠 hmFirstArray 盲找） */
+    const raw = (j && j[cfg.arrKey]) ? j[cfg.arrKey] : (Array.isArray(j) ? j : hmFirstArray(j, 4));
+    if (!raw || !raw.length) throw new Error('historyofmarket 返回空');
+    const data = parseIndexRows(raw);
+    if (!data.length) throw new Error('historyofmarket 字段无法解析（请核对返回结构）');
+    const asOf = (j && (j.asOf || j.updated)) ? String(j.asOf || j.updated).slice(0, 10) : '';
+    /* 注意：historyofmarket 原始响应里 source 是个对象（元数据），不能当字符串渲染 → 仅当它是字符串才用 */
+    const source = (j && typeof j.source === 'string' && j.source.trim()) ? j.source : 'historyofmarket（实时）';
+    return { asOf, source, rows: data };
+  }
+  function renderIndexTable(rows) {
+    return '<div class="us-top idx-const">'
+      + '<div class="us-top__hd"><span>序号</span><span>名称</span><span>市值</span><span>现价</span><span>1年回报</span><span>权重</span></div>'
+      + rows.map((x, i) => {
+        const cRet = (x.ret == null) ? 'flat' : cls(x.ret * 100);
+        const retTxt = (x.ret == null) ? '--' : (x.ret > 0 ? '+' : '') + (x.ret * 100).toFixed(2) + '%';
+        const wTxt = (x.w != null) ? x.w.toFixed(2) + '%' : '--';
+        return '<div class="us-top__row">'
+          + '<span class="us-top__i">' + (i + 1) + '</span>'
+          + '<span class="us-top__n"><b>' + cpEsc(x.n) + '</b><i>' + cpEsc(x.c) + '</i></span>'
+          + '<span class="us-top__m num">' + fmtCap(x.mc) + '</span>'
+          + '<span class="us-top__p num">' + fmt(x.p, 2) + '</span>'
+          + '<span class="us-top__x num ' + cRet + '">' + retTxt + '</span>'
+          + '<span class="us-top__i2 num">' + wTxt + '</span>'
+          + '</div>';
+      }).join('')
+      + '</div>';
+  }
+  async function renderIndexConstituents(key) {
+    const host = $('#screenBody');
+    if (!host) return;
+    host.hidden = false;
+    const seq = ++screenRenderSeq;
+    const cfg = HM_INDEX[key];
+    host.innerHTML = '<div class="screen-empty">正在读取 ' + cpEsc(cfg.label) + ' 成分股…</div>';
+    let data;
+    try {
+      data = await loadIndexConstituents(key);
+    } catch (e) {
+      if (seq !== screenRenderSeq) return;
+      host.innerHTML = '<div class="screen-empty">「' + cpEsc(cfg.label) + '」成分股读取失败：' + cpEsc(String(e.message || e))
+        + '<br>（实时 historyofmarket 拉取失败；可把抓好的成分股存为 <code>' + cpEsc(cfg.file) + '</code> 放同目录，用本地快照兜底）</div>';
+      return;
+    }
+    if (seq !== screenRenderSeq) return;
+    const rows = data.rows || [];
+    const asOf = data.asOf ? String(data.asOf).slice(0, 10) : '';
+    const bar = '<div class="screen-bar">'
+      + '<b>共 ' + rows.length + ' 只</b>'
+      + (asOf ? '<span>数据日期 ' + asOf + '</span>' : '')
+      + '<span class="screen-bar__src">来源：' + cpEsc(data.source) + '</span></div>';
+    host.innerHTML = bar + renderIndexTable(rows);
+  }
+
   function renderScreenTab(key) {
     const host = $('#screenBody');
     if (!host) return;
     if (key === 'all-stocks') { renderUsTopList(); return; }
     if (key === 'market') { renderUsMarket(); return; }
     if (key === 'sectors') { renderSectors(); return; }
+    if (key === 'sp-500' || key === 'nasdaq-100') { renderIndexConstituents(key); return; }
     // 其余 tab 尚未接数据源：给明确的「未接」空态，别假装有内容
     const title = SCREEN_TABS[key] || '该视图';
     host.innerHTML = '<div class="screen-empty">「' + cpEsc(title) + '」还没接数据源。<br>'
@@ -4537,99 +4705,12 @@ const applyMode = (mode, skipDraw) => {
     applyMode('asset', true);
   })();
 
-  /* ============ 移动端：侧栏折叠（A） + 走势图全屏（D） ============
-     A：窄屏下侧栏「总资产卡 + 分类列表」占 313px，把总览页走势图挤到只露 45px。
-        折叠成一条（总资产 + 箭头，约 44px），走势图拿到约 354px。
-        折叠状态存 localStorage —— 看过明细的人不愿每次展开，不看的人一直清爽。
-     D：点走势图（或右上角按钮）铺满全屏，关闭后把 canvas 归位并重绘。 */
-  (function initMobileFoldAndFullscreen() {
-    const side = document.getElementById('accSide');
-    const foldBtn = document.getElementById('accSideFold');
-    const foldBar = document.querySelector('.acc-side__foldbar');
-    const sumEl = document.getElementById('accSideSum');
-    const KEY = 'futu_acc_side_folded';
-    /* 顶栏：展开态下「箭头往上一直到页面顶」的热区挂在这里（见下面 click 委托）。
-       账户页折叠条在窄屏是贴在顶栏下沿的，所以顶栏空白就是用户说的「箭头往上到页面顶」。 */
-    const topbar = document.querySelector('.topbar');
-    const accountView = document.getElementById('accountView');
-    const isNarrow = () => AC_MQ.matches;
-    if (side && foldBtn) {
-      const apply = (folded) => {
-        side.classList.toggle('is-folded', folded);
-        foldBtn.setAttribute('aria-expanded', folded ? 'false' : 'true');
-        // 展开态给顶栏一个 pointer 光标（表示这整条能点收起）；折叠态撤掉
-        if (topbar) topbar.classList.toggle('is-foldable', !folded && isNarrow());
-        // 高度变了，侧栏迷你走势图和总览页图表都要按新尺寸重画
-        requestAnimationFrame(() => { drawAccSpark(); drawAoChart(); renderAoDist(); });
-      };
-      // 默认展开（未存过）；只有显式存了 '1' 才折叠
-      apply(localStorage.getItem(KEY) === '1');
-      /** force 传 true = 强制收起、false = 强制展开、省略 = 反转 */
-      const toggle = (force) => {
-        const folded = force === undefined ? !side.classList.contains('is-folded') : !!force;
-        apply(folded);
-        try { localStorage.setItem(KEY, folded ? '1' : '0'); } catch (e) { /* 隐私模式忽略 */ }
-      };
-      foldBtn.addEventListener('click', (e) => {
-        e.stopPropagation();          // 别冒泡到 foldBar 再切一次（切两次 = 没动）
-        toggle();
-      });
-      /* 折叠条**整条可点**都展开/收起（用户 2026-10-04：「这界面的时候点横条的任意位置应该都是展开功能」）。
-         之前左半是 `#accSideToTotal`「进总览页」、右半箭头才是展开 —— 同一横条两套语义，
-         点左边直接跳页、点右边才展开，很容易误触。现在统一成 toggle。
-         ⚠️ `#accSideToTotal` 自己的 click 监听也要在**折叠态**下让位（它 stopPropagation 会把
-         点击拦在半路，导致左半边点了没反应）—— 那段代码里判断了 `is-folded` 就直接 return。 */
-      if (foldBar) {
-        foldBar.addEventListener('click', (e) => {
-          if (e.target.closest('#accSideFold')) return;      // 箭头已在上方处理
-          toggle();
-        });
-        foldBar.style.cursor = 'pointer';
-      }
+  /* ============ 走势图全屏（D） ============
+     2026-10-10：原「侧栏收起/展开（A）」功能已按用户要求整体移除（折叠条 HTML、CSS、顶栏热区、
+     localStorage 状态机全部删除），账户侧栏常驻展开。⚠️ 别再恢复折叠条相关代码。
+     D：点走势图铺满全屏，关闭后把 canvas 归位并重绘。 */
+  (function initChartFullscreen() {
 
-      /* ---- 展开态：热区从箭头往上「一直到页面顶」（顶栏整条）都能点收起 ----
-         用户 2026-10-05：「这个收起点击范围太小，从箭头往上一直到页面顶都可以点击收起」。
-         ⚠️ **不要**用 `position:fixed` 透明遮罩去盖住顶栏 —— 遮住之后顶栏的
-         返回/前进/刷新按钮和搜索框也一起点不动了。改成在 .topbar 上做 click 委托：
-         命中交互控件（button/a/input…）一律放行，剩下的空白与品牌文字都当成「收起」。
-         ⚠️ 只在 **展开态 + 窄屏 + 账户视图可见** 时生效（回调里逐条守卫），否则在
-         自选 / 资讯 / 选股视图点顶栏空白也会把账户侧栏莫名收起来。
-         ⚠️ 折叠态不绑：那时点横条整条是「展开」，顶栏不该有第二种语义。 */
-      if (topbar && accountView) {
-        topbar.addEventListener('click', (e) => {
-          if (accountView.hidden) return;                          // 不在账户视图
-          if (!isNarrow() || side.classList.contains('is-folded')) return;
-          if (e.target.closest('button, a, input, select, textarea, label')) return;
-          toggle(true);                                            // 只收起，不反转（避免再点又展开）
-        });
-      }
-    }
-
-    // 折叠条上要显示总资产 —— 与 .acc-side__total 同步同一个数
-    const total = document.getElementById('accTotalVal');
-    // 折叠后总资产卡被收起，折叠条左侧的「总资产」就是进总览页的入口（替代它）
-    const toTotal = document.getElementById('accSideToTotal');
-    if (toTotal) toTotal.addEventListener('click', (e) => {
-      /* 折叠态：整条横条 = 展开（用户 2026-10-04），本按钮**不做任何事也不拦事件**，
-         让它自然冒泡到 foldBar 的 toggle —— 之前这里先 stopPropagation 再 return，
-         点击被吞在半路，点了左半边「总资产」完全没反应。
-         展开态下这个按钮是 `display:none`（CSS `.acc-side:not(.is-folded) .acc-side__toTotal{display:none}`），
-         真正可点的只有折叠态，所以下面的「进总览」逻辑实际是兜底，正常走不到。 */
-      if (side && side.classList.contains('is-folded')) return;      // 不 stopPropagation
-      e.stopPropagation();
-      // 复现 initAccCats 里 activate('total') 的行为（那边是独立 IIFE，变量取不到）
-      document.querySelectorAll('.as-line[data-cat]').forEach((x) => x.classList.remove('is-active'));
-      document.querySelectorAll('.acc-page').forEach((p) => { p.hidden = p.dataset.catPage !== 'total'; });
-      const tc = document.querySelector('.acc-side__card');
-      if (tc) tc.classList.add('is-active');
-      requestAnimationFrame(drawAoChart);
-    });
-    if (total && sumEl && window.MutationObserver) {
-      const sync = () => { sumEl.textContent = total.textContent; };
-      new MutationObserver(sync).observe(total, { childList: true, characterData: true, subtree: true });
-    }
-
-    /* ---- D：走势图全屏 ---- */
     const fs = document.getElementById('aoFs');
     const fsChartWrap = document.getElementById('aoFsChartWrap');
     const fsStats = document.getElementById('aoFsStats');
@@ -4644,8 +4725,8 @@ const applyMode = (mode, skipDraw) => {
     let statsHome = statsEl ? statsEl.parentNode : null, statsNext = null;
 
     // 全屏顶部：走势图 tab 高亮 + 时间范围高亮，跟随 aoState 同步（定义在 openFs 之前，避免 TDZ 隐患）
-    // 范围档位与主页面 #aoRanges 保持一致（用户 2026-10-04 定稿：近1月/近3月/今年以来/自始以来）
-    const RANGE_LABEL = { '1m': '近1月', '3m': '近3月', 'ytd': '今年来', 'all': '自始来' };
+    // 范围档位与主页面 #aoRanges 保持一致（用户 2026-10-10 定稿标签：1月/3月/今年/全部；基准键 NQ=QQQ）
+    const RANGE_LABEL = { '1m': '1月', '3m': '3月', 'ytd': '今年', 'all': '全部' };
     const syncFsUi = () => {
       document.querySelectorAll('#aoFsRanges [data-ao-range]').forEach((x) => {
         x.classList.toggle('is-active', x.dataset.aoRange === aoState.range);
@@ -5393,13 +5474,13 @@ const applyMode = (mode, skipDraw) => {
 
     const all = aoState.series || [];
     let data;
-    /* 时间范围（用户 2026-10-04 定稿）：近1月 / 近3月 / 今年以来 / 自始以来。
+    /* 时间范围（用户 2026-10-04 定稿）：1月 / 3月 / 今年 / 全部。
        ⚠️ 序列起点是 **2026-02-06**（IBKR 净值第一天，Asset_parsed.json 的
           totalNetValueDaily 从这天开始），所以：
             - 「今年以来」与「自始以来」在当前数据下**范围相同**（都是 02-06 起）
-            - 「近3月」= 最近 90 个自然日
+            - 「3月」= 最近 90 个自然日
           保留两档是为了口径完整：等IBKR 净值攒满一年后，两者才会分叉。
-       「近1月/近3月」按**自然日**切（与旧版的「最近 30 个数据点」不同：
+       「1月/3月」按**自然日**切（与旧版的「最近 30 个数据点」不同：
        数据点会随休市日变稀，按点数切出来的实际跨度不稳定）。 */
     if (aoState.range === 'all') {
       data = all;
@@ -6771,7 +6852,8 @@ const applyMode = (mode, skipDraw) => {
        不受 Referer 限制。实测字段：Datas.DWJZ=单位净值、RZDF=日涨跌幅(%)、FSRQ=净值日期(YYYY-MM-DD)。
        前一日净值 = DWJZ ÷ (1 + RZDF/100)（移动端不单独给前一日单位净值，用日涨跌幅反推）。
        失败（网络不可达/超时 5s/字段异常）→ 返回 [null,null,null] → 上层不置 f.navDate → 净值日期画杠(--)。 */
-    function accFundNav(code) {
+    /* 东财移动端（主源）：实时官方净值 + 前一日净值(反推) + 净值日。 */
+    function accFundNavEm(code) {
       return new Promise((resolve) => {
         const finish = (l, p, d) => resolve([l, p, d || null]);
         const ac = new AbortController();
@@ -6792,6 +6874,50 @@ const applyMode = (mode, skipDraw) => {
             finish(nav, prev, dt);
           })
           .catch(() => { clearTimeout(to); finish(null, null); });
+      });
+    }
+
+    /* ---- 腾讯 fundgz 兜底（实时净值 + 净值日）----
+       主源东财不可达时兜底。fundgz.tencent.com 返回 `var _fundinfo_<code>_={...}`
+       （JS 全局，非 JSON），浏览器用 <script> 注入读取（不受 CORS 限制）。
+       字段：dwjz=单位净值(当日官方)、navdate=净值日(YYYY-MM-DD)。
+       ⚠️ 腾讯只给「当日净值」，不给前一日净值 → navP 留 null（今日盈亏画 --，绝不编数）。
+       失败（域名不可达/超时 6s/字段异常）→ 返回 [null,null,null] → 上层退本地 json。 */
+    function accFundNavTx(code) {
+      return new Promise((resolve) => {
+        const gv = '_fundinfo_' + code + '_';
+        const finish = (l, p, d) => { try { delete window[gv]; } catch (e) {} resolve([l, p, d || null]); };
+        const t = setTimeout(() => { cleanup(); finish(null, null); }, 6000);
+        function cleanup() {
+          clearTimeout(t);
+          const s = document.getElementById('tgz_' + code);
+          if (s && s.parentNode) s.parentNode.removeChild(s);
+        }
+        const s = document.createElement('script');
+        s.id = 'tgz_' + code;
+        s.src = 'https://fundgz.tencent.com/fundinfo/' + code + '.js?_var=' + gv + '&_=' + Date.now();
+        s.onload = () => {
+          try {
+            const j = window[gv];
+            if (j && j.dwjz) {
+              const nav = parseFloat(j.dwjz);
+              const dt = j.navdate || j.gszrq || null;
+              if (nav > 0 && dt) { cleanup(); return finish(nav, null, String(dt)); }
+            }
+          } catch (e) {}
+          cleanup(); finish(null, null);
+        };
+        s.onerror = () => { cleanup(); finish(null, null); };
+        (document.head || document.body || document.documentElement).appendChild(s);
+      });
+    }
+
+    /* 基金净值取数链路：东财(主) → 腾讯 fundgz(兜底) → 上层再退本地 json。
+       东财给 [navL, navP(前一日反推), navDate]；腾讯只给 [navL, null, navDate]。 */
+    function accFundNav(code) {
+      return accFundNavEm(code).then((r) => {
+        if (r && r[0] != null) return r;
+        return accFundNavTx(code);
       });
     }
 
@@ -7616,19 +7742,56 @@ const applyMode = (mode, skipDraw) => {
     /* 6 只基金净值并行拉取 —— 原来串行时每只不可达要等 8s 超时，
        6×8=48s，导致「总资产」要半分钟才出数（基金/现金反而是齐的）。
        并行后总耗时 = 最慢的那一只。 */
+    /* ⚠️ 净值取完后**必须重渲染表格**（用户 2026-10-10 报「净值日期不显示，全是 --」）：
+       fund 表格的 `ACC_RENDERERS.fund` 只在下方首次定义时跑一次，而 navDate 是**这次 Promise.all 之后**
+       才写进 funds 的 —— 不重渲染，表格会永远停在首屏那份「navDate 还是空」的快照上，画一整屏 `--`。
+       实测本机 6 个请求全 200、净值日 10-08 取得到，漏的就是这一步。
+       另：对**取失败**的基金安排一次 6s 后的重试（网络抖动时能自愈，不必刷新整页）。 */
+    const navFailed = [];
+    let navOk = false;
     await Promise.all(funds.map(async (f) => {
       const [l, p, d] = await accFundNav(f.code);
-      if (l != null) { f.navL = l; f.navP = p; f.navDate = d; }   // 实时东财：官方净值 + 净值日
+      if (l != null) { f.navL = l; f.navP = p; f.navDate = d; navOk = true; }   // 实时东财：官方净值 + 净值日
       /* ⚠️ 2026-10-08：净值日（预测基准）只认实时东财，不再回退 fund_holdings.json（用户定稿）。
          东财取不到 → f.navDate 留空 → 该基金不画预测净值（画 -），而非用 json 的陈旧净值日。
          官方净值 navL/navP 仍允许 json 兜底（那是基金真实最新净值，与预测无关）。 */
       else if (fundH && fundH[f.code] && Array.isArray(fundH[f.code].nav) && fundH[f.code].nav.length >= 2) {
+        /* ⚠️ 2026-10-10 改：东财+腾讯都不可达 → 本地 json 兜底，且**带净值日**
+           （之前故意不设 navDate，导致双源皆挂时整屏画 --；用户报「还是不显示」）。
+           json 净值日约滞后 2~3 天（workflow 每天跑），预测基准用稍旧日期，
+           但「没数据不显示数字」铁律下，显示略旧净值日远好于永远 --。 */
         const nav = fundH[f.code].nav;
         f.navL = nav[nav.length - 1][1];
         f.navP = nav[nav.length - 2][1];
-        // 不设 f.navDate → 预测估值不画（以实时东财为准）
+        const ts = nav[nav.length - 1][0];
+        if (ts > 0) {
+          const dd = new Date(ts);
+          const p2 = (n) => (n < 10 ? '0' + n : '' + n);
+          f.navDate = dd.getFullYear() + '-' + p2(dd.getMonth() + 1) + '-' + p2(dd.getDate());
+        }
+        navOk = true;   // 兜底也拿到了真实净值日 → 触发下方 accRender 重渲染
       }
+      /* 实时东财拿不到（网络抖动/超时）→ 记下来稍后重试；json 兜底也算拿到值，不重试 */
+      if (f.navL == null || !f.navDate) navFailed.push(f);
     }));
+    /* 净值到货 → 重渲染表格（否则表格停在首屏的 `--` 快照，见上方注释） */
+    if (navOk && typeof accRender === 'function') { try { accRender('fund'); } catch (e) {} }
+    /* 取失败的排一次延迟重试：6s 后只重试这些，有任何一只转成功就再渲染一次；
+       全部仍失败则认了（保持 `--`，绝不编数字 —— 「没数据不显示数字」铁律）。 */
+    if (navFailed.length) {
+      setTimeout(async () => {
+        const still = [];
+        await Promise.all(navFailed.map(async (f) => {
+          const [l2, p2, d2] = await accFundNav(f.code);
+          if (l2 != null) { f.navL = l2; f.navP = p2; f.navDate = d2; } else still.push(f);
+        }));
+        if (still.length < navFailed.length && typeof accRender === 'function') {
+          try { accRender('fund'); } catch (e) {}
+          if (typeof estimateAllFunds === 'function') estimateAllFunds();
+          if (typeof paintFundSummary === 'function') paintFundSummary();
+        }
+      }, 6000);
+    }
     /* 拉美股行情后逐只算估值（基准日 = 各基金自己的 navDate，即最新净值日）。
        账户持仓的股票现价也靠这批数据补（Alpaca 不可达时），但 holdings 在下方才声明，
        所以这里只拉基金重仓的代码，持仓代码在 holdings 建好后再补拉一次。
@@ -8217,10 +8380,14 @@ fundAmount += f.amount;
       const stockTwr = calTwrOf('twrStock');
       setTxt('accStockCumPct', pctAbs(stockTwr), stockTwr == null ? stockCumCny : stockTwr);
       /* 标签（2026-10-09 用户定稿）：「今日盈亏」→「盈亏（10-08）」，日期 = 报告交易日。
-         证券日期用**实际日线的最新一根**（≤报告日）校正 —— 报告日碰上美股假日时以真实交易日为准。 */
+         证券日期用**实际日线的最新一根**（≤报告日）校正 —— 报告日碰上美股假日时以真实交易日为准。
+         ⚠️ 2026-10-10：总资产卡的那一列在 302px 侧栏里只有 ~67px 宽，整串「盈亏（10-09）」会从
+            「（」中间断开（显示成「盈亏（10-」/「09）」）。故拆成两个节点，桌面端 CSS 竖排成
+            「盈亏」+「（10-09）」两行，与右侧「累计盈亏」/「TWR」两行同高。 */
       const stockDay = stockActualDay();
       const md = (s) => String(s || '').slice(5);
-      const lb1 = $id('accTotalPnlLbl'); if (lb1) lb1.textContent = '盈亏（' + md(stockDay) + '）';
+      const lb1 = $id('accTotalPnlLbl'); if (lb1) lb1.textContent = '盈亏';
+      const lb1d = $id('accTotalPnlDate'); if (lb1d) lb1d.textContent = '（' + md(stockDay) + '）';
       const lb2 = $id('accStockPnlLbl'); if (lb2) lb2.textContent = '盈亏（' + md(stockDay) + '）';
     }
     renderStockSum();

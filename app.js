@@ -3893,6 +3893,23 @@ const TICKER_TTL = 15000;
     if (!force && emLiveTop.data && Date.now() - emLiveTop.at < EM_LIVE_TTL) {
       return Object.assign({}, emLiveTop.data, { live: true });
     }
+    /* 优先读本地 us_top.json：用户可把真实数据放该文件，覆盖东财实时源
+       （同级目录、http 协议下 fetch 可用；缺失/非法则回落到实时东财）。 */
+    try {
+      const r = await fetch('us_top.json', { cache: 'no-store' });
+      if (r.ok) {
+        const j = await r.json();
+        if (j && Array.isArray(j.rows) && j.rows.length) {
+          const data = {
+            asOf: j.asOf ? String(j.asOf).slice(0, 10) : new Date().toISOString(),
+            source: j.source || 'local us_top.json',
+            rows: j.rows,
+          };
+          emLiveTop = { at: Date.now(), data };
+          return data;
+        }
+      }
+    } catch (e) { /* 无本地文件或无 fetch（file://），忽略，走实时 */ }
     const d = await emLiveFetchTop();
     emLiveTop = { at: Date.now(), data: d };
     return Object.assign({}, d, { live: true });
@@ -3988,6 +4005,77 @@ const TICKER_TTL = 15000;
       <div class="mkt">${cells}</div>`;
   }
 
+  /* ---------------- 全部个股「板块热力图」----------------
+     两级 squarified 树图：先按行业大类把画布切块（面积 ∝ 大类总市值），
+     再在每块内按个股市值细分格子；颜色绿涨红跌（中国习惯），格子内写 代码 + 涨跌幅%。 */
+  let usTopView = 'heatmap';   // 'heatmap' | 'table'，切换不重拉数据（loadUsTop 有 TTL 缓存）
+
+  /* 行业 → 大类归集（关键词命中，中英文都覆盖；未命中的归「其他」）。
+     ⚠️ 东财 f100 对美股返回的具体行业名沙箱无法实测，这里按常见中美行业词兜底，
+        上线后若发现归类偏散，往 INDUSTRY_CAT 补关键词即可。 */
+  const INDUSTRY_CAT = [
+    ['科技', ['半导体', '芯片', '软件', '互联网', '计算机', '科技', 'it', '技术', '消费电子', '人工智能', '云计算', '数据中心', '网络', 'tech', 'software', 'semicond', 'internet', 'ai', 'cloud']],
+    ['金融', ['银行', '保险', '券商', '金融', '信托', '基金', '支付', '资本', 'bank', 'financ', 'insur']],
+    ['医疗健康', ['医药', '医疗', '生物', '制药', '健康', '医疗器', '保健', '药', 'biotech', 'pharma', 'health', 'medic']],
+    ['消费', ['零售', '消费', '食品', '饮料', '服装', '电商', '汽车', '家居', '旅游', '餐饮', '娱乐', '服饰', '超市', 'retail', 'consumer', 'auto', 'food', 'bever', 'ecom']],
+    ['能源材料', ['石油', '天然气', '能源', '煤炭', '化工', '材料', '金属', '黄金', '采矿', '钢铁', '锂', '矿', 'oil', 'gas', 'energy', 'chem', 'metal', 'mining', 'gold']],
+    ['工业', ['工业', '航空', '航天', '国防', '机械', '运输', '铁路', '建筑', '军工', 'aerospace', 'defense', 'indust', 'rail', 'machin']],
+    ['通讯', ['通讯', '电信', '媒体', '通讯服务', 'telecom', 'media', 'commun']],
+    ['房地产', ['房地产', '地产', 'reit', 'real estate', 'propert']],
+    ['公用事业', ['电力', '水务', '公用', 'utility', 'electric', 'water']],
+  ];
+  function majorCat(ind, name) {
+    const s = ((ind || '') + ' ' + (name || '')).toLowerCase();
+    if (!s.trim()) return '其他';
+    for (const [cat, kws] of INDUSTRY_CAT) {
+      for (const k of kws) if (s.indexOf(k.toLowerCase()) >= 0) return cat;
+    }
+    return '其他';
+  }
+
+  /* 涨跌幅 → 填充色：绿涨红跌；±5% 内线性加深，超 ±5% 封顶。无涨跌幅给灰。 */
+  function heatColor(pct) {
+    if (pct == null || !isFinite(pct)) return 'rgba(120,128,140,0.22)';
+    const cap = 5, t = Math.max(-1, Math.min(1, pct / cap));
+    if (t >= 0) return 'rgba(34,178,94,' + (0.18 + 0.62 * t).toFixed(3) + ')';  // 涨 → 绿
+    return 'rgba(225,58,58,' + (0.18 + 0.62 * -t).toFixed(3) + ')';            // 跌 → 红
+  }
+
+  /* squarified 树图：输入面积数组与矩形，返回每个面积的 {x,y,w,h}（虚拟坐标）。
+     内部先把面积归一化到 rect 面积，保证铺满、无重叠、无空隙。 */
+  function squarify(areas, rect) {
+    const total = areas.reduce((a, b) => a + b, 0) || 1;
+    const k = (rect.w * rect.h) / total;
+    const vals = areas.map((v) => Math.max(v, 1) * k).sort((a, b) => b - a);
+    const out = [];
+    let x = rect.x, y = rect.y, w = rect.w, h = rect.h, idx = 0;
+    const worst = (rw, side) => {
+      const s = rw.reduce((a, b) => a + b, 0), mx = Math.max.apply(null, rw), mn = Math.min.apply(null, rw);
+      return Math.max((side * side * mx) / (s * s), (s * s) / (side * side * mn));
+    };
+    while (idx < vals.length) {
+      let row = [vals[idx]], i = idx + 1;
+      const side = Math.min(w, h);
+      let best = worst(row, side);
+      while (i < vals.length) {
+        const cand = row.concat(vals[i]), wc = worst(cand, side);
+        if (wc <= best) { row = cand; best = wc; i++; } else break;
+      }
+      const rowSum = row.reduce((a, b) => a + b, 0);
+      if (w >= h) {
+        const cw = rowSum / h; let yy = y;
+        for (const v of row) { const ch = (v / rowSum) * h; out.push({ x, y: yy, w: cw, h: ch }); yy += ch; }
+        x += cw; w -= cw;
+      } else {
+        const rh = rowSum / w; let xx = x;
+        for (const v of row) { const cw = (v / rowSum) * w; out.push({ x: xx, y, w: cw, h: rh }); xx += cw; }
+        y += rh; h -= rh;
+      }
+      idx += row.length;
+    }
+    return out;
+  }
+
   async function renderUsTopList() {
     const host = $('#screenBody');
     if (!host) return;
@@ -4003,32 +4091,90 @@ const TICKER_TTL = 15000;
     }
     const rows = data.rows || [];
     const asOf = data.asOf ? String(data.asOf).slice(0, 10) : '';
-    const srcTag = '浏览器实时（东财 push2，延迟约 15 分钟）';
+    const srcTag = data.source || '浏览器实时（东财 push2，延迟约 15 分钟）';
     const nOtc = rows.filter((x) => x.otc).length;
-    host.innerHTML = `
-      <div class="screen-bar">
-        <b>共 ${rows.length} 只</b>
-        <span>其中 OTC / ADR ${nOtc} 只</span>
-        ${asOf ? `<span>数据日期 ${asOf}</span>` : ''}
-        <span class="screen-bar__src">来源：东方财富（${srcTag}）</span>
-      </div>
-      <div class="us-top">
-        <div class="us-top__hd"><span>序号</span><span>代码</span><span>名称</span>
-          <span>市值</span><span>现价</span><span>涨跌幅</span><span>行业</span></div>
-        ${rows.map((x, i) => {
-          const c = cls(x.pct);
-          const mc = (x.m === 153 ? 'OTC' : (x.m === 105 ? 'NAS' : (x.m === 106 ? 'NYSE' : (x.m === 107 ? 'AMEX' : x.m))));
-          return `<div class="us-top__row">
-            <span class="us-top__i">${i + 1}</span>
-            <span class="us-top__c"><b>${cpEsc(x.c)}</b><i>${mc}</i></span>
-            <span class="us-top__n">${cpEsc(x.n)}</span>
-            <span class="us-top__m num">${fmtCap(x.mc)}</span>
-            <span class="us-top__p num ${c}">${fmt(x.p, 2)}</span>
-            <span class="us-top__x num ${c}">${fmtPct(x.pct)}</span>
-            <span class="us-top__i2">${x.ind ? cpEsc(x.ind) : '--'}</span>
-          </div>`;
-        }).join('')}
-      </div>`;
+    const tv = '<span class="us-top__tv">'
+      + '<button data-tv="heatmap" class="' + (usTopView === 'heatmap' ? 'is-active' : '') + '">热力图</button>'
+      + '<button data-tv="table" class="' + (usTopView === 'table' ? 'is-active' : '') + '">表格</button></span>';
+    const bar = '<div class="screen-bar">'
+      + '<b>共 ' + rows.length + ' 只</b>'
+      + '<span>其中 OTC / ADR ' + nOtc + ' 只</span>'
+      + (asOf ? '<span>数据日期 ' + asOf + '</span>' : '')
+      + tv
+      + '<span class="screen-bar__src">来源：东方财富（' + srcTag + '）</span></div>';
+    const body = usTopView === 'heatmap' ? renderUsTopHeatmap(rows) : renderUsTopTable(rows);
+    host.innerHTML = bar + body;
+  }
+
+  /* 表格视图（原有「全部个股」列表） */
+  function renderUsTopTable(rows) {
+    return '<div class="us-top">'
+      + '<div class="us-top__hd"><span>序号</span><span>代码</span><span>名称</span>'
+      + '<span>市值</span><span>现价</span><span>涨跌幅</span><span>行业</span></div>'
+      + rows.map((x, i) => {
+        const c = cls(x.pct);
+        const mc = (x.m === 153 ? 'OTC' : (x.m === 105 ? 'NAS' : (x.m === 106 ? 'NYSE' : (x.m === 107 ? 'AMEX' : x.m))));
+        return '<div class="us-top__row">'
+          + '<span class="us-top__i">' + (i + 1) + '</span>'
+          + '<span class="us-top__c"><b>' + cpEsc(x.c) + '</b><i>' + mc + '</i></span>'
+          + '<span class="us-top__n">' + cpEsc(x.n) + '</span>'
+          + '<span class="us-top__m num">' + fmtCap(x.mc) + '</span>'
+          + '<span class="us-top__p num ' + c + '">' + fmt(x.p, 2) + '</span>'
+          + '<span class="us-top__x num ' + c + '">' + fmtPct(x.pct) + '</span>'
+          + '<span class="us-top__i2">' + (x.ind ? cpEsc(x.ind) : '--') + '</span>'
+          + '</div>';
+      }).join('')
+      + '</div>';
+  }
+
+  /* 板块热力图（两级 squarified 树图） */
+  function renderUsTopHeatmap(rows) {
+    const W = 1000, H = 560;
+    const map = new Map();
+    for (const x of rows) {
+      const cat = majorCat(x.ind, x.n);
+      if (!map.has(cat)) map.set(cat, []);
+      map.get(cat).push(x);
+    }
+    const cats = Array.from(map.entries()).map(([name, list]) => {
+      const sl = list.slice().sort((a, b) => (b.mc || 0) - (a.mc || 0));
+      const total = sl.reduce((s, r) => s + Math.max(r.mc || 0, 1), 0);
+      /* 行业大类「市值加权平均涨跌幅」：权重取个股市值 mc，剔除无涨跌幅/无市值的样本 */
+      let wsum = 0, w = 0;
+      for (const r of sl) {
+        if (r.pct != null && isFinite(r.pct) && (r.mc || 0) > 0) { wsum += r.pct * r.mc; w += r.mc; }
+      }
+      const wpct = w > 0 ? wsum / w : null;
+      return { name, list: sl, total, wpct };
+    }).sort((a, b) => b.total - a.total);
+    const catRects = squarify(cats.map((c) => c.total), { x: 0, y: 0, w: W, h: H });
+    cats.forEach((c, i) => { c.rect = catRects[i]; });
+    const cells = [];
+    for (const c of cats) {
+      const inner = squarify(c.list.map((s) => Math.max(s.mc || 0, 1)), c.rect);
+      c.list.forEach((s, j) => {
+        const r = inner[j];
+        const area = r.w * r.h;
+        const fs = Math.max(9, Math.min(20, Math.sqrt(area) / 7));
+        const showCode = area >= 1100, showPct = area >= 3600;
+        const pctTxt = s.pct == null ? '--' : (s.pct > 0 ? '+' : '') + s.pct.toFixed(2) + '%';
+        const txt = (showCode ? '<b>' + cpEsc(s.c) + '</b>' : '')
+          + (showPct ? '<i>' + pctTxt + '</i>' : '');
+        cells.push('<div class="ust-heat__cell" style="left:' + (r.x / W * 100).toFixed(3)
+          + '%;top:' + (r.y / H * 100).toFixed(3) + '%;width:' + (r.w / W * 100).toFixed(3)
+          + '%;height:' + (r.h / H * 100).toFixed(3) + '%;background:' + heatColor(s.pct)
+          + ';font-size:' + fs.toFixed(1) + 'px">' + txt + '</div>');
+      });
+      const cr = c.rect;
+      /* 分类标签：行业名 + 市值加权平均涨跌幅（黑字，便于一眼看板块强弱） */
+      const wTxt = c.wpct == null ? '' : (' ' + (c.wpct > 0 ? '+' : '') + c.wpct.toFixed(2) + '%');
+      cells.push('<div class="ust-heat__cat" style="left:' + (cr.x / W * 100).toFixed(3)
+        + '%;top:' + (cr.y / H * 100).toFixed(3) + '%;width:' + (cr.w / W * 100).toFixed(3)
+        + '%;height:' + (cr.h / H * 100).toFixed(3) + '%"><span>' + cpEsc(c.name) + wTxt + '</span></div>');
+    }
+    return '<div class="ust-heat">' + cells.join('') + '</div>'
+      + '<div class="ust-heat__legend"><span class="up">涨（绿）</span><span class="down">跌（红）</span>'
+      + '<span class="muted">格子面积 ∝ 市值 · 行业分大类</span></div>';
   }
 
   function renderScreenTab(key) {
@@ -4051,6 +4197,19 @@ const TICKER_TTL = 15000;
       if (!b) return;
       sw.querySelectorAll('[data-screen-key]').forEach((x) => x.classList.toggle('is-active', x === b));
       renderScreenTab(b.dataset.screenKey);
+    });
+  })();
+
+  /* 全部个股：热力图 / 表格 切换（数据已缓存，重渲染不重拉东财） */
+  (function initUsTopToggle() {
+    const host = document.getElementById('screenBody');
+    if (!host) return;
+    host.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-tv]');
+      if (!b || !host.querySelector('.ust-heat, .us-top')) return;
+      usTopView = b.dataset.tv;
+      host.querySelectorAll('.us-top__tv [data-tv]').forEach((x) => x.classList.toggle('is-active', x === b));
+      renderUsTopList();
     });
   })();
 

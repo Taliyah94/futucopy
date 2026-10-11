@@ -31,6 +31,29 @@
       "qqq_daily": [{"d": "2026-02-06", "c": 518.20}, ...]    // 升序，{d:日期, c:收盘价}
     }
 
+  另输出一个独立文件 all_stocks.json（选股器「全部个股」tab 专用，2026-10-12 起）：
+
+    {
+      "asof": "2026-10-10",            // max(sp500_asof, nasdaq100_asof)
+      "sp500_asof": "...", "nasdaq100_asof": "...",
+      "nSp": 503, "nNd": 101, "nTotal": 518,   // 合并前条数 / 去重后条数
+      "source": "S&P 500 + Nasdaq 100 合并去重（fund_holdings.py 每日抓取时生成）",
+      "rows": [                          // 已去重、已分好（按市值降序），一行一条紧凑 JSON
+        {"c": "NVDA", "n": "英伟达", "ind": "Semiconductors",
+         "mc": 5536424132608, "p": 229.28, "ret": 0.2548}, ...
+      ]
+    }
+
+  rows 里的 fmpSector / fmpIndustry（顶层 nFmp = 已回填条数）由 fetch_fmp_profiles.py
+  分批抓取（FMP 免费额度 250/天，默认每日 200 个），缓存落 fmp_profiles.json；
+  本脚本每次生成 all_stocks.json 时会把该缓存合并进行内（见 attach_fmp_cache），
+  防止每日重生成冲掉已抓的字段。与 ind（historyofmarket 口径）是两套分类，并存。
+
+  规则（与 app.js loadAllStocks 完全一致，2026-10-11 用户定稿，此处平移到 py）：
+    按 ticker（大写）去重；市值/现价/回报取市值更大的那条；**名称 SP500 优先**，
+    SP500 没有该代码才用 Nasdaq100 的英文名；名称含中文时其中 ASCII 小写字母
+    统一大写（谷歌a → 谷歌A、ge航天航空 → GE航天航空）。
+
 字段含义
   report : 季报日期，格式 YYYY-MM-30（季末）；代理基金为文字说明
   items  : 十大持仓列表（按占净值比例降序，固定前 10 条）
@@ -72,6 +95,7 @@ _daily_quotes（顶层，非基金键，前端按基金代码遍历时会被自�
 
 import argparse
 import json
+import math
 import os
 import re
 import subprocess
@@ -1005,6 +1029,263 @@ def load_existing_index(path, key):
     return (rows if isinstance(rows, list) and rows else None), str(obj.get(key + "_asof") or "")
 
 
+# ---------------------------------------------------------------------------
+# 「全部个股」= S&P 500 + Nasdaq 100 合并去重（2026-10-12 从 app.js 平移到 py）
+#
+# 用途：选股器「全部个股」tab。原来这套合并不在前端 loadAllStocks 里每次打开
+# 现算（fetch fund_holdings.json → 浏览器端合并去重）；现平移到本脚本，每日
+# 抓取时一次算好写入独立文件 all_stocks.json，前端直接读、不再浏览器端合并。
+#
+# 规则（与 app.js loadAllStocks / parseIndexRows / idxNameUpper 逐条对齐，
+# 2026-10-11 用户定稿）：
+#   ① 按 ticker（大写）去重；先灌 SP500、再灌 Nasdaq100；
+#   ② 市值/现价/回报 → 取**市值更大**的那条（两份快照抓取时间可能差几小时）；
+#   ③ 名称 → **SP500 优先**，只有 SP500 没这只票时才用 Nasdaq 的英文名
+#      （否则中英混排会随「哪份快照市值略大」随机翻转）；
+#   ④ 行业 → keep 行有则用 keep 的，否则用另一条的；
+#   ⑤ 名称含中文时，其中 ASCII 小写字母统一大写（谷歌a → 谷歌A、ge航天航空 →
+#      GE航天航空）；纯英文名（"NVIDIA Corp"）保持原样；
+#   ⑥ 最终按市值降序（前端默认排序），无市值排最后（JS 端排一次，双保险）。
+# ---------------------------------------------------------------------------
+IDX_TICKER_KEYS = ["ticker", "symbol", "code", "s", "t", "Ticker", "Symbol", "Code"]
+IDX_NAME_KEYS = ["name", "companyName", "company", "n", "Name", "CompanyName", "Company"]
+IDX_MC_KEYS = ["marketCap", "market_cap", "MarketCap", "mc", "MarketCapUSD"]
+IDX_IND_KEYS = ["industry", "sector", "gicsSector", "subsector", "Sector", "Industry"]
+IDX_PRICE_KEYS = ["price", "last", "close", "Last", "p", "Price"]
+IDX_RET_KEYS = ["return1y", "returnYtd", "ytdReturn", "return1m", "Return1Y", "annualReturn"]
+
+ALL_STOCKS_SOURCE = "S&P 500 + Nasdaq 100 合并去重（fund_holdings.py 每日抓取时生成）"
+
+_CN_RE = re.compile(r"[\u4e00-\u9fa5]")
+_ASCII_LOWER_RE = re.compile(r"[a-z]")
+
+
+def _idx_field(row, keys):
+    """按优先级取第一个非空字段（对齐 app.js hmIdxField）。"""
+    for k in keys:
+        v = row.get(k)
+        if v is not None and str(v).strip() != "":
+            return v
+    return None
+
+
+def _idx_num(v):
+    """宽松数值化：剥掉 %, $ 与空白；无法解析返回 None（对齐 app.js hmIdxNum）。
+
+    整数值统一回整型（5536424132608.0 → 5536424132608）：与 JS JSON.stringify
+    对整 double 不加 ".0" 的行为一致，顺带控制 all_stocks.json 的 diff 噪声。
+    """
+    if v is None:
+        return None
+    s = re.sub(r"[%,$\s]", "", str(v)).strip()
+    if s in ("", "--", "-"):
+        return None
+    try:
+        n = float(s)
+    except ValueError:
+        m = re.match(r"^[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", s)  # JS parseFloat 容错前綴数字
+        if not m:
+            return None
+        n = float(m.group(0))
+    if not math.isfinite(n):
+        return None
+    if n.is_integer() and abs(n) < 2 ** 53:
+        return int(n)
+    return n
+
+
+def idx_name_upper(n):
+    """名称里夹着的英文字母统一大写（仅对**含中文**的名称生效）。
+
+    例：谷歌a → 谷歌A、谷歌c → 谷歌C、伯克希尔b → 伯克希尔B、ge航天航空 →
+    GE航天航空、tjx公司 → TJX公司。
+    纯英文名（Nasdaq 快照那些，如 "NVIDIA Corp" / "metaplatforms, inc."）保持原样。
+    （对齐 app.js idxNameUpper。）
+    """
+    s = "" if n is None else str(n)
+    if not s:
+        return s
+    if not _CN_RE.search(s):      # 无中文 → 不动
+        return s
+    return _ASCII_LOWER_RE.sub(lambda m: m.group(0).upper(), s)
+
+
+def parse_index_row(r):
+    """把一份指数成分股行规范化为 {c, n, ind, mc, p, ret}（对齐 app.js parseIndexRows）。
+
+    两套快照字段名不同（SP500: ticker/name/marketCap/weight/price/return1y；
+    Nasdaq100: ticker/name/industry/price/marketCap/return1y/qqqWeight...），
+    这里按候选键列表统一提取；无 ticker 又无 name 的脏行返回 None。
+    """
+    if not isinstance(r, dict):
+        return None
+    c = _idx_field(r, IDX_TICKER_KEYS)
+    n = _idx_field(r, IDX_NAME_KEYS)
+    if c is None and n is None:
+        return None
+    ind = _idx_field(r, IDX_IND_KEYS)
+    return {
+        "c": (str(c).strip() if c is not None else "") or (str(n).strip() if n is not None else ""),
+        "n": str(n).strip() if n is not None else "",
+        "ind": str(ind).strip() if ind is not None else None,
+        "mc": _idx_num(_idx_field(r, IDX_MC_KEYS)),
+        "p": _idx_num(_idx_field(r, IDX_PRICE_KEYS)),
+        "ret": _idx_num(_idx_field(r, IDX_RET_KEYS)),
+    }
+
+
+def merge_all_stocks(sp_rows, nd_rows):
+    """S&P 500 + Nasdaq 100 合并去重 → 「全部个股」行列表（按市值降序）。
+
+    规则见上方注释 ①~⑥；与 app.js loadAllStocks 的 put/合并分支逐行对应。
+    """
+    by = {}
+
+    def put(x, from_sp):
+        if x is None:
+            return
+        k = (x["c"] or "").strip().upper()
+        if not k:
+            return
+        cur = by.get(k)
+        if cur is None:
+            by[k] = {"row": x, "sp": from_sp}
+            return
+        a = cur["row"]["mc"] if cur["row"]["mc"] is not None else -1
+        b = x["mc"] if x["mc"] is not None else -1
+        # 市值更大者留数值；相等时保留先到的（SP500 先灌 → 平局归 SP500）
+        keep, other = (x, cur["row"]) if b > a else (cur["row"], x)
+        sp_row = cur["row"] if cur["sp"] else (x if from_sp else None)
+        by[k] = {
+            "sp": cur["sp"] or from_sp,
+            "row": {
+                "c": keep["c"] or other["c"],
+                "n": (sp_row["n"] if (sp_row and sp_row["n"]) else (keep["n"] or other["n"])),
+                "ind": keep["ind"] if keep["ind"] is not None else other["ind"],
+                "mc": keep["mc"] if keep["mc"] is not None else other["mc"],
+                "p": keep["p"] if keep["p"] is not None else other["p"],
+                "ret": keep["ret"] if keep["ret"] is not None else other["ret"],
+            },
+        }
+
+    for r in (sp_rows or []):
+        put(parse_index_row(r), True)
+    for r in (nd_rows or []):
+        put(parse_index_row(r), False)
+
+    rows = []
+    for v in by.values():
+        v["row"]["n"] = idx_name_upper(v["row"]["n"])   # 统一出口一把梭（同 JS：漏单只出现过的代码）
+        rows.append(v["row"])
+    rows.sort(key=lambda x: x["mc"] if x["mc"] is not None else -1, reverse=True)
+    return rows
+
+
+def build_all_stocks(result):
+    """从 result（已含 sp500/nasdaq100 快照，实时或旧快照）生成「全部个股」对象。
+
+    返回 {"asof", "sp500_asof", "nasdaq100_asof", "nSp", "nNd", "nTotal",
+          "source", "rows": [...]}；两份快照都没有 → None（调用方宁旧勿空）。
+    """
+    sp = result.get("sp500") if isinstance(result.get("sp500"), list) else []
+    nd = result.get("nasdaq100") if isinstance(result.get("nasdaq100"), list) else []
+    rows = merge_all_stocks(sp, nd)
+    if not rows:
+        return None
+    sp_asof = str(result.get("sp500_asof") or "")
+    nd_asof = str(result.get("nasdaq100_asof") or "")
+    # JS: [sp_asof, nd_asof].filter(Boolean).sort().pop() || '' —— 字典序最大
+    asof = max([a for a in (sp_asof, nd_asof) if a], default="")
+    return {
+        "asof": asof,
+        "sp500_asof": sp_asof,
+        "nasdaq100_asof": nd_asof,
+        "nSp": len(sp),
+        "nNd": len(nd),
+        "nTotal": len(rows),
+        "source": ALL_STOCKS_SOURCE,
+        "rows": rows,
+    }
+
+
+def load_existing_all_stocks(path):
+    """读取已存盘 all_stocks.json，返回 (rows, meta)；没有/损坏/空 → ([], {})。"""
+    if not (path and os.path.exists(path)):
+        return [], {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            obj = json.load(f)
+    except Exception:  # noqa: BLE001 - 损坏当无旧文件
+        return [], {}
+    if not isinstance(obj, dict):
+        return [], {}
+    rows = obj.get("rows")
+    if not isinstance(rows, list) or not rows:
+        return [], {}
+    return rows, obj
+
+
+def dump_all_stocks(obj):
+    """all_stocks.json 序列化：meta 常规 indent=2，rows 一行一条紧凑 JSON。
+
+    与 dump_holdings 压指数数组同一理由（用户 2026-10-11）：500+ 行走 indent=2
+    每条摊成 ~7 行、每天多出几千行 diff；紧凑行前端 JSON.parse 不关心排版。
+    """
+    rows = obj.get("rows") or []
+    if not rows:
+        return json.dumps(obj, ensure_ascii=False, indent=2)
+    meta = {k: v for k, v in obj.items() if k != "rows"}
+    head = json.dumps(meta, ensure_ascii=False, indent=2)
+    body = head[head.index("\n") + 1: head.rindex("\n")]
+    lines = ",\n".join(
+        "    " + json.dumps(r, ensure_ascii=False, separators=(",", ":"))
+        for r in rows
+    )
+    return "{\n" + body + ",\n  \"rows\": [\n" + lines + "\n  ]\n}"
+
+
+# ---------------------------------------------------------------------------
+# FMP sector / industry 缓存（fetch_fmp_profiles.py 分批抓，2026-10-12）
+#
+# FMP 免费额度 250 次/天，518 只个股抓不全 → 拆成每日一批（默认 200）慢慢抓，
+# 已抓记录落 fmp_profiles.json（symbol → {fmpSector, fmpIndustry, asof}）。
+# 本脚本每日**重生成** all_stocks.json，会把行内 fmp 字段冲掉 → 每次生成后
+# 调用 attach_fmp_cache 把缓存合并进行内，保证「昨天抓的今天还在」。
+# 缓存文件不存在 = 还没开始抓 = 空操作。
+# ---------------------------------------------------------------------------
+FMP_CACHE_FILE = "fmp_profiles.json"
+
+
+def load_fmp_cache(path):
+    """读取 fmp_profiles.json；没有/损坏/非 dict → {}。键统一大写。"""
+    if not (path and os.path.exists(path)):
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            obj = json.load(f)
+    except Exception:  # noqa: BLE001 - 损坏当无缓存
+        return {}
+    if not isinstance(obj, dict):
+        return {}
+    return {str(k).strip().upper(): v for k, v in obj.items() if isinstance(v, dict)}
+
+
+def attach_fmp_cache(rows, cache):
+    """把 FMP 缓存合并进 all_stocks 行（就地改 rows）：命中 symbol 补
+    fmpSector / fmpIndustry。返回补上的条数（供顶层 nFmp）。"""
+    if not cache:
+        return 0
+    n = 0
+    for r in rows:
+        e = cache.get((r.get("c") or "").strip().upper())
+        if not e:
+            continue
+        r["fmpSector"] = e.get("fmpSector") if e.get("fmpSector") is not None else None
+        r["fmpIndustry"] = e.get("fmpIndustry") if e.get("fmpIndustry") is not None else None
+        n += 1
+    return n
+
+
 def dump_holdings(result):
     """顶层 JSON 序列化：普通键 indent=2；IDX_SOURCES 里的数组**一个 ticker 一行**。
 
@@ -1239,6 +1520,10 @@ def main(argv=None):
                     help="跳过 10 年期美债日频抓取（自选行 10Ymain 用）")
     ap.add_argument("--no-idx", action="store_true",
                     help="跳过 SP500 / Nasdaq100 成分股快照抓取（选股器兜底数据用）")
+    ap.add_argument("--no-all-stocks", action="store_true",
+                    help="跳过「全部个股」聚合（sp500+nasdaq100 合并去重 → all_stocks.json）")
+    ap.add_argument("--all-stocks-output", default="all_stocks.json",
+                    help="「全部个股」聚合结果输出路径（默认 all_stocks.json）")
     ap.add_argument("--snapshot-days", type=int, default=SNAPSHOT_DAYS,
                     help="行情快照保留天数（默认 %d）" % SNAPSHOT_DAYS)
     args = ap.parse_args(argv)
@@ -1346,6 +1631,45 @@ def main(argv=None):
                     sys.stderr.write("  [指数] %s %d 条（%s %s）\n" % (key, len(rows), src, asof or ""))
             elif not args.quiet:
                 sys.stderr.write("  [指数] %s 无数据（实时失败且无旧快照），跳过\n" % key)
+
+    # 「全部个股」聚合（选股器）：sp500 + nasdaq100 合并去重、名称 SP500 优先、
+    # 含中文名英文大写、按市值降序 —— 规则与 app.js loadAllStocks 一致，此处平移到
+    # py 每日抓取时一次算好，写入独立 all_stocks.json（前端该 tab 直接读，不再
+    # 浏览器端合并）。宁旧勿空：本次两份快照都没有（--no-idx 或抓取全失败且无旧
+    # 快照）→ 不动已存盘文件。
+    if not args.no_all_stocks:
+        all_obj = build_all_stocks(result)
+        if all_obj:
+            # 合并 FMP 行业分类缓存（fetch_fmp_profiles.py 每日分批抓的）——
+            # 本文件每日重生成会冲掉行内 fmp 字段，这里每次生成后回填，保证不丢
+            fmp_cache = load_fmp_cache(
+                os.path.join(os.path.dirname(os.path.abspath(args.all_stocks_output)) or ".",
+                             FMP_CACHE_FILE))
+            n_fmp = attach_fmp_cache(all_obj["rows"], fmp_cache)
+            all_obj["nFmp"] = n_fmp
+            if n_fmp and not args.quiet:
+                sys.stderr.write("  [全部个股] 合并 FMP 行业分类缓存 %d 只\n" % n_fmp)
+            if args.no_write:
+                sys.stderr.write("  [全部个股] %d 只（S&P %d + Nasdaq %d，按代码去重，不写文件）\n"
+                                 % (all_obj["nTotal"], all_obj["nSp"], all_obj["nNd"]))
+            else:
+                try:
+                    with open(args.all_stocks_output, "w", encoding="utf-8") as f:
+                        f.write(dump_all_stocks(all_obj))
+                    if not args.quiet:
+                        sys.stderr.write("  [全部个股] %d 只（S&P %d + Nasdaq %d，按代码去重）→ %s\n"
+                                         % (all_obj["nTotal"], all_obj["nSp"], all_obj["nNd"],
+                                            args.all_stocks_output))
+                except Exception as e:  # noqa: BLE001
+                    sys.stderr.write("  [全部个股] 写 %s 失败：%s\n" % (args.all_stocks_output, e))
+        else:
+            old_rows, _ = load_existing_all_stocks(args.all_stocks_output)
+            if not args.quiet:
+                if old_rows:
+                    sys.stderr.write("  [全部个股] 本次无 sp500/nasdaq100 数据，保留旧文件（%d 只）\n"
+                                     % len(old_rows))
+                else:
+                    sys.stderr.write("  [全部个股] 无 sp500/nasdaq100 数据且无旧文件，跳过\n")
 
 
     # 增量合并：与存盘文件取并集（同日新覆盖旧），抓取失败的部分沿用旧数据

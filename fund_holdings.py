@@ -923,6 +923,124 @@ def merge_treasury_daily(old, fresh):
     return sorted(by_d.values(), key=lambda x: x["d"])
 
 
+# ---------------------------------------------------------------------------
+# 指数成分股快照（SP500 / Nasdaq 100）—— 每天全量替换，**不是**时间序列
+#
+# 用途：看板选股器「S&P 500」「Nasdaq 100」两个 tab 的兜底数据。前端实时优先直连
+# historyofmarket.com，被 Cloudflare 拦 / 超时 / 源站挂起（实测 2026-10-11 nasdaq
+# 接口 curl 连续 rc=28 超时）就回退读这里的每日快照。
+# 与 qqq_daily / usdcnh_daily 等「增量追加的时间序列」不同：成分股名单没有历史
+# 概念，抓到就**整表替换**；抓不到 → 原样保留上一天的快照（宁旧勿空）。
+# 数据源：historyofmarket.com 公开 API（无 key、CC BY 4.0，需署名）。
+# 行格式保持源站字段原样（SP500: ticker/name/nameEn/marketCap/weight/price/
+# return1y/equity；Nasdaq100: ticker/name/industry/marketCap/qqqWeight/price/
+# return1y），只做两件事：① 丢弃没有 ticker 的脏行；② 按 marketCap 降序预排
+# （前端 renderIndexTable 也会再排一次，双保险）。
+IDX_SOURCES = {
+    # fund_holdings.json 顶层键: (接口地址, 成分数组键, asof 取值键)
+    "sp500": ("https://historyofmarket.com/api/sp500/constituents.json", "stocks", "updated"),
+    "nasdaq100": ("https://historyofmarket.com/api/nasdaq/100.json", "companies", "asOf"),
+}
+
+
+def fetch_index_constituents(url, arr_key, asof_key, retries=3, timeout=30):
+    """抓指数成分股全量列表，返回 (rows, asof)；失败返回 (None, None)。
+
+    curl 优先、urllib 兜底（与 fetch_fx_daily 同一套理由：部分 Windows 环境有
+    HTTPS 中间人代理，urllib 校验证书失败而 curl 能过；Actions 上两者都可用）。
+    """
+    last_err = None
+    for attempt in range(1, retries + 1):
+        raw = None
+        try:
+            r = subprocess.run(["curl", "-sS", "--max-time", str(timeout), url],
+                               capture_output=True, timeout=timeout + 5)
+            if r.returncode == 0 and r.stdout.strip():
+                raw = r.stdout
+            elif r.returncode != 0:
+                last_err = OSError("curl rc=%d" % r.returncode)
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+        if raw is None:
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+                raw = urllib.request.urlopen(req, timeout=timeout).read()
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+        if raw:
+            obj = None
+            try:
+                obj = json.loads(raw.decode("utf-8", "ignore"))
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+            if isinstance(obj, dict):
+                rows = obj.get(arr_key)
+                asof = str(obj.get(asof_key) or obj.get("asOf") or obj.get("updated") or "")[:10]
+            elif isinstance(obj, list):
+                rows, asof = obj, ""
+            else:
+                rows = None
+            if isinstance(rows, list) and rows:
+                clean = [r for r in rows if isinstance(r, dict) and r.get("ticker")]
+                if clean:
+                    clean.sort(key=lambda x: x.get("marketCap") or 0, reverse=True)
+                    return clean, asof
+                last_err = ValueError("响应里没有带 ticker 的行")
+        if attempt < retries:
+            time.sleep(2 * attempt)
+    sys.stderr.write("  [指数] %s 抓取失败: %s\n" % (url.rsplit("/", 1)[-1], last_err))
+    return None, None
+
+
+def load_existing_index(path, key):
+    """读取已存盘 JSON 里的指数成分股快照，返回 (rows, asof)；没有则 (None, "")。"""
+    if not (path and os.path.exists(path)):
+        return None, ""
+    try:
+        with open(path, encoding="utf-8") as f:
+            obj = json.load(f)
+    except Exception:  # noqa: BLE001 - 旧文件损坏当无旧数据
+        return None, ""
+    rows = obj.get(key)
+    return (rows if isinstance(rows, list) and rows else None), str(obj.get(key + "_asof") or "")
+
+
+def dump_holdings(result):
+    """顶层 JSON 序列化：普通键 indent=2；IDX_SOURCES 里的数组**一个 ticker 一行**。
+
+    600+ 条成分股若走 indent=2，每条会摊成 ~10 行、文件每天多出约 6000 行 diff；
+    这里把这两个数组压成「一行一条紧凑 JSON」（用户 2026-10-11：sp500 一个 ticker
+    一行，nasdaq100 一个 ticker 一行），其余结构与 json.dumps(..., indent=2) 完全
+    一致 —— 前端 JSON.parse 不关心排版。
+    """
+    idx_rows, idx_asof, rest = {}, {}, {}
+    for k, v in result.items():
+        if k in IDX_SOURCES and isinstance(v, list) and v:
+            idx_rows[k] = v
+        elif k.endswith("_asof") and k[:-5] in IDX_SOURCES:
+            idx_asof[k[:-5]] = v
+        else:
+            rest[k] = v
+    if not idx_rows:
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    members = []
+    if rest:
+        body = json.dumps(rest, ensure_ascii=False, indent=2)
+        # 去掉最外层 { }：中间的成员本身就是 2 空格缩进、以逗号分隔，可直接拼接
+        members.append(body[body.index("\n") + 1: body.rindex("\n")])
+    for k in IDX_SOURCES:
+        rows = idx_rows.get(k)
+        if rows:
+            lines = ",\n".join(
+                "    " + json.dumps(r, ensure_ascii=False, separators=(",", ":"))
+                for r in rows
+            )
+            members.append('  "%s": [\n%s\n  ]' % (k, lines))
+        if k in idx_asof:
+            members.append('  "%s_asof": %s' % (k, json.dumps(idx_asof[k], ensure_ascii=False)))
+    return "{\n" + ",\n".join(members) + "\n}"
+
+
 def load_config(path):
     """读取可选的 fund_codes.json 配置。返回 (codes, proxy) 或 (None, None)。"""
     if not path or not os.path.exists(path):
@@ -1119,6 +1237,8 @@ def main(argv=None):
                     help="跳过美元/离岸人民币汇率日线抓取（自选行与 K 线用）")
     ap.add_argument("--no-ust", action="store_true",
                     help="跳过 10 年期美债日频抓取（自选行 10Ymain 用）")
+    ap.add_argument("--no-idx", action="store_true",
+                    help="跳过 SP500 / Nasdaq100 成分股快照抓取（选股器兜底数据用）")
     ap.add_argument("--snapshot-days", type=int, default=SNAPSHOT_DAYS,
                     help="行情快照保留天数（默认 %d）" % SNAPSHOT_DAYS)
     args = ap.parse_args(argv)
@@ -1208,6 +1328,25 @@ def main(argv=None):
         elif not args.quiet:
             sys.stderr.write("  [美债] 未取得日线\n")
 
+    # 指数成分股快照（SP500 / Nasdaq100）：每天**全量替换**；抓失败保留旧表（宁旧勿空）
+    if not args.no_idx:
+        for key, (url, arr_key, asof_key) in IDX_SOURCES.items():
+            rows, asof = fetch_index_constituents(url, arr_key, asof_key, retries=args.retries)
+            src = "实时"
+            if rows is None:
+                rows, asof = load_existing_index(args.output, key)
+                src = "旧快照"
+                if rows:
+                    sys.stderr.write("  [指数] %s 实时抓取失败，沿用旧快照\n" % key)
+            if rows:
+                result[key] = rows
+                if asof:
+                    result[key + "_asof"] = asof
+                if not args.quiet:
+                    sys.stderr.write("  [指数] %s %d 条（%s %s）\n" % (key, len(rows), src, asof or ""))
+            elif not args.quiet:
+                sys.stderr.write("  [指数] %s 无数据（实时失败且无旧快照），跳过\n" % key)
+
 
     # 增量合并：与存盘文件取并集（同日新覆盖旧），抓取失败的部分沿用旧数据
     if not args.no_merge:
@@ -1221,7 +1360,7 @@ def main(argv=None):
         trim_nav(result, os.path.join(os.path.dirname(os.path.abspath(args.output)) or ".",
                                       "Asset_parsed.json"), quiet=args.quiet)
 
-    js = json.dumps(result, ensure_ascii=False, indent=2)
+    js = dump_holdings(result)
 
     if args.no_write:
         print(js)
@@ -1234,8 +1373,8 @@ def main(argv=None):
         except Exception as e:  # noqa: BLE001
             sys.stderr.write("写文件失败：%s\n上方 JSON 仍可直接复制使用\n" % e)
 
-    # 统计：成功（含代理）与失败（无 items）。跳过顶层非基金键（qqq_daily / _daily_quotes）
-    NON_FUND_KEYS = (SNAPSHOT_KEY, "qqq_daily", FX_DAILY_KEY)
+    # 统计：成功（含代理）与失败（无 items）。跳过顶层非基金键（qqq_daily / _daily_quotes / 指数快照）
+    NON_FUND_KEYS = (SNAPSHOT_KEY, "qqq_daily", FX_DAILY_KEY) + tuple(IDX_SOURCES)
     ok = sum(1 for k, v in result.items()
              if k not in NON_FUND_KEYS and isinstance(v, dict) and v.get("items"))
     failed = len([c for c in codes if c not in result or not result[c].get("items")])

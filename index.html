@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<link rel="preload" href="app.js?v=20261010s" as="script" />
+<link rel="preload" href="app.js?v=20261011w" as="script" />
 <!-- ⚠️ 2026-10-07 用户要求「没读到数据就显示 --，别产生误导」：
      报价头/账户汇总的初始值一律 --（原来是硬编码的 137.790 / +5.190 / +3.91% 等假数字，
      页面刚加载、JS 还没跑到时就会显示出来）。真实值由 renderQuote / 账户页数据填充。 -->
@@ -848,7 +848,13 @@ html, body {
         所以下面每条都必须带 `.ao-chart-head ` 前缀提高特异度（0,2,0 > 0,1,0），改了才生效。
      一行化做法：stats 可收缩(flex 0 1 auto + min-width:0)且内部 nowrap，
      ranges 不换行不收缩(flex 0 0 auto)，由 ranges 的 margin-left:auto 顶到行尾。 */
-  .ao-chart-head { gap: 6px 8px; padding: 10px 10px 0; }
+  /* ⚠️⚠️ 2026-10-11 补刀：`.ao-chart-head { gap/padding }` 这条**本身也踩了同一个陷阱** ——
+     它是裸类名 (0,1,0)，而基础规则 `.ao-chart-head{display:flex;gap:16px;padding:14px 20px 0}`
+     写在本块之后的 1746 行，同特异度后者胜出 → 移动端 gap 16px / padding 20px 一直没生效。
+     实测（430px 视口）：可用宽只剩 354，去「累计收益」后 stats(113)+ranges(226) 仍差 1px 换行。
+     加 `.acc-overview ` 前缀提特异度到 (0,2,0) 后：可用 374，两格 + 间隙 347 收进一行。
+     ⚠️ 改这条时**别再写裸 `.ao-chart-head`**，否则又是一轮白改。 */
+  .acc-overview .ao-chart-head { gap: 6px 8px; padding: 10px 10px 0; }
   .ao-chart-head .ao-stats { flex: 0 1 auto; min-width: 0; flex-wrap: nowrap;
                              gap: 6px; padding: 0; align-items: baseline; }
   .ao-chart-head .ao-stat { min-width: 0; }
@@ -1039,14 +1045,8 @@ html, body {
      由底部 tab bar 切换，箭头只会让人困惑。 */
   #wlCollapse, #wlExpand { display: none !important; }
 
-  /* 全屏走势图顶部栏：窄屏 430px 装不下「收益率走势/资产走势 + 近1月/近3月/今年以来/自始以来 + 关闭」，
-     按钮文案会**折成两行**（「收益率走/势」，实测过，很难看）。
-     改法：tab 与范围按钮都 `white-space:nowrap`，并让整条 bar 允许**横向滚动**
-     （`overflow-x:auto` + 隐藏滚动条），放不下时手指横滑即可 —— 与 `.acc-hist__head` 同一套路。 */
-  .ao-fs__bar { overflow-x: auto; scrollbar-width: none; }
-  .ao-fs__bar::-webkit-scrollbar { display: none; }
-  .ao-fs__bar > * { flex: none; }
-  .ao-tabs button, .ao-fs__ranges button { white-space: nowrap; }
+  /* 走势 tab 按钮：窄屏按钮文案不折行（「收益率走/势」实测过，很难看） */
+  .ao-tabs button { white-space: nowrap; }
 
   /* 账户视图：桌面是「左摘要 + 右主区」左右并排，窄屏改成上下堆叠，
      否则 430px 宽会被各占一半、两边都看不清。 */  .account-view { flex-direction: column; overflow-y: auto; }
@@ -1213,7 +1213,9 @@ html, body {
 .mkt__hd i { font-style: normal; font-weight: 400; font-size: 10px; color: var(--text-3); }
 .mkt__row {
   display: grid;
-  grid-template-columns: 22px 78px 1fr 72px 64px;
+  /* 名称列 78→132px：改成两行（名称/代码）后 78px 会把公司名截得太狠
+     （窄屏另有一条 96px 覆盖，见 ≤720px 媒体查询） */
+  grid-template-columns: 22px 132px 1fr 72px 64px;
   align-items: center; gap: 6px;
   padding: 5px 12px; font-size: 12px;
   border-bottom: 1px solid var(--border);
@@ -1226,8 +1228,25 @@ html, body {
 .mkt__c { display: flex; align-items: baseline; gap: 4px; min-width: 0; }
 .mkt__c b { font-weight: 500; color: var(--text); overflow: hidden; text-overflow: ellipsis; }
 .mkt__c i { font-style: normal; font-size: 9px; color: var(--text-3); flex: 0 0 auto; }
-.mkt__n { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 名称两行：主行公司名 / 副行代码（灰 10px）—— 与 .idx-const .us-top__n 同一套结构
+   （用户 2026-10-11：「名称这一列参照全部个股的名称」）。
+   ⚠️ 两行都要 nowrap+ellipsis，否则长名会把列撑破、逐行宽度不一致而错位。 */
+.mkt__n {
+  display: flex; flex-direction: column; justify-content: center;
+  line-height: 1.25; min-width: 0;
+}
+.mkt__n b {
+  font-weight: 500; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mkt__n i {
+  font-style: normal; font-size: 10px; color: var(--text-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .mkt__p, .mkt__x { text-align: right; font-variant-numeric: tabular-nums; }
+/* 成交额：数字列右对齐 + 不换行（此前没有这条规则，「331.42 亿」在窄列里会折成两行、
+   行高被顶高、与名称两行错位——实测截图里抓到的）。 */
+.mkt__v { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--text-2); }
 .mkt__p.up, .mkt__x.up { color: var(--up); }
 .mkt__p.down, .mkt__x.down { color: var(--down); }
 .mkt__none { padding: 20px 12px; font-size: 11px; color: var(--text-3); text-align: center; }
@@ -1273,9 +1292,91 @@ html, body {
 .us-top__i2 { color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .us-top__p.up, .us-top__x.up { color: var(--up); }
 .us-top__p.down, .us-top__x.down { color: var(--down); }
-/* 指数成分股表（S&P 500 / Nasdaq 100）：6 列 = 序号 / 名称 / 市值 / 现价 / 1年回报 / 权重
-   （覆盖 .us-top 默认的 7 列市值榜网格，列数对齐渲染的 6 个 span） */
-.idx-const .us-top__hd, .idx-const .us-top__row { grid-template-columns: 44px 1fr 108px 92px 96px 80px; }
+/* 板块热力图（squarified 树图，renderUsTopHeatmap）：单元格靠**内联** left/top/width/height
+   百分比定位，坐标空间 = JS 里的 1000×560 虚拟画布。
+   ⚠️ 2026-10-11：这套 .ust-heat* 样式此前**根本不存在**（东财版热力图一直渲染成无样式的堆叠条，
+   没人发现）；热力图改用 fund_holdings.json 正式启用后补上。
+   ⚠️ aspect-ratio 必须与 JS 的 W/H 一致，否则树图会被拉伸变形。 */
+.ust-heat {
+  position: relative; width: 100%; aspect-ratio: 1000 / 560;
+  margin: 10px 0 0; overflow: hidden; border-radius: 8px; background: var(--panel-2);
+}
+.ust-heat__cell {
+  position: absolute; box-sizing: border-box; overflow: hidden;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 0 2px; border: 1px solid rgba(255, 255, 255, 0.4);
+  color: #fff; font-size: 12px; line-height: 1.15; letter-spacing: -0.2px;
+}
+.ust-heat__cell b { font-weight: 700; }
+.ust-heat__cell i { font-style: normal; font-variant-numeric: tabular-nums; opacity: 0.95; }
+.ust-heat__cat { position: absolute; z-index: 2; pointer-events: none; }
+.ust-heat__cat span {
+  display: inline-block; padding: 1px 6px 2px; white-space: nowrap;
+  background: rgba(255, 255, 255, 0.88); color: var(--text);
+  font-size: 11px; font-weight: 600; border-radius: 0 0 6px 0;
+}
+/* 贴右边缘的行业标签：span 自身贴容器右边缘、向左延伸（否则从容器左侧往右长会被画布裁掉） */
+.ust-heat__cat.is-r span { position: absolute; right: 0; top: 0; border-radius: 0 0 0 6px; }
+.ust-heat__legend {
+  display: flex; flex-wrap: wrap; gap: 14px;
+  padding: 8px 2px 0; font-size: 11px; color: var(--text-3);
+}
+.ust-heat__legend .up { color: var(--up); }
+.ust-heat__legend .down { color: var(--down); }
+/* 窄屏专用：图下方一行行业清单（图内不放标签，见 renderUsTopHeatmap 的 narrow 分支） */
+.ust-heat__catlist { display: flex; flex-wrap: wrap; gap: 6px 12px; padding: 6px 2px 0; font-size: 11px; }
+.ust-heat__catlist span { color: var(--text-2); white-space: nowrap; }
+.ust-heat__catlist i { font-style: normal; color: var(--text-3); margin-left: 4px; font-variant-numeric: tabular-nums; }
+/* 指数成分股表（S&P 500 / Nasdaq 100）：5 列 = 序号 / 名称 / 市值(副行:权重) / 现价 / 1年回报
+   （覆盖 .us-top 默认的 7 列市值榜网格，列数对齐渲染的 5 个 span）
+   2026-10-11 用户：「名称列太宽了」「按市值大到小排」「名称副行放代码（第二行、灰色）」：
+     · 名称列不再 1fr 撑满 —— 宽度由 JS 实测本表最长公司名经 --idx-nm 注入（留 18px 余量，夹 150~340px）
+     · ⚠️ 必须固定 px：每条 .us-top__row 各自是独立 grid，max-content/auto 会逐行算出不同宽度而错位
+     · 表格整体 width:max-content：左对齐不再拉伸，名称列收窄后右侧留白（这才是「列不宽」的效果）
+     · 名称单元格两行：主行公司名 / 副行代码（灰字），沿用 .us-top__n 的 b/i 结构
+   2026-10-11 二改（用户：「权重列去掉，作为市值的副行，每行更宽字体也大一点」）：
+     · 权重从独立第 6 列改为 `.us-top__m i` 副行 → 5 列；省出的 ~80px 用来把字号 12→13px
+     · 市值单元格同样两行：主行市值 / 副行权重（灰字，与名称副行同字号） */
+.idx-const { min-width: 0; width: max-content; max-width: 100%; }
+.idx-const .us-top__hd, .idx-const .us-top__row {
+  grid-template-columns: 44px var(--idx-nm, 260px) 108px 92px 96px;
+  font-size: 13px;
+}
+.idx-const .us-top__hd { font-size: 12px; }
+.idx-const .us-top__n {
+  display: flex; flex-direction: column; justify-content: center;
+  line-height: 1.25; min-width: 0;
+}
+.idx-const .us-top__n b {
+  font-weight: 500; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.idx-const .us-top__n i {
+  font-style: normal; font-size: 11px; color: var(--text-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* 市值单元格两行：主行市值 / 副行权重（对齐 .us-top__n 的 b/i 结构） */
+.idx-const .us-top__m {
+  display: flex; flex-direction: column; justify-content: center;
+  line-height: 1.25; min-width: 0;
+}
+.idx-const .us-top__m b {
+  font-weight: 500; color: var(--text-2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.idx-const .us-top__m i {
+  font-style: normal; font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* 「全部个股」表头可点排序（2026-10-11 用户：「可以按代码、市值、现价、1年回报排序」）。
+   箭头 ▼/▲ 直接拼在表头文案后面（不另起 DOM，避免 grid 列数变化错位）。
+   ⚠️ white-space:nowrap：窄列（手机端 50~58px）加箭头后不能折行。 */
+.idx-const .us-top__hd [data-sort-k] {
+  cursor: pointer; user-select: none; white-space: nowrap;
+  color: var(--text-2);
+}
+.idx-const .us-top__hd [data-sort-k]:hover { color: var(--text); }
+.idx-const .us-top__hd [data-sort-k].is-sorted { color: var(--accent); font-weight: 600; }
 
 @media (max-width: 720px) {
   .screen-head { padding: 8px 12px; gap: 6px; flex-wrap: nowrap; }
@@ -1291,9 +1392,33 @@ html, body {
   .screen-bar { padding: 7px 12px; gap: 10px; font-size: 11px; }
   .screen-bar__src { margin-left: 0; width: 100%; }
   .us-top { padding: 0 12px; }
+  /* 指数成分股表在手机上「不横滑」：5 列全塞进 ~430px 视口（iPhone 15 Pro Max，用户 2026-10-11）。
+     ⚠️ 必须同时压掉 .us-top 的 min-width:780px（base 里那条是为 7 列市值榜设的），
+        否则整表仍 780px 宽 → 依旧要左右拖。名称列取 minmax(0,1fr) 吃剩余空间。
+     二改：权重挂市值副行后省出一列，字号 10→11px（用户「字体也可以大一点」）。 */
+  .idx-const { width: 100%; padding: 0 5px; }
+  .idx-const .us-top__hd, .idx-const .us-top__row {
+    /* 序号列 ≥24px：18px 会把表头「序号」折成两行（实测），24px 下 3 位数（101/503）也放得下 */
+    grid-template-columns: 24px minmax(0, 1fr) 56px 50px 58px;
+    gap: 3px; font-size: 11px;
+  }
+  .idx-const .us-top__hd { font-size: 10px; }
+  /* 手机端表头加了排序箭头，字再压 1px 保证「1年回报 ▼」不折行 */
+  .idx-const .us-top__hd [data-sort-k] { font-size: 10px; }
+  /* 板块热力图在手机上：JS 把虚拟画布换成竖版 560×1000（见 renderUsTopHeatmap），
+     这里必须同步 aspect-ratio，否则百分比坐标会被拉变形；字缩到 10px。 */
+  .ust-heat { margin-top: 8px; }
+  .ust-heat--portrait { aspect-ratio: 560 / 1000; }
+  .ust-heat__cell { font-size: 10px; }
+  .ust-heat__cat span { font-size: 10px; padding: 1px 4px 2px; }
+  /* 副行（代码 / 权重）比主行小一号：主行 11px、副行 10px */
+  .idx-const .us-top__n i, .idx-const .us-top__m i { font-size: 10px; }
   /* 三栏在窄屏改为纵向堆叠：横排时每栏不足 130px，代码与名称都会挤掉 */
   .mkt { grid-template-columns: 1fr; min-width: 0; }
   .mkt__col { border-right: 0; border-bottom: 1px solid var(--border); }
+  /* 名称列在窄屏收窄到 96px（桌面基数是 132px），把宽度让给「成交额」，
+     实测 430px 下 名称/成交额/现价/涨跌幅 全部装下、零横滑。 */
+  .mkt__row { grid-template-columns: 22px 96px 1fr 68px 60px; }
 }
 /* 交易页侧栏宽度：让名称列的可视宽度与移动端（430px 全宽）一致 ——
    移动端 430 - 24内边距 - 62现价 - 54涨跌 - 90市值 - 4×5间距 = 180px 给名称；
@@ -1738,7 +1863,19 @@ html, body {
 .ao-dmore__btn.is-open .ic { transform: rotate(180deg); }
 
 /* 走势 tab + 时间范围 */
+/* 2026-10-11 用户定稿：统计读数（累计收益/TWR/QQQ 同期）**固定放「时间范围」那一行**，
+   与「资产走势」里看到的位置一致（「这俩应该放这儿啊，和资产走势放一个地方」）。
+   原来 .ao-chart-head 是 flex-wrap，靠**自然换行**碰运气：临界宽度（~965~990px，正好覆盖用户窗口）
+   下「收益率走势」的读数（TWR+QQQ，较窄）挤得上 tabs 那一行，而「资产走势」（累计收益较宽）
+   换到第二行 —— 同一个窗口两种 tab 位置不一致。
+   改为两行网格：第 1 行 = tabs，第 2 行 = 读数 + 时间范围，任何宽度下位置恒定。 */
 .ao-chart-head { display: flex; align-items: center; gap: 16px; padding: 14px 20px 0; flex-wrap: wrap; }
+.acc-overview .ao-chart-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+.acc-overview .ao-chart-head .ao-tabs { grid-column: 1 / -1; justify-self: start; }  /* 跨列但别拉伸：灰底药丸只包住按钮 */
 .ao-tabs { display: flex; gap: 2px; background: var(--panel-2); border-radius: 6px; padding: 2px; }
 .ao-tabs button { border: 0; background: transparent; font-size: 12px; padding: 5px 14px; border-radius: 5px; cursor: pointer; color: var(--text-2); font-family: inherit; }
 .ao-tabs button.is-active { background: var(--panel); color: var(--text); font-weight: 700; box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08); }
@@ -1764,8 +1901,7 @@ html, body {
 .ao-chart-wrap { height: 300px; margin: 8px 12px 0; cursor: crosshair; position: relative; }
 /* ⚠️ `touch-action: pan-y` —— 手指横向拖动由脚本处理（画十字引线），
    纵向仍交给页面滚动。不写的话移动端浏览器会把手势全吞给页面/图表，拖不出引线。 */
-.ao-chart-wrap canvas,
-.ao-fs__chart canvas { touch-action: pan-y; display: block; width: 100%; height: 100%; }
+.ao-chart-wrap canvas { touch-action: pan-y; display: block; width: 100%; height: 100%; }
 
 /* ===================== 收益日历（富途「收益日历」） ===================== */
 .ao-cal { padding: 4px 20px 20px; }
@@ -1818,43 +1954,8 @@ html, body {
 .ao-cal .ao-cal__down { color: var(--down); }
 .ao-cal .ao-cal__flat { color: var(--text-3); }
 .ao-cal .ao-cal__none { color: #ccd2dd; font-weight: 400 !important; }
-/* 全屏按钮：用户 2026-10-10 要求「移动端资产走势 / 收益率走势不要全屏按钮」。
-   原本为移动端专用（桌面 min-width:681px 已隐藏），现改为全尺寸隐藏。
-   全屏浮层（#aoFs）逻辑保留，仅无入口触发。 */
-.ao-ranges .ao-ranges__fs {
-  display: none;
-  align-items: center; justify-content: center; flex: none;
-  width: 28px; height: 28px; padding: 0;
-  border: 1px solid var(--border); border-radius: 6px;
-  background: var(--panel); color: var(--text-2); cursor: pointer;
-}
-/* svg 用 viewBox="4 4 16 16" 裁到路径边界（路径只占 0 0 24 24 的中间 16px），
-   所以这里要给到 19px 才显得跟旁边 12px 文字按钮的视觉重量匹配。 */
-.ao-ranges .ao-ranges__fs svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.ao-ranges .ao-ranges__fs:hover { color: var(--text); background: var(--panel-2); }
-
-/* 全屏走势图（点图表放大）：fixed 铺满，canvas 会被 JS 挪进来，重绘后归位 */
-.ao-fs {
-  position: fixed; inset: 0; z-index: 200;
-  display: flex; flex-direction: column;
-  background: var(--bg);
-  padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
-}
-.ao-fs[hidden] { display: none !important; }
-.ao-fs__bar { display: flex; align-items: center; gap: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
-.ao-fs__title { font-size: 14px; font-weight: 700; color: var(--text); white-space: nowrap; }
-.ao-fs__ranges { display: flex; gap: 6px; margin-left: auto; }
-.ao-fs__ranges button {
-  border: 1px solid var(--border); background: var(--panel); font-size: 12px;
-  padding: 4px 12px; border-radius: 5px; cursor: pointer; color: var(--text-2); font-family: inherit;
-}
-.ao-fs__ranges button.is-active { border-color: var(--accent); color: var(--accent); font-weight: 700; }
-/* 同 .ao-ranges__bench：叠加层而非互斥档位，激活色用基准线的灰蓝；同样只在收益率走势显示 */
-.ao-fs__bench.is-active { border-color: #7b8494; color: #56607a; font-weight: 700; }
-/* 全屏里的统计行：把 .ao-stats 的节点搬进来复用样式，这里只管占位 */
-.ao-fs__stats .ao-stats { padding: 12px 4px 0; }
-.ao-fs__chart { flex: 1 1 auto; min-height: 0; margin-top: 4px; cursor: crosshair; }
-.ao-fs__chart canvas { display: block; width: 100%; height: 100%; }
+/* 全屏按钮与全屏浮层（.ao-ranges__fs / .ao-fs*）已整体删除（用户 2026-10-11）：
+   按钮 2026-10-10 起就被全尺寸隐藏，浮层再无入口 —— HTML / JS / CSS 一并移除。别再恢复。 */
 
 /* 顶部「总资产」大卡片 = 总览页入口（选中态黑框挂卡片上） */
 /* 顶部「总资产」大卡片 = 总览页入口（选中态黑框套在卡片外，留出内边距避免贴字） */
@@ -2234,7 +2335,11 @@ html, body {
                 <button data-ao-tab="stat" title="品类 / 币种分布">统计</button>
 </div>
             <div class="ao-stats" id="aoStats">
-              <div class="ao-stat ao-stat--range">
+              <!-- 累计收益 · CNY：**只在「资产走势」显示**（用户 2026-10-11）。
+                   收益率走势的读数是 TWR / QQQ 同期，绝对金额收益（含现金进出）放那儿没意义，
+                   而且这一格最宽（「累计收益 · CNY」+ 六位数金额），删掉后 TWR + QQQ 同期 能收进一行。
+                   显隐由 applyMode 按 mode 控制（hidden），不是删节点——资产走势还要用它。 -->
+              <div class="ao-stat ao-stat--range" id="aoStatPnlBox">
                 <span id="aoStatLabel">累计收益 · CNY</span>
                 <b class="num" id="aoStatVal">--</b>
               </div>
@@ -2252,9 +2357,6 @@ html, body {
 
               <div class="ao-ranges" id="aoRanges">
 
-                <!-- 全屏按钮：放在时间范围这一行的最左侧（放在 .ao-ranges 内部才会跟着换行到第二行） -->
-
-                <button class="ao-ranges__fs" id="aoFsBtn" title="全屏查看"><svg viewBox="4 4 16 16" class="ic"><path d="M4 9V4h5M20 15v5h-5M15 4h5v5M9 20H4v-5"/></svg></button>
                 <button data-ao-range="1m" class="is-active">1月</button>
                 <button data-ao-range="3m">3月</button>
                 <button data-ao-range="ytd">今年</button>
@@ -2816,34 +2918,14 @@ html, body {
         </div>
       </div>
       <div class="screen-body" id="screenBody">
-        <div class="screen-empty">切到「全部个股」看美股市值 top 150（含 OTC / ADR）。</div>
+        <div class="screen-empty">切到「全部个股」看 S&amp;P 500 + Nasdaq 100 合并去重后的市值榜。</div>
       </div>
     </section>
 
-<!-- 全屏走势图：移动端点图表放大看（canvas 挪进来，重绘后还原位置） -->
-
-<div class="ao-fs" id="aoFs" hidden>
-  <div class="ao-fs__bar">
-    <!-- 全屏内自带走势图 tab：否则全屏后只能看当前这张，收益率/资产之间切不了（用户 2026-10-04 反馈） -->
-    <div class="ao-tabs" id="aoFsTabs">
-      <button class="is-active" data-ao-fs-tab="asset">资产走势</button>
-      <button data-ao-fs-tab="return">收益率走势</button>
-    </div>
-    <div class="ao-fs__ranges" id="aoFsRanges">
-      <button data-ao-range="1m" class="is-active">1月</button>
-      <button data-ao-range="3m">3月</button>
-      <button data-ao-range="ytd">今年</button>
-      <button data-ao-range="all">全部</button>
-      <!-- 与非全屏那个共用 aoState.bench，点任一个两边同步高亮；同样**只在收益率走势**可见 -->
-      <button class="ao-fs__bench" data-ao-bench="qqq" title="叠加 QQQ 同期收益对比（仅收益率走势）">NQ</button>
-    </div>
-    <button class="icon-btn icon-btn--sm" id="aoFsClose" title="关闭"><svg viewBox="0 0 24 24" class="ic"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
-  </div>
-  <div class="ao-fs__stats" id="aoFsStats"></div>
-  <div class="ao-fs__chart" id="aoFsChartWrap"></div>
+<!-- 全屏走势图（#aoFs）已整体删除（用户 2026-10-11）：#aoFsBtn 被 CSS 全尺寸隐藏后浮层
+     就没有任何入口，逻辑（app.js）/样式（styles.css）/本段 HTML 一并移除。别再恢复。 -->
 </div>
 </div>
-</div>
-<script defer src="app.js?v=20261010s"></script>
+<script defer src="app.js?v=20261011w"></script>
 </body>
 </html>

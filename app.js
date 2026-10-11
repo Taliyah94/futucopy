@@ -4135,8 +4135,14 @@ const TICKER_TTL = 15000;
   /* ---------------- 「全部个股」= S&P 500 + Nasdaq 100 合并去重（2026-10-11 用户定稿）----------------
      用户：「全部个股不要东财数据了删了，换成 json 里 sp500 和 nasdaq100 合并去重，按市值排序。
            和 nasdaq100 一样的结构，序号 名称 市值 现价 1年回报。市值下面的占比副行不要了。」
-     数据源：**fund_holdings.json 的 sp500 / nasdaq100 每日快照**（与两个指数 tab 同源），
-     不再实时拉东财（东财 clist 那条链只留给「市场」的涨跌/成交榜与「板块」热力图）。
+     数据源（2026-10-12 起两级）：
+       ① all_stocks.json —— fund_holdings.py 每日抓取时按**完全相同**的规则合并去重写好
+          （代码去重、市值/现价/回报取市值大者、名称 SP500 优先、含中文名英文大写、
+          按市值降序），前端直接读，不再浏览器端合并；
+       ② fund_holdings.json 的 sp500 / nasdaq100 每日快照 —— ① 读不到时的兜底，
+          仍在浏览器端现合（下方 loadAllStocks 内，规则同 ①）。
+     与两个指数 tab 同源（都是 historyofmarket 每日快照），不实时拉东财
+     （东财 clist 那条链只留给「市场」的涨跌/成交榜与「板块」热力图）。
      去重规则：按代码（ticker 大写）；市值/现价/回报取**市值更大**的那条（两份快照抓取时间可能差几小时）。
      ⚠️ **名称先按 SP500，SP500 没有该代码才用 Nasdaq 100**（用户 2026-10-11 定稿）——
         否则中英混排会随「哪份快照市值略大」随机翻转（实测同为一只票两条快照市值差 0.18%）。
@@ -4172,6 +4178,29 @@ const TICKER_TTL = 15000;
     });
   }
   async function loadAllStocks() {
+    /* 2026-10-12：合并去重逻辑已平移到 fund_holdings.py（每日抓取时一次算好写入
+       all_stocks.json）→ **优先读该文件**；读不到/为空再走下方浏览器端实时合并兜底
+       （规则与 py 逐条一致：代码去重、市值取大、名称 SP500 优先、含中文名英文大写）。 */
+    try {
+      const ra = await fetch('all_stocks.json', { cache: 'no-store' });
+      if (ra.ok) {
+        const aj = await ra.json();
+        const rows0 = Array.isArray(aj && aj.rows) ? aj.rows : [];
+        if (rows0.length) {
+          const rows = rows0.map((x) => ({
+            c: String(x.c || '').trim(),
+            n: idxNameUpper(String(x.n == null ? '' : x.n).trim()),
+            ind: (x.ind == null || x.ind === '') ? null : String(x.ind).trim(),
+            w: null,
+            mc: (x.mc != null && isFinite(x.mc)) ? x.mc : null,
+            p: (x.p != null && isFinite(x.p)) ? x.p : null,
+            ret: (x.ret != null && isFinite(x.ret)) ? x.ret : null,
+          }));
+          const asOf = String((aj && (aj.asof || aj.sp500_asof || aj.nasdaq100_asof)) || '').slice(0, 10);
+          return { rows, asOf, source: 'all_stocks.json（每日抓取时聚合）', nSp: (aj && aj.nSp) || 0, nNd: (aj && aj.nNd) || 0 };
+        }
+      }
+    } catch (_) { /* all_stocks.json 不可用 → 走下方 fund_holdings.json 实时合并 */ }
     const r = await fetch(FX_JSON, { cache: 'no-store' });
     if (!r.ok) throw new Error('fund_holdings.json 不可达（http ' + r.status + '）');
     const fj = await r.json();
@@ -4243,7 +4272,7 @@ const TICKER_TTL = 15000;
     } catch (e) {
       if (seq !== screenRenderSeq) return;
       host.innerHTML = '<div class="screen-empty">全部个股读取失败：' + cpEsc(String(e.message || e))
-        + '<br>（数据源 = fund_holdings.json 的 <code>sp500</code> / <code>nasdaq100</code> 每日快照）</div>';
+        + '<br>（数据源 = all_stocks.json，兜底 fund_holdings.json 的 <code>sp500</code> / <code>nasdaq100</code> 每日快照）</div>';
       return;
     }
     if (seq !== screenRenderSeq) return;

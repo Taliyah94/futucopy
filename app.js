@@ -130,12 +130,14 @@
      ------------------------------------------------------------------- */
   const CHART_MODES = {
     time: { bar: null,   limit: 0,   label: '分时' },   // null = 走时段切分逻辑
-    /* 「5日」用 **15m**（2026-10-12 用户定，原为 5m）：OKX 单请求最多 **300 根**，
-       5m 要凑满 5 天得翻 5 页，而 cnoyu 的 `after` 翻页又慢又不稳（实测频繁 20s+ 超时），
-       fetchRawCandles 原来又不带单页超时 → 经常只拿到第 1 页 ≈ 1 天（用户报「不是从实时
-       往前推 5 日」）。改 15m 后：5 天 ≈ 480 根 = **2 页**，翻页量从 5 页砍到 2 页。
-       limit 取 600（= 6.25 天）比 5 天多留一天，给「首根前收」当百分比轴基准，仍是 2 页。 */
-    d5:   { bar: '15m',  limit: 600, label: '5日', sessions: 5 },
+    /* 「5日」用 **30m**（2026-10-12 再定，原为 15m、最早 5m）：OKX/cnoyu 单请求最多 **300 根**
+       （实测 `limit` 硬截到 300，传 600/800 也只回 300、且 800 直接超时）。
+       5 天 × 48 根(30m) = **240 根 ≤ 300** → **单页就能拉满 5 天 + 1 天基准**，根本不用 `after` 翻页。
+       这正是关键：cnoyu 的 `after`/`before` 翻页**实测必挂**（15m 第 2 页 32s 超时、30m 35s 超时），
+       fetchRawCandles 8s 超时后只能 break，于是 15m 实际上永远只拿到第 1 页 ≈ 3.1 天
+       —— 用户报「5日右边没到实时 / 不是从实时往前推5日」的根因就在这。
+       → 30m + limit=300 → wantPages=1，**零翻页、到实时、稳覆盖 5 天**（实测 300 根 = 6.23 天，10-06→10-12）。 */
+    d5:   { bar: '30m',  limit: 300, label: '5日', sessions: 5 },
     d1:   { bar: '1D',   limit: 220, label: '日K' },
     wk:   { bar: '1W',   limit: 160, label: '周K' },
     mo:   { bar: '1M',   limit: 120, label: '月K' },
@@ -167,9 +169,9 @@
 
     // 5日：按美东日分组，只保留最近 N 个交易日（对齐富途的「5日」分时图）
     if (cfg.sessions) {
-      /* ⚠️ OKX 单次请求最多 **300 根**（cnoyu 镜像实测，官方同）。d5 用 **15m**：
-         5 天 ≈ 480 根 = 2 页（原 5m 需 5 页，cnoyu 翻页不稳 → 只出 1 天，见 CHART_MODES.d5）。
-         `need` = cfg.limit(600) 决定翻几页：ceil(600/300)=2 页；多留的 1 天给下面 prev 基准。 */
+      /* need = cfg.limit（d5 现为 300）。d5 用 **30m** → 5 天 × 48 = 240 根 ≤ 300，
+         单页即可拉满，need 不会触发 fetchRawCandles 的多页 `after` 翻页（那玩意儿 cnoyu 必挂）。
+         多留的余量（300−240）自然给下面 prev 基准。 */
       const need = Math.min(cfg.limit || 600, 1440);
       const raw = await fetchRawCandles(instId, need, cfg.bar);
       const byDay = new Map();
@@ -4213,7 +4215,47 @@ const TICKER_TTL = 15000;
       + '<span>着色 = 1 年回报（±50% 饱和）</span>'
       + (asOf ? '<span>数据日期 ' + cpEsc(asOf) + '</span>' : '')
       + '<span class="screen-bar__src">来源：' + cpEsc(data.source || 'fund_holdings.json（每日快照）') + '</span></div>';
-    host.innerHTML = bar + renderUsTopHeatmap(rows, { cap: 50, note: '按 1 年回报着色' });
+    host.innerHTML = bar + '<div class="ust-heat__fit">'
+      + renderUsTopHeatmap(rows, { cap: 50, note: '按 1 年回报着色' })
+      + '</div>';
+    fitUstHeat();
+    ensureUstHeatWatch();
+  }
+
+  /* 桌面端热力图「一屏画完、不滚动」（用户 2026-10-12）：
+     .ust-heat__fit 是 flex:1 的居中容器（见 styles.css 的 @media min-width:721px），
+     这里量出它的可用高度，把 .ust-heat 宽度压到 min(容器宽, 可用高×1000/560)——
+     aspect-ratio:1000/560 不动 → 百分比坐标零失真，整图缩进一屏，.screen-body 不出滚动条。
+     手机竖版（innerWidth<720 / .ust-heat--portrait）不插手：清掉内联尺寸，回归自然流+页面滚动。 */
+  function fitUstHeat() {
+    const wrap = document.querySelector('#screenBody .ust-heat__fit');
+    const heat = wrap && wrap.querySelector('.ust-heat');
+    if (!heat) return;
+    if (window.innerWidth < 720 || heat.classList.contains('ust-heat--portrait')) {
+      heat.style.width = ''; heat.style.maxHeight = '';
+      return;
+    }
+    const legend = wrap.querySelector('.ust-heat__legend');
+    /* −14 = 热力图自身 margin-top:10px + 4px 呼吸余量；图例高度实测（可能换行） */
+    const availH = wrap.clientHeight - (legend ? legend.offsetHeight : 0) - 14;
+    const maxW = wrap.clientWidth;
+    if (availH < 160 || maxW <= 0) { heat.style.width = ''; heat.style.maxHeight = ''; return; }
+    heat.style.width = Math.min(maxW, availH * 1000 / 560).toFixed(1) + 'px';
+    heat.style.maxHeight = Math.floor(availH) + 'px';
+  }
+
+  /* 容器尺寸变化 → 重新适配。ResizeObserver 观察 #screenBody（其盒子只随视口/外壳变化，
+     不会因为热力图自身尺寸变化而回环）；不支持 RO 的老浏览器退化为 window.resize。 */
+  let ustHeatRO = null;
+  function ensureUstHeatWatch() {
+    const body = document.getElementById('screenBody');
+    if (!body || ustHeatRO) return;
+    if (typeof ResizeObserver === 'function') {
+      ustHeatRO = new ResizeObserver(() => fitUstHeat());
+      ustHeatRO.observe(body);
+    } else {
+      window.addEventListener('resize', fitUstHeat);
+    }
   }
 
   /* ---------------- 指数成分股（选股器「S&P 500」/「Nasdaq 100」tab）----------------
@@ -5988,13 +6030,32 @@ const applyMode = (mode, skipDraw) => {
       const isTradeDay = (ds) => hasTqqqBars ? (CAL_TQQQ_MAP[ds] != null)
                                              : (new Date(ds + 'T00:00:00').getDay() % 6 !== 0);
       const tqqqMv = (d) => { const qc = tqqqCloseOn(d); return qc != null ? qc * tqqqShares * fxOn(d) : 0; };
+      const lastIbkr = stockRows.length ? stockRows[stockRows.length - 1].date : null;
+      /* 【2026-10-12】推算值 → 官方净值**锚定修正 δ**（CNY）。
+         实时推算 = IBKR 现金(+利息) + 持仓按 Alpaca 收盘估值，与官方净值
+         （totalNetValueDaily）之间有**口径差**：官方净值含 IBKR 独有项，推算永远看不到
+         —— 实测 10-09 一批 0DTE 期权到期后，官方净值里残留 +135 USD（≈903 CNY），
+         而 holdings 只剩 ORCL 正股，推算段（现金+利息+正股）凑不出这 135。
+         rtFill / closeFills 两条补点路都是「推算值 vs 官方净值」作差，
+         不修正时这笔口径差直接变成"当日盈亏"：10-10（周六）与 10-12（周一盘前）
+         两格凭空 −903 就是这么来的（周末已由上面的 etDow 判断挡掉，这里管白盘/夜盘）。
+         修法：δ = 官方净值(最后快照日) − 推算值(同一天)，补点值统一 +δ：
+           · 没有新行情（盘前/休市）→ 补点恰 = 官方净值 → 当日盈亏 0，与"无交易"一致；
+           · 有新行情（盘中/夜盘）→ 补点 = 官方净值 + 区间真实涨跌，135 的口径差被抵掉。
+         取不到推算值（Alpaca 日线缺失）→ δ=0，维持原口径（宁缺勿错）。 */
+      let anchorDelta = 0;
+      if (lastIbkr && typeof TRADE_POS.stockEquityOn === 'function') {
+        const eqLast = TRADE_POS.stockEquityOn(lastIbkr);      // CNY，含 TQQQ
+        if (eqLast != null && eqLast > 0) {
+          anchorDelta = stockByDate[lastIbkr] - (eqLast - tqqqMv(lastIbkr));
+        }
+      }
       if (etDow !== 0 && etDow !== 6 && td >= from && stockByDate[td] == null) {
         const ibkrPart = rtStockCny - tqqqMv(td);
-        if (ibkrPart > 0) { rtFillDate = td; rtFillVal = ibkrPart; }
+        if (ibkrPart > 0) { rtFillDate = td; rtFillVal = ibkrPart + anchorDelta; }
         /* 中间缺快照日（最后一个 IBKR 净值日 < d < td）：用收盘价口径补。
            否则昨天那格没数据，夜盘涨幅会连着「昨天全天」的涨幅一起挂到今天
            （实测：夜盘时 10-6 格挂着 +8,197 = 全天+夜盘累计，10-7 反而空着）。 */
-        const lastIbkr = stockRows.length ? stockRows[stockRows.length - 1].date : null;
         if (closeStockCny > 0 && lastIbkr && lastIbkr < td
             && (new Date(td) - new Date(lastIbkr)) <= 10 * 864e5) {   // 只补近 10 天，快照长期缺失时不刷屏
           let d = lastIbkr;
@@ -6007,10 +6068,12 @@ const applyMode = (mode, skipDraw) => {
                  不能用同一个 closeStockCny 赋给每一天 —— 那个值只反映最近一根日K，
                  于是 10-06 与 10-07 补出来的权益几乎相等，10-06 那天的真实涨跌被抹掉，
                  日历累计比侧栏少 ≈9,991（用户 2026-10-07 16:32 反馈）。
-                 取不到该日估值就**不补这一格**（宁缺勿错）。 */
+                 取不到该日估值就**不补这一格**（宁缺勿错）。
+                 ⚠️ 同样要 +anchorDelta：这些格与前一日官方净值作差，不锚定就会把
+                    135 USD 口径差算成当日盈亏（10-12 格的复刻版）。 */
               const eq = (typeof TRADE_POS.stockEquityOn === 'function') ? TRADE_POS.stockEquityOn(d) : null;
               if (eq != null && eq > 0) {
-                const cf = eq - tqqqMv(d);
+                const cf = eq - tqqqMv(d) + anchorDelta;
                 if (cf > 0) closeFills[d] = cf;
               }
             }
@@ -7799,8 +7862,17 @@ const applyMode = (mode, skipDraw) => {
        ⚠️ 抽成函数是因为慢网时被 6s 预算截断过一次，Alpaca 基准到手后要**补算一遍**
           （否则基金估值永远停在 QQQ 兜底上）。 */
     let fundAmount = 0, fundYesterday = 0, fundCum = 0;
+    let fundLatestDay = null;      // 各基金 navDate 最大值 = 卡片「收益（日期）」基准日
+    let fundYestBaseVal = 0;       // 参与「当日收益」统计的基金市值（做涨跌幅分母）
     function estimateAllFunds() {
-      fundAmount = 0; fundYesterday = 0; fundCum = 0;
+      fundAmount = 0; fundYesterday = 0; fundCum = 0; fundYestBaseVal = 0;
+      /* 【2026-10-12 基金卡片口径对齐总资产卡片】净值日基准 = 各基金 navDate 的最大值
+         （QDII 各只滞后不同）。当日收益**只结算净值日 == 基准日**的基金（逐只对日期）：
+         滞后一天（10-08）的基金其「昨日收益」属 10-08，混入标签 10-09 的汇总即虚增/虚减。
+         与 renderAccTotal 的 fundIn 同一套「逐项对日期」口径；净值日对不上/没取到 → 不计入
+         （宁缺勿错）。全都没 navDate 时退回旧全量累加，避免整卡片变 `--`。 */
+      const navAll = funds.map((f) => f.navDate).filter(Boolean).sort();
+      fundLatestDay = navAll.length ? navAll[navAll.length - 1] : null;
       funds.forEach((f) => {
       f.amount = f.shares * (f.navL || 0);
       f.yest = f.navP != null ? f.shares * (f.navL - f.navP) : null;
@@ -7823,7 +7895,10 @@ const applyMode = (mode, skipDraw) => {
         f.estBondW = est.bondW; f.estCashW = est.cashW; f.estResidual = est.residual;
       }
 fundAmount += f.amount;
-      if (f.yest != null) fundYesterday += f.yest;
+      /* 当日收益只在「净值日 == 基准日」的基金上累加（滞后基金不计入）；
+         fundYestBaseVal 同步累加这部分市值，供涨跌幅分母只用同口径（见 paintFundSummary）。 */
+      const included = !fundLatestDay || f.navDate === fundLatestDay;
+      if (f.yest != null && included) { fundYesterday += f.yest; fundYestBaseVal += f.amount; }
       if (f.cum != null) fundCum += f.cum;
     });
     /* 把基金实时口径发布出去，供**收益日历**对齐末值（用户 2026-10-07 16:32 反馈：
@@ -7866,14 +7941,14 @@ fundAmount += f.amount;
          QDII 各基金滞后天数不同，集中取「最旧」那个会掩盖差异）。见 fund 渲染器里的 td-navdate。 */
       setTxt('accFundVal', f2(fundAmount));
       setTxt('accFundNote', f2(fundYesterday, true), fundYesterday);
-      /* 标签（2026-10-09 用户定稿）：「昨日收益」→「收益（10-08）」，日期 = **最新净值日**
-         （各基金各自的 navDate 取最新；净值还没拉到时维持「昨日收益」）。 */
-      const navDays = funds.map((f) => f.navDate).filter(Boolean).sort();
-      const fDay = navDays.length ? navDays[navDays.length - 1] : null;
+      /* 标签（2026-10-09 用户定稿，2026-10-12 扩展）：「昨日收益」→「收益（10-09）」，
+         日期 = **最新净值日 fundLatestDay**（= 各基金 navDate 最大值，与 estimateAllFunds 同源）。
+         净值还没拉到（fundLatestDay 为空）时维持「昨日收益」。 */
+      const fDay = fundLatestDay;
       const lbFund = $id('accFundPnlLbl');
       if (lbFund) lbFund.textContent = fDay ? '收益（' + fDay.slice(5) + '）' : '昨日收益';
-      // 昨日涨跌幅 = 昨日收益 ÷ 昨日市值（今日市值 − 昨日收益）
-      const fundYestBase = fundAmount - fundYesterday;
+      // 昨日涨跌幅 = 当日收益 ÷ 当日市值（只取「净值日 == 基准日」那部分基金）
+      const fundYestBase = fundYestBaseVal - fundYesterday;
       setTxt('accFundNotePct', fundYestBase ? pctS(fundYesterday / fundYestBase) : '--', fundYesterday);
       setTxt('accFundCum', f2(fundCum, true), fundCum);
       /* 累计收益率改 **TWR**（用户 2026-10-07 选方案 B：侧栏与日历/走势同源）。

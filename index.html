@@ -1311,6 +1311,20 @@ html, body {
 .ust-heat__catlist { display: flex; flex-wrap: wrap; gap: 6px 12px; padding: 6px 2px 0; font-size: 11px; }
 .ust-heat__catlist span { color: var(--text-2); white-space: nowrap; }
 .ust-heat__catlist i { font-style: normal; color: var(--text-3); margin-left: 4px; font-variant-numeric: tabular-nums; }
+/* ---- 桌面端：板块热力图「一屏画完、不滚动」（用户 2026-10-12：「热力图桌面端我不想滚动下拉，
+   就用当前的屏幕画热力图就行」）----
+   做法：.screen-body 桌面端变成纵向 flex；renderSectors 把热力图+图例包进 .ust-heat__fit
+   （flex:1 + 双向居中），JS（fitUstHeat）按「容器高 − 图例高」量出可用高度，把 .ust-heat 宽度压到
+   min(容器宽, 可用高×1000/560) —— aspect-ratio:1000/560 不动，百分比坐标零失真，只是整体缩放到一屏内。
+   ⚠️ 手机端（≤720px）不走这套：竖版热力图 + 页面滚动是用户 2026-10-11 明确要的，保持原样，
+      所以整块用 min-width:721px 包住（与 JS 的 innerWidth<720 窄屏判断对齐）。 */
+@media (min-width: 721px) {
+  .screen-body { display: flex; flex-direction: column; }
+  .ust-heat__fit {
+    flex: 1 1 auto; min-height: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+  }
+}
 /* 指数成分股表（S&P 500 / Nasdaq 100）：5 列 = 序号 / 名称 / 市值(副行:权重) / 现价 / 1年回报
    （覆盖 .us-top 默认的 7 列市值榜网格，列数对齐渲染的 5 个 span）
    2026-10-11 用户：「名称列太宽了」「按市值大到小排」「名称副行放代码（第二行、灰色）」：
@@ -2085,6 +2099,17 @@ html, body {
 @media (min-width: 1201px) {
   .acc-table { font-size: 12px; }
   .acc-table .td-name { width: 160px; min-width: 160px; max-width: 160px; }
+
+  /* 「资产」tab 的指标卡（.acc-metric：证券/基金/现金汇总）一并放大（用户 2026-10-12：
+     「桌面端证券基金现金的资产tab里面文字没变大啊」—— 上次只改了 .acc-table，没覆盖这套）。
+     标签 11→12、金额 b 11→13（加粗、醒目）、美元/含利息括注 10→11、卡标题 12→13。
+     ⚠️ 这些选择器与基础规则（1581~1633 行）同特异度，但本块在源码更靠后 → 覆盖生效；
+        只作用 ≥1201px 桌面端，窄屏维持原样。 */
+  .acc-metric { font-size: 12px; }
+  .acc-metric .m-row b { font-size: 13px; }
+  .acc-metric .m-row .m-usd { font-size: 11px; }
+  .acc-metric .m-note-r .m-int { font-size: 11px; }
+  .acc-metric h4 { font-size: 13px; }
 
   /* 收益日历：格子里字号放大一档、格子加高（用户 2026-10-12「桌面端日历格子里字体大一点，格子高一点」）。
      窄屏（≤1200px）不动 —— 那边本来就压到 3 列 + 10px，放大会折行。

@@ -270,6 +270,18 @@
   }
   let usSessionSel = currentSessionKey();
 
+  /* 「本地日期 → YYYY-MM-DD」工具（2026-10-12）。
+     ⚠️ 为什么不用 `d.toLocaleDateString('sv-SE')`：它靠浏览器/系统的 locale 数据把日期
+     格式化成 ISO 串，在 locale 数据不全、或系统时区/时间异常的环境里会被回退成
+     "10/12/2026" 这类格式，再拼成 `new Date(...)` 就是 Invalid Date —— 而调用点大多拿它
+     做**字符串比较 / while 循环边界**，一旦格式不对，整段逻辑会静默失效（典型症状：
+     现金明细整块空白、区间筛选为空、补点循环一次不执行）。纯算术拼串跨环境完全一致。
+     语义与 toLocaleDateString('sv-SE') 相同：都取**本地时区**的年月日。 */
+  function ymdLocal(d) {
+    const p = (n) => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+
   function etMinutes(ts) {
     const d = new Date(new Date(ts).toLocaleString('en-US', { timeZone: 'America/New_York' }));
     return d.getHours() * 60 + d.getMinutes();
@@ -2638,7 +2650,7 @@ const TICKER_TTL = 15000;
   const JIN10_CHANNEL = {                 // channel id -> 中文名（实测取值 1/2/3/5/9）
     1: '外汇', 2: '原油', 3: '贵金属', 5: 'A股', 9: '加密货币',
   };
-  const NEWS_STATE = { items: [], loaded: false, loading: false, at: '' };
+  const NEWS_STATE = { items: [], loaded: false, loading: false, at: '', atTs: 0 };
   let cpTab = 'news';   // 资讯面板当前 tab：**默认「推荐」**（金十快讯，用户 2026-10-04 定稿）
 
   /* 页面上所有「资讯列表」容器（2026-10-07 新增）：
@@ -2663,20 +2675,27 @@ const TICKER_TTL = 15000;
     });
   }
 
-  /* script 标签加载金十快讯：拿全局 `newest` 数组，用完即删 */
-  function loadJin10Script() {
+  /* script 标签加载金十快讯：拿全局 `newest` 数组，用完即删。
+     ⚠️ 2026-10-12 加超时（12s）：原实现无任何超时，一旦脚本请求被本机网络环境"半开挂起"
+        （既不 onload 也不 onerror —— 装了拦截/代理异常时常见），Promise 永不 settle，
+        NEWS_STATE.loading 永久卡 true → 之后每轮 60s 轮询都直接 return → 资讯永久不刷新且无报错。
+        加超时后失败走 catch → finally 复位 loading，下一轮照常继续，不会死。 */
+  function loadJin10Script(timeoutMs) {
     return new Promise((resolve, reject) => {
-      const s = document.createElement('script');
+      let s, done = false, to;
+      const cleanup = () => { if (to) clearTimeout(to); if (s && s.parentNode) s.remove(); };
+      const finish = (fn) => { if (done) return; done = true; cleanup(); fn(); };
+      s = document.createElement('script');
       s.src = JIN10_JS + '?_t=' + Date.now();     // 绕开浏览器缓存，保证每轮拿到新的
       s.onload = () => {
         const raw = window.newest;
-        // 无论成功失败都要摘掉全局变量，别让它污染页面的 window
-        try { delete window.newest; } catch (e) { window.newest = undefined; }
-        s.remove();
-        if (Array.isArray(raw) && raw.length) resolve(raw);
-        else reject(new Error('empty newest'));
+        // 无论成功失败都摘掉全局变量（var 声明的全局属性 delete 会失败，直接赋值 undefined 最稳）
+        window.newest = undefined;
+        if (Array.isArray(raw) && raw.length) finish(() => resolve(raw));
+        else finish(() => reject(new Error('empty newest')));
       };
-      s.onerror = () => { s.remove(); reject(new Error('script load failed')); };
+      s.onerror = () => { finish(() => reject(new Error('script load failed'))); };
+      to = setTimeout(() => { finish(() => reject(new Error('script timeout'))); }, timeoutMs || 12000);
       document.head.appendChild(s);
     });
   }
@@ -2685,7 +2704,7 @@ const TICKER_TTL = 15000;
     if (NEWS_STATE.loading) return;
     NEWS_STATE.loading = true;
     try {
-      const raw = await loadJin10Script();
+      const raw = await loadJin10Script(12000);
       NEWS_STATE.items = raw.map((x) => {
         const d = x.data || {};
         const title = String(d.title || '').trim();   // ⚠️ 实测约 1/5 条 title 是 null，必须兜底
@@ -2707,11 +2726,14 @@ const TICKER_TTL = 15000;
         // 源侧已按时间倒序，这里再排一次保证严格有序（画时间轴依赖顺序）
         .sort((a, b) => (a.time < b.time ? 1 : a.time > b.time ? -1 : 0));
       NEWS_STATE.loaded = true;
+      NEWS_STATE.atTs = Date.now();
       NEWS_STATE.at = new Date().toLocaleTimeString('zh-CN',
         { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Shanghai' });
+      paintNewsAt();
       if (cpTab === 'news') renderCpTab();
     } catch (e) {
       console.warn('[金十] 快讯加载失败，沿用上次数据：', e);
+      paintNewsAt();
     } finally { NEWS_STATE.loading = false; }
   }
 
@@ -2752,6 +2774,24 @@ const TICKER_TTL = 15000;
   function jin10Hm(t) {
     const m = /(\d{2}):(\d{2})/.exec(String(t || ''));
     return m ? m[0] : String(t || '');
+  }
+
+  /* 把「最后更新 HH:MM」写到两个资讯面板（自选页 / 持仓页）的头部。
+     用已有的 NEWS_STATE.at（北京时区 HH:MM）。这样用户一眼能看出资讯是否在自动刷新——
+     若时间不动，说明刷新链路断了（利于自查，而非只能干等）。
+     ⚠️ head 里原本没有这个节点，首次渲染时动态建一个插到收起按钮之前。 */
+  function paintNewsAt() {
+    const txt = NEWS_STATE.at ? ('更新 ' + NEWS_STATE.at) : (NEWS_STATE.loaded ? '已加载' : '加载中…');
+    document.querySelectorAll('.cp__head[data-tabs]').forEach((h) => {
+      let el = h.querySelector('.js-news-at');
+      if (!el) {
+        el = document.createElement('span');
+        el.className = 'js-news-at cp__at';
+        const close = h.querySelector('.cp__close, .trade-news__close');
+        if (close) h.insertBefore(el, close); else h.appendChild(el);
+      }
+      el.textContent = txt;
+    });
   }
 
   /* 「推荐」快讯流：时间轴样式（左侧圆点 + 时间/频道/EN/重要标签，其下正文）。
@@ -3981,7 +4021,10 @@ const TICKER_TTL = 15000;
     const yi = v / 1e8;
     if (yi >= 10000) return (yi / 10000).toFixed(2) + ' 万亿';
     if (yi >= 1) return Math.round(yi) + ' 亿';
-    return yi.toFixed(2) + ' 亿';
+    if (yi >= 0.01) return yi.toFixed(2) + ' 亿';   // 0.01亿(=100万美元)及以上仍用「亿」
+    const wan = v / 1e4;                            // 0.01亿 ~ 0.01万：写「万」
+    if (wan >= 0.01) return wan.toFixed(2) + ' 万';
+    return String(Math.round(v));                   // 不足 0.01万：直接写数（无单位）
   }
 
   async function loadUsMkt(force) {
@@ -4395,6 +4438,17 @@ const TICKER_TTL = 15000;
       + catList;
   }
 
+  /* 谷歌双股权特例：Nasdaq 100 同时含 GOOGL（A 类）与 GOOG（C 类）两只，热力图若都算
+     会把谷歌的市值 / 面积双算 → 只保留市值更大的一只。全市场仅 Alphabet 有此双股权结构，
+     其它公司一律不处理（用户明确要求：只有谷歌是这种特例）。 */
+  function dedupGoogleShareClass(rows) {
+    const ga = rows.find((r) => r.c === 'GOOGL');
+    const go = rows.find((r) => r.c === 'GOOG');
+    if (!ga || !go) return rows;
+    const keep = (ga.mc || 0) >= (go.mc || 0) ? ga : go;
+    return rows.filter((r) => r === keep);
+  }
+
   /* 板块（行业）热力图 —— 2026-10-11 用户定稿：**改用 fund_holdings.json，不再拉东财**。
      数据源只能是 **Nasdaq 100 快照**：两份快照里**只有纳指带 industry 字段**
      （SP500 快照无行业，实测 industry 取值：Technology 47 / Consumer Discretionary 14 /
@@ -4420,9 +4474,11 @@ const TICKER_TTL = 15000;
     if (seq !== screenRenderSeq) return;
     /* ret 是小数（0.2548 = +25.48%）→ 乘 100 交给热力图；无市值/无回报的行直接剔除
        （面积为 0 或着色灰都会让图失真，宁缺勿错）。 */
-    const rows = (data.rows || [])
+    const rowsRaw = (data.rows || [])
       .map((x) => ({ c: x.c, n: x.n, ind: x.ind, mc: x.mc, pct: (x.ret == null ? null : x.ret * 100) }))
       .filter((x) => x.mc > 0);
+    /* ⚠️ 谷歌双股权特例：GOOGL / GOOG 只算市值最大的一只，避免热力图把谷歌双算（仅谷歌）。 */
+    const rows = dedupGoogleShareClass(rowsRaw);
     const asOf = data.asOf ? String(data.asOf).slice(0, 10) : '';
     const nInd = new Set(rows.map((x) => x.ind).filter(Boolean)).size;
     const bar = '<div class="screen-bar">'
@@ -5089,6 +5145,13 @@ const applyMode = (mode, skipDraw) => {
      60s 而非 30s：金十是分钟级更新的流，再密拉到的多半是同一份内容。 */
   fetchJin10();
   setInterval(() => { if (!document.hidden) fetchJin10(); }, 60000);
+  // 「切回页面 / 窗口聚焦」立即补刷一次：离开 60s 周期回来不用干等（距上次超 5s 才补，避免抖动）
+  function tryJin10OnVisible() {
+    if (document.hidden) return;
+    if (Date.now() - (NEWS_STATE.atTs || 0) > 5000) fetchJin10();
+  }
+  document.addEventListener('visibilitychange', tryJin10OnVisible);
+  window.addEventListener('focus', tryJin10OnVisible);
 
   /* 「最新」社区评论（源已于 2026-10-07 全部下线，这里保留预拉调用与定时器，加回源即生效）：原来只在**切到该 tab**时才首次拉取，
      用户 2026-10-07 要求「一打开页面就刷新，不要打开最新才刷新」——
@@ -5658,7 +5721,7 @@ const applyMode = (mode, skipDraw) => {
       data = all.filter((p) => p.date >= ymd);
     } else {
       const days = aoState.range === '3m' ? 90 : 30;
-      const from = new Date(Date.now() - days * 864e5).toLocaleDateString('sv-SE');
+      const from = ymdLocal(new Date(Date.now() - days * 864e5));
       data = all.filter((p) => p.date >= from);
     }
     if (data.length < 2) return;
@@ -6190,7 +6253,7 @@ const applyMode = (mode, skipDraw) => {
          仍算当天。__cpForceNight（?cpdebug=1 调试口）强制走夜盘口径。 */
       const et = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
       if (window.__cpForceNight || et.getHours() >= 20) et.setDate(et.getDate() + 1);
-      const td = et.toLocaleDateString('sv-SE');
+      const td = ymdLocal(et);
       /* ⚠️ 2026-10-11：**ET 周六/周日不补任何点**。td 落在周末时 Alpaca 没有当日 K 线，
          rtFill / closeFills 实际全是「周五收盘价」口径，与官方快照（含期权等实时推算
          覆盖不到的项）作差，会把**数据源差**当成周末的「当日盈亏」—— 实测 10-10（周六）
@@ -6214,7 +6277,7 @@ const applyMode = (mode, skipDraw) => {
           let d = lastIbkr;
           while (d < td) {
             const t2 = new Date(d + 'T00:00:00'); t2.setDate(t2.getDate() + 1);
-            d = t2.toLocaleDateString('sv-SE');
+            d = ymdLocal(t2);
             if (d >= td) break;
             if (stockByDate[d] == null && isTradeDay(d)) {   // 中间补点只补真实交易日（TQQQ 有日线才算；跳过周末/节假日）
               /* ⚠️ 必须**按该日期的日K收盘**估值（TRADE_POS.stockEquityOn(d)），
@@ -6504,7 +6567,7 @@ const applyMode = (mode, skipDraw) => {
       const last = idx.days[idx.days.length - 1].date;
       calState.y = +last.slice(0, 4); calState.m = +last.slice(5, 7) - 1;
     }
-    const today = new Date().toLocaleDateString('sv-SE');
+    const today = ymdLocal(new Date());
     const label = document.getElementById('aoCalLabel');
     const sumLbl = document.getElementById('aoCalSumLabel');
     const sumEl = document.getElementById('aoCalSum');
@@ -8523,7 +8586,7 @@ fundAmount += f.amount;
       if (!(d.getDay() >= 1 && d.getDay() <= 5 && d.getHours() >= 16)) {
         do { d.setDate(d.getDate() - 1); } while (d.getDay() === 0 || d.getDay() === 6);
       }
-      const need = d.toLocaleDateString('sv-SE');
+      const need = ymdLocal(d);
       if (String(last.date) < need) return null;
       return { last, prev, fx: fxOn(String(last.date)) };
     }
@@ -8920,7 +8983,7 @@ fundAmount += f.amount;
       const tqqqInRows = rows.some((r) => /^TQQQ$/i.test(String(r.code || ''))
         && r.valueCny != null && r.valueCny > 0);
       if (!tqqqInRows && tqqqSharesAo) {
-        const todayBjAo = new Date().toLocaleDateString('sv-SE');
+        const todayBjAo = ymdLocal(new Date());
         let pxAo = (VAL.txUs && VAL.txUs.TQQQ && VAL.txUs.TQQQ.now) || 0;
         if (!(pxAo > 0) && tqqqBars) {
           const keysAo = Object.keys(tqqqBars).sort();
@@ -8994,7 +9057,7 @@ fundAmount += f.amount;
     })();
 
     function rebuildAoSeries() {
-    const todayBj = new Date().toLocaleDateString('sv-SE');
+    const todayBj = ymdLocal(new Date());
     // ⚠️ tqqq 是 seed.pa_us[0] 原始对象，股数在 tqqq.trades[0].shares（不是 tqqq.tqqqShares，
     //    那个字段只存在于上面 holdings 里的副本上，写错会让 TQQQ 市值恒为 0）。
     const tqqqShares = (tqqq && tqqq.trades && tqqq.trades[0] && tqqq.trades[0].shares) || 0;   // 55 股
@@ -9261,12 +9324,26 @@ fundAmount += f.amount;
     // 连续日序列：从首个现金活动日（2026-02-06）到今天，每天一行
     {
       const cashStart = '2026-02-06';
-      const endDs = new Date().toLocaleDateString('sv-SE');
+      // ⚠️ 不再用 `new Date().toLocaleDateString('sv-SE')`：部分浏览器/系统时区数据不全时
+      //    sv-SE 会被回退成 "10/12/2026" 这类格式，拼成 new Date(...) 后成 Invalid Date，
+      //    导致 while 循环一次都不执行 → 现金明细整块空白（且仅现金明细受影响，证券/基金用文件里的真实日期）。
+      //    改用纯算术拼本地 YYYY-MM-DD（全局 ymdLocal，2026-10-12 统一替换全部 sv-SE 用法），跨浏览器/环境一致。
+      let endDs = ymdLocal(new Date());
+      // 抗「系统时间不准」：若系统时钟早于首笔现金交易日，或干脆早于基准日，
+      // 回退到「已有现金交易数据的最晚日期」，至少把历史那段展示出来（而不是空白）。
+      let lastTxDate = cashStart;
+      cashAccts2.forEach((c) => (c.transactions || []).forEach((tx) => { if (tx.date > lastTxDate) lastTxDate = tx.date; }));
+      if (isNaN(new Date(endDs + 'T00:00:00').getTime()) || endDs < cashStart) {
+        console.warn('[现金明细] 系统日期异常(%s < 基准日 %s)，回退到数据最晚日 %s', endDs, cashStart, lastTxDate);
+        endDs = lastTxDate;
+      } else if (endDs < lastTxDate) {
+        endDs = lastTxDate;
+      }
       const series = [];
       let dt = new Date(cashStart + 'T00:00:00');
       const endDt = new Date(endDs + 'T00:00:00');
       while (dt <= endDt) {
-        const ds = dt.toLocaleDateString('sv-SE');
+        const ds = ymdLocal(dt);
         series.push({ date: ds, value: cashOnDate(ds), cur: 'CNY', src: '现金账户余额', accrued: null });
         dt.setDate(dt.getDate() + 1);
       }

@@ -2665,15 +2665,6 @@ const TICKER_TTL = 15000;
       document.getElementById('tradeNewsList'),
     ].filter(Boolean);
   }
-  /* 是否有任一资讯面板当前真的可见（用于兜底定时器：面板全关着就别打代理）。
-     ⚠️ 除了 .is-collapsed（收起动画用这个），还要判 offsetParent ——
-        窄屏（≤1200px）面板是 display:none，class 里并没有 is-collapsed。 */
-  function cpAnyPanelOpen() {
-    return cpListEls().some((ul) => {
-      const p = ul.closest('.comment-panel, .trade-news');
-      return !!p && !p.hidden && !p.classList.contains('is-collapsed') && p.offsetParent !== null;
-    });
-  }
 
   /* script 标签加载金十快讯：拿全局 `newest` 数组，用完即删。
      ⚠️ 2026-10-12 加超时（12s）：原实现无任何超时，一旦脚本请求被本机网络环境"半开挂起"
@@ -2747,25 +2738,9 @@ const TICKER_TTL = 15000;
 
   function renderCpTab() {
     syncCpTabs();
-    /* 「分享心情」输入框只在原来的 mock 社区列表下有意义；现在「最新」是社区评论聚合、
-       「推荐」是金十快讯，都没有可发帖的地方，两个 tab 都藏掉。 */
-    const compose = document.querySelector('.cp__compose');
-    if (compose) compose.hidden = true;
-    /* 源状态条（原为东财股吧 / 雪球，2026-10-07 社区源全部下线后已无 chip 可显示，
-       但显隐逻辑保留，加回社区源即可自动复活）**只挂在「最新」下**：
-       它插在列表之前、不在列表 innerHTML 里，切 tab 不会被冲掉，
-       所以必须显式显隐，否则「推荐」顶部会残留上一 tab 的状态条。
-       ⚠️ 2026-10-07 起每个资讯面板各有一条（querySelectorAll 全量处理）。 */
-    document.querySelectorAll('.cp__srcbar').forEach((b) => { b.hidden = (cpTab !== 'latest'); });
+    /* 资讯面板现已只剩「推荐」（金十快讯）一个 tab：原「最新」社区评论（东财股吧 / 雪球 / Reddit）
+       已于 2026-10-07 下线、2026-10-12 彻底移除该 tab，故这里只渲染推荐流。 */
     if (cpTab === 'news') renderNews();
-    else {
-      renderCpLatest();
-      /* ⚠️ 换标的但没换 tab（在自选点另一只票再切回资讯）时也要重拉 ——
-         原来只有「切 tab」才触发，结果面板上留着上一只票的评论，
-         要等 3 分钟兜底定时器才纠正（2026-10-07 接 Reddit 时实测到）。 */
-      const code = (APP_DATA.quote || {}).code;
-      if (code && code !== CP_STATE.code && !CP_STATE.loading) fetchCpComments();
-    }
   }
 
   /* 金十 time 形如 '2026-10-04 18:21:13'，取 'HH:MM'。
@@ -2812,136 +2787,16 @@ const TICKER_TTL = 15000;
     els.forEach((ul) => { ul.innerHTML = html; });
   }
 
-  /* ===================================================================
-     4.5 资讯面板「最新」tab：多站社区评论聚合
-     -------------------------------------------------------------------
-     ⚠️ 2026-10-07 按用户要求**整体移除社区源**：东财股吧 / 雪球 / Reddit 三站全部删掉
-        （原话：太垃圾）。CP_SOURCES 置空 → 「最新」tab 现在没有数据源，
-        框架（代理池 / 冷却 / 45 分钟缓存 / 渲染）全部保留，加回源即可复活。
-        历史踩坑留档，供参考：
-          ① 硬约束：这些站**都不给 CORS 头**（实测只有 xueqiu.com 例外，反射 Origin），
-             浏览器无法直连 → 只能借公共 CORS 代理。代理是共享资源、随时限频/下线
-             （实测 api.cors.lol 连续两次就 429），所以设计是「能拿多少算多少」：
-             - 代理容错链 + 429 冷却（冷却表存 localStorage，避免反复撞同一堵墙）
-             - 每个源独立适配 + 独立状态，某个源挂了就标 ✗，不影响其他源
-             - 结果按标的缓存 45 分钟（代理太金贵，不能一开面板就打）
-          ② 候选源的实测可达性（2026-10-06）：
-             东财股吧   ✅ 页面内联 `var article_list={...}`，含标题/作者/时间/点击/评论
-             雪球       ⚠️ CORS 允许可直连，但接口需先访问页面拿 cookie；本机 IP 被阿里云
-                         WAF 拦（返回 aliyun_waf 挑战页），家宽环境可能正常
-             新浪股吧   ❌ 页面纯客户端渲染，HTML 无数据，官方 bundle 里也没有明文接口
-             SeekingAlpha ❌ PerimeterX 风控（403 px-captcha），/api/v3/... 也是 404
-          ③ Reddit（oanor）不给 CORS 头 + key 不能进前端 → 曾改走 Actions 抓成
-             reddit_posts.json，现已随源一起删除（fetch_reddit.py / 两个 workflow 步骤都没了）。
-     =================================================================== */
-  const CP_TTL = 45 * 60 * 1000;                 // 缓存 45 分钟
-  const CP_STATE = { code: '', items: [], byS: {}, at: '', loading: false, via: '' };
-  const CP_CACHE_PREFIX = 'cp_latest_v3_';   // v3：v2 缓存里存着已删源（东财股吧/雪球/Reddit）的条目，整体作废
-  /* 2026-10-07：把 v1 / v2 旧缓存一次性清掉。否则 45 分钟 TTL 内切「最新」tab 会从缓存里
-     渲染出已删除源的幽灵条目 —— v1 是东财资讯/Adanos（用户截图实锤：哈富证券 10-02 那条），
-     v2 是本轮删掉的东财股吧/雪球/Reddit。 */
-  try {
-    const stale = [];
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
-      if (k && (k.indexOf('cp_latest_v1_') === 0 || k.indexOf('cp_latest_v2_') === 0)) stale.push(k);
-    }
-    stale.forEach((k) => localStorage.removeItem(k));
-  } catch (e) { /* 隐私模式等忽略 */ }
-  const CP_CD_KEY = 'cp_proxy_cd_v1';
 
-  /* 公共 CORS 代理容错链（按顺序试，谁先成功用谁）。
-     ⚠️ 这些是**共享的免费中转**，可达性因网络环境而异：实测同一台机器上 curl 能拿到
-        200 + ACAO，浏览器 fetch 却直接 Failed to fetch（DNS/网络层不通）。
-        所以链要长、单个超时别太长，失败就换下一个；真正要稳得上自建中转。 */
-  const CP_PROXIES = [
-    { id: 'cors.lol',       build: (u) => 'https://api.cors.lol/?url=' + encodeURIComponent(u) },
-    { id: 'allorigins',     build: (u) => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u) },
-    { id: 'codetabs',       build: (u) => 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(u) },
-    { id: 'cf.workers',     build: (u) => 'https://test.cors.workers.dev/?' + u },
-    { id: 'azm.workers',    build: (u) => 'https://cors-anywhere.azm.workers.dev/?' + u },
-    { id: 'corsfix',        build: (u) => 'https://proxy.corsfix.com/?' + u },
-    { id: 'whateverorigin', build: (u) => 'https://api.whateverorigin.org/raw?url=' + encodeURIComponent(u) },
-    { id: 'corsproxy',      build: (u) => 'https://corsproxy.io/?url=' + encodeURIComponent(u) },
-  ];
 
   const cpEsc = (s) => String(s == null ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-  function cpWhen(ts) {
-    if (!ts) return '';
-    const d = new Date(ts);
-    const hm = d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Shanghai' });
-    const day = d.toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai' });
-    const today = new Date().toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai' });
-    return day === today ? hm : `${d.getMonth() + 1}-${String(d.getDate()).padStart(2, '0')} ${hm}`;
-  }
   /* WAF / 风控挑战页识别：命中就当这个源这轮失败，换下一个代理也没用 */
-  const cpBlocked = (t) => /aliyun_waf|_waf_|px-captcha|Access to this page has been denied|请输入验证码/i.test(String(t || '').slice(0, 6000));
 
   /* ---- 代理冷却表：某代理刚 429/403 就冷却 10 分钟，别再撞 ---- */
-  function cpCooldowns() {
-    try { return JSON.parse(localStorage.getItem(CP_CD_KEY) || '{}'); } catch (e) { return {}; }
-  }
-  function cpCoolDown(id, ms) {
-    try {
-      const cd = cpCooldowns();
-      cd[id] = Date.now() + (ms || 10 * 60 * 1000);
-      localStorage.setItem(CP_CD_KEY, JSON.stringify(cd));
-    } catch (e) { /* 隐私模式/无痕：忽略，走内存即可 */ }
-  }
 
-  /* 取回原文。direct=true 时不用代理（雪球 CORS 允许直连）。
-     返回 {text, via}；失败抛 Error（消息里带原因，用于状态条显示）。 */
-  async function cpFetchText(url, src) {
-    if (src.direct) {
-      const ctl = new AbortController();
-      const timer = setTimeout(() => ctl.abort(), 12000);
-      try {
-        /* ⚠️ credentials 必须**按源区分**（2026-10-06 实测踩坑）：
-             带凭据的跨域请求要求响应头是「具体 origin + Allow-Credentials: true」，
-             而东财资讯只回 `ACAO: *` → 浏览器直接判失败（Failed to fetch）。
-           所以只有需要 cookie 的雪球才 include，其余源用默认 omit。 */
-        const r = await fetch(url, { signal: ctl.signal, credentials: src.credentials || 'omit' });
-        const t = await r.text();
-        if (cpBlocked(t)) throw new Error('被风控/WAF 拦截');
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        if (!t) throw new Error('空响应');
-        return { text: t, via: '直连' };
-      } finally { clearTimeout(timer); }
-    }
-    const cd = cpCooldowns();
-    /* 总时限 20s、单个 9s：链有 8 个，不设限的话最坏要等一两分钟，面板等不起。
-       早退只是这轮少试几个；冷却表会让下一轮自动跳过已限频的。 */
-    const deadline = Date.now() + 20000;
-    let last = '无可用代理';
-    for (const p of CP_PROXIES) {
-      if ((cd[p.id] || 0) > Date.now()) { last = p.id + ' 冷却中'; continue; }
-      if (Date.now() > deadline) { last = '超时'; break; }
-      const ctl = new AbortController();
-      const timer = setTimeout(() => ctl.abort(), 9000);
-      try {
-        const r = await fetch(p.build(url), { signal: ctl.signal, headers: { Accept: '*/*' } });
-        if (r.status === 429 || r.status === 403) { cpCoolDown(p.id); last = p.id + ' HTTP ' + r.status; continue; }
-        const t = await r.text();
-        if (!r.ok) { last = p.id + ' HTTP ' + r.status; continue; }
-        if (cpBlocked(t)) { last = p.id + ' 返回风控页'; continue; }
-        if (!t || t.length < 200) { last = p.id + ' 返回过短'; continue; }
-        return { text: t, via: p.id };
-      } catch (e) {
-        last = p.id + ' ' + (e && e.name === 'AbortError' ? '超时' : '连接失败');
-      } finally { clearTimeout(timer); }
-    }
-    throw new Error(last);
-  }
 
-  /* ---- 社区源适配器 ----
-     2026-10-07 按用户要求整体移除东财股吧 / 雪球 / Reddit 三个社区评论源（均判为低质）。
-     只删源、保留框架：CP_SOURCES 置空数组，「推荐」tab 的金十快讯 / 华尔街见闻 / 东财 7x24
-     完全不受影响，fetchCpComments / renderCpLatest / 代理池也都留着。
-     要加回社区源，往这里 push {id, name, direct, urls, parse} 即可，parse 需产出统一 item：
-     {id, src, user, text, ts, likes, replies, url}（ts 为毫秒时间戳）。 */
-  const CP_SOURCES = [];
 
   /* 调试钩子：?cpdebug=1 时把适配器挂到 window。
      用途：公共代理是否可达**因网络环境而异**（本机 curl 能通、浏览器 Fetch 直接失败），
@@ -2949,8 +2804,6 @@ const TICKER_TTL = 15000;
      2026-10-07：社区源已全部移除，jsonAfter（配平花括号 JSON 提取器）随东财股吧一起删。 */
   if (/(?:^|[?&])cpdebug=1/.test(location.search)) {
     window.__cp = {
-      sources: CP_SOURCES, proxies: CP_PROXIES,
-      fetchText: cpFetchText, fetchAll: fetchCpComments, render: renderCpLatest, state: CP_STATE,
       /* 账户页资产走势曲线：暴露末几点，用于核对「曲线末点 vs 顶部总资产」是否一致
          （2026-10-07 改成全实时口径后新增）。 */
       ao: () => ({ series: (aoState.series || []).slice(-3), mode: aoState.mode, range: aoState.range,
@@ -3056,168 +2909,15 @@ const TICKER_TTL = 15000;
     };
   }
 
-  async function cpLoadSource(src, code) {
-    let err = '无内容';
-    for (const url of src.urls(code)) {
-      try {
-        const got = await cpFetchText(url, src);
-        const items = src.parse(got.text, code);
-        if (items && items.length) { items.forEach((x) => { x.srcName = src.name; }); return { items, via: got.via }; }
-        err = '解析结果为空';
-      } catch (e) { err = (e && e.message) || '失败'; }
-    }
-    return { items: [], err };
-  }
 
   /* 缓存：按标的存，45 分钟内切 tab 不再打代理 */
-  function cpCacheGet(code) {
-    try {
-      const raw = localStorage.getItem(CP_CACHE_PREFIX + code);
-      if (!raw) return null;
-      const o = JSON.parse(raw);
-      if (!o || !Array.isArray(o.items) || !o.at) return null;
-      if (Date.now() - o.at > CP_TTL) return null;
-      return o;
-    } catch (e) { return null; }
-  }
-  function cpCacheSet(code, o) {
-    try { localStorage.setItem(CP_CACHE_PREFIX + code, JSON.stringify(o)); } catch (e) { /* 无痕模式忽略 */ }
-  }
 
   /* 拉「最新」：命中缓存直接渲染；否则各源并行（每个源内部串行试自己的多个地址） */
-  async function fetchCpComments(force) {
-    const code = (APP_DATA.quote || {}).code;
-    if (!code) return;
-    if (CP_STATE.loading) return;
-    if (!force) {
-      const c = cpCacheGet(code);
-      if (c) {
-        CP_STATE.code = code; CP_STATE.items = c.items; CP_STATE.byS = c.byS || {};
-        CP_STATE.at = c.at; CP_STATE.via = c.via || ''; CP_STATE.loading = false;
-        renderCpLatest();
-        return;
-      }
-    }
-    /* 切换标的：旧数据先清掉，避免看到上一只票的评论 */
-    if (CP_STATE.code !== code) { CP_STATE.code = code; CP_STATE.items = []; CP_STATE.byS = {}; }
-    CP_STATE.loading = true;
-    renderCpLatest();
-    const results = await Promise.all(CP_SOURCES.map((s) => cpLoadSource(s, code)));
-    const byS = {}; const all = [];
-    results.forEach((r, i) => {
-      const s = CP_SOURCES[i];
-      byS[s.id] = { name: s.name, n: r.items.length, err: r.items.length ? '' : (r.err || '失败'), via: r.via || '' };
-      all.push.apply(all, r.items);
-    });
-    all.sort((a, b) => (b.ts || 0) - (a.ts || 0));
-    const items = all.slice(0, 80);
-    CP_STATE.items = items; CP_STATE.byS = byS;
-    CP_STATE.at = Date.now();
-    CP_STATE.via = Object.keys(byS).filter((k) => byS[k].n).map((k) => byS[k].via).filter(Boolean)[0] || '';
-    CP_STATE.loading = false;
-    if (items.length) cpCacheSet(code, { at: CP_STATE.at, items, byS, via: CP_STATE.via });
-    renderCpLatest();
-  }
 
   /* 源状态条：哪个源出了多少条、哪个挂了、走的哪个代理、上次更新时间。
      ⚠️ 每个资讯列表容器各插一条（自选页 / 持仓页各自独立），否则持仓页那一份没有刷新入口。
         状态条是动态创建的，不能写死 id（会重复），用 class + 就近查找。 */
-  function renderCpStatus() {
-    const uls = cpListEls();
-    if (!uls.length) return;
-    uls.forEach((ul, idx) => {
-      let bar = ul.parentNode.querySelector(':scope > .cp__srcbar');
-      if (!bar) {
-        bar = document.createElement('div');
-        bar.id = idx ? 'cpSrcBarTrade' : 'cpSrcBar';
-        bar.className = 'cp__srcbar';
-        ul.parentNode.insertBefore(bar, ul);
-        bar.addEventListener('click', (e) => {
-          const b = e.target.closest('[data-cp-refresh]');
-          if (b) { fetchCpComments(true); }
-        });
-      }
-      renderCpStatusInto(bar);
-    });
-  }
 
-  function renderCpStatusInto(bar) {
-    /* 状态条只属于「最新」tab（用户 2026-10-07 定稿）：「推荐」是金十快讯，
-       顶部不再挂这两颗源状态。切 tab 时由 renderCpTab 统一显隐，这里兜一层。 */
-    bar.hidden = (cpTab !== 'latest');
-    const S = CP_STATE;
-    const chips = CP_SOURCES.map((s) => {
-      const st = S.byS[s.id];
-      if (S.loading && !st) return `<em class="cp__chip is-load">${s.name} 抓取中…</em>`;
-      if (!st) return `<em class="cp__chip">${s.name} 未抓</em>`;
-      if (st.n) return `<em class="cp__chip is-ok" title="经 ${cpEsc(st.via || '-')} 获取">${s.name} ${st.n}</em>`;
-      return `<em class="cp__chip is-bad" title="${cpEsc(st.err || '')}">${s.name} ✗</em>`;
-    }).join('');
-    const at = S.at ? new Date(S.at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '';
-    /* ⚠️ 不再显示「 · allorigins」这类代理名（用户 2026-10-07：太长会把「更新 hh:mm」挤到第二行），
-       走的哪个代理仍在 chip 的 title 悬浮提示里保留。
-       ⚠️ 这里用 `cp__uptime` 而不是 `cp__meta`：`.cp__meta` 是**作者名 + 时间**那个竖排块的
-       通用类（display:flex; flex-direction:column），套到状态条上会把这一行撑高、导致
-       「更新 hh:mm」被挤到第二行（用户 2026-10-07 15:03 反馈）。 */
-    bar.innerHTML = `<span class="cp__chips">${chips}</span>`
-      + `<span class="cp__uptime">${S.at ? '更新 ' + at : (S.loading ? '抓取中…' : '未更新')}</span>`
-      + `<button class="cp__srcbtn" data-cp-refresh="1"${S.loading ? ' disabled' : ''}>刷新</button>`;
-  }
-
-  function renderCpLatest() {
-    /* 2026-10-07：后台预拉 / 兜底刷新时 cpTab 可能是「推荐」，此时**不要往可见列表里写
-       「最新」内容**，否则会冲掉当前展示的推荐流。CP_STATE 已被 fetch 填好，等切到
-       「最新」tab 时再由 renderCpTab 渲染即可（renderCpTab 在 cpTab==='latest' 才调用本函数）。 */
-    if (cpTab !== 'latest') return;
-    renderCpStatus();
-    const uls = cpListEls();
-    if (!uls.length) return;
-    const items = CP_STATE.items || [];
-    if (!items.length) {
-      const empty = `<li class="cp__item cp__item--empty"><p class="cp__text">${
-        CP_STATE.loading
-          ? '正在抓取社区数据…'
-          : '社区源已于 2026-10-07 下线（东财股吧 / 雪球 / Reddit 全部移除）。<br>想看快讯请切到「推荐」tab。'
-      }</p></li>`;
-      uls.forEach((ul) => { ul.innerHTML = empty; });
-      return;
-    }
-    const html = items.map((c) => {
-      const user = c.user || '匿名';
-      const bg = hashColor(user);
-      const body = cpEsc(c.text);
-      return `
-        <li class="cp__item cp__item--cplatest">
-          <div class="cp__user">
-            <span class="cp__avatar" style="background:${bg}">${cpEsc(user.slice(0, 1))}</span>
-            <span class="cp__meta">
-              <b>${cpEsc(user)}</b>
-              <span>${c.ts ? cpWhen(c.ts) : ''}</span>
-            </span>
-            <em class="cp__src cp__src--${c.src}">${cpEsc(c.srcName || c.src)}</em>
-          </div>
-          <p class="cp__text">${c.url
-            ? `<a class="cp__link" href="${cpEsc(c.url)}" target="_blank" rel="noopener noreferrer">${body}</a>`
-            : body}</p>
-          ${(c.likes || c.replies) ? `<div class="cp__stats">
-            <span>${ICON_LIKE}${(c.likes || 0).toLocaleString()}</span>
-            <span>${ICON_CMT}${(c.replies || 0).toLocaleString()}</span>
-          </div>` : ''}
-        </li>`;
-    }).join('');
-    uls.forEach((ul) => { ul.innerHTML = html; });
-  }
-
-  /* 每 3 分钟兜一次：面板开着（自选页 / 持仓页任一）就按 TTL 决定要不要重抓「最新」。
-     不再要求停在「最新」tab（2026-10-07 起后台也兜底刷新），
-     这样切到「最新」时看到的是已就绪的新鲜数据，而不是临时现拉。
-     仍受 cpAnyPanelOpen 守门：面板收起 / 窄屏隐藏时不打代理，省额度。 */
-  setInterval(() => {
-    if (CP_STATE.loading) return;
-    if (!cpAnyPanelOpen()) return;
-    if ((APP_DATA.quote || {}).code !== CP_STATE.code) { fetchCpComments(true); return; }
-    if (Date.now() - CP_STATE.at > CP_TTL) fetchCpComments(true);
-  }, 3 * 60 * 1000);
 
   function renderComments(list) {
     const ul = $('#commentList');
@@ -3602,7 +3302,6 @@ const TICKER_TTL = 15000;
         // 每次切到「推荐」都重拉一次（源侧有 ~45 分钟延迟，但刷新仍能拿到该源此刻的最新一条；
         // 原来只在首次 !loaded 时拉，重新打开页面看到的可能是 30 秒前的旧快照）
         if (cpTab === 'news') fetchJin10();
-        if (cpTab === 'latest') fetchCpComments();
         // 「富途」tab 目前是待接入占位，不拉数据
       }
     });
@@ -4240,7 +3939,8 @@ const TICKER_TTL = 15000;
             ret: (x.ret != null && isFinite(x.ret)) ? x.ret : null,
           }));
           const asOf = String((aj && (aj.asof || aj.sp500_asof || aj.nasdaq100_asof)) || '').slice(0, 10);
-          return { rows, asOf, source: 'all_stocks.json（每日抓取时聚合）', nSp: (aj && aj.nSp) || 0, nNd: (aj && aj.nNd) || 0 };
+          /* ⚠️ 谷歌双股权特例（与板块热力图一致）：GOOGL/GOOG 只留市值最大的一只。 */
+          return { rows: dedupGoogleShareClass(rows), asOf, source: 'all_stocks.json（每日抓取时聚合）', nSp: (aj && aj.nSp) || 0, nNd: (aj && aj.nNd) || 0 };
         }
       }
     } catch (_) { /* all_stocks.json 不可用 → 走下方 fund_holdings.json 实时合并 */ }
@@ -4287,7 +3987,8 @@ const TICKER_TTL = 15000;
       return v.row;
     }).sort((a, b) => ((b.mc != null ? b.mc : -1) - (a.mc != null ? a.mc : -1)));
     const asOf = [fj.sp500_asof, fj.nasdaq100_asof].filter(Boolean).sort().pop() || '';
-    return { rows, asOf, source: 'fund_holdings.json（每日快照）', nSp: sp.length, nNd: nd.length };
+    /* ⚠️ 谷歌双股权特例（与板块热力图一致）：GOOGL/GOOG 只留市值最大的一只。 */
+    return { rows: dedupGoogleShareClass(rows), asOf, source: 'fund_holdings.json（每日快照）', nSp: sp.length, nNd: nd.length };
   }
   /* 只重画表格（用缓存的行），点表头排序走这条，不重新拉 json */
   function drawAllStocks() {
@@ -4445,8 +4146,9 @@ const TICKER_TTL = 15000;
     const ga = rows.find((r) => r.c === 'GOOGL');
     const go = rows.find((r) => r.c === 'GOOG');
     if (!ga || !go) return rows;
-    const keep = (ga.mc || 0) >= (go.mc || 0) ? ga : go;
-    return rows.filter((r) => r === keep);
+    /* 丢掉市值小的那一只，其余全部保留（此前误写成 r === keep，只留一只、把整张图清空）。 */
+    const drop = (ga.mc || 0) >= (go.mc || 0) ? go : ga;
+    return rows.filter((r) => r !== drop);
   }
 
   /* 板块（行业）热力图 —— 2026-10-11 用户定稿：**改用 fund_holdings.json，不再拉东财**。
@@ -5153,10 +4855,7 @@ const applyMode = (mode, skipDraw) => {
   document.addEventListener('visibilitychange', tryJin10OnVisible);
   window.addEventListener('focus', tryJin10OnVisible);
 
-  /* 「最新」社区评论（源已于 2026-10-07 全部下线，这里保留预拉调用与定时器，加回源即生效）：原来只在**切到该 tab**时才首次拉取，
-     用户 2026-10-07 要求「一打开页面就刷新，不要打开最新才刷新」——
-     这里启动即预拉一份（与「推荐」一致），后台还会按下方 3 分钟定时器兜底刷新。 */
-  fetchCpComments();
+
 
   /* 顶栏「刷新」按钮（移动端左侧唯一保留的按钮）：
      手动重拉一轮数据 = 自选行情 + 外汇行 + 当前标的图表/分时。

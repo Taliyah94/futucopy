@@ -664,28 +664,10 @@ html, body {
 }
 .cp__close { margin-left: auto; }
 
-.cp__compose {
-  display: flex; align-items: center; gap: 8px;
-  margin: 12px 14px;
-  height: 34px; padding: 0 12px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 17px;
-  color: var(--text-3);
-}
-.cp__compose input {
-  flex: 1; border: none; background: transparent; outline: none;
-  color: var(--text); font-size: 12px;
-}
-.cp__compose input::placeholder { color: var(--text-3); }
-/* 快讯 tab 下隐藏分享框。⚠️ 必须显式写 display:none —— 基础规则是 `display:flex`，
-   与同特异度的 [hidden] 默认样式冲突（`hidden` 只加 UA 层的 display:none，优先级更低）。 */
-.cp__compose[hidden] { display: none !important; }
-
 .cp__list { flex: 1; overflow-y: auto; list-style: none; padding-bottom: 12px; }
 /* 富途 tab 用 iframe 时要把列表整层藏掉。`.cp__list` 有 `flex:1`，
    与 UA 的 `[hidden]{display:none}` 同特异度且声明在后 → 会被覆盖成可见，
-   故必须显式加 !important（同 `.cp__compose[hidden]` 的处理）。 */
+   故必须显式加 !important。 */
 .cp__list[hidden] { display: none !important; }
 
 .cp__item { padding: 12px 14px; border-bottom: 1px solid var(--border); }
@@ -2095,6 +2077,30 @@ html, body {
 .acc-detail__pages button:hover:not(:disabled) { color: var(--text); background: var(--panel-2); }
 .acc-detail__pages button:disabled { color: #c3cad6; cursor: not-allowed; }
 .acc-empty__txt { text-align: center; color: var(--text-3); padding: 20px 0; }
+
+/* 桌面端（宽屏 >1200px）：账户页证券/基金/现金表字号放大一档（用户 2026-10-12「桌面端字体大一点」）。
+   窄屏（≤1200px）维持 11px，避免移动端横向滚动时列更挤。名称列随之 150→160px，
+   抵消 12px 下长基金名（如「嘉实纳斯达克100ETF发起联接(QDII)A人民币」）更易折行的问题。
+   ⚠️ 必须放在所有 .acc-table / .td-name 基础规则之后，否则会被靠后的基础规则覆盖。 */
+@media (min-width: 1201px) {
+  .acc-table { font-size: 12px; }
+  .acc-table .td-name { width: 160px; min-width: 160px; max-width: 160px; }
+
+  /* 收益日历：格子里字号放大一档、格子加高（用户 2026-10-12「桌面端日历格子里字体大一点，格子高一点」）。
+     窄屏（≤1200px）不动 —— 那边本来就压到 3 列 + 10px，放大会折行。
+     ⚠️ 用 `.ao-cal .ao-cal__day/.cell` 提高特异度，避免被靠后的基础规则（1926/1932 行）压掉。 */
+  /* 月视图：日期 12→13、金额 11→13、百分比 11→12；格子 62→80px 高 */
+  .ao-cal .ao-cal__dow span { font-size: 13px; }
+  .ao-cal .ao-cal__day { min-height: 80px; padding: 9px 5px 8px; }
+  .ao-cal .ao-cal__day .d { font-size: 13px; }
+  .ao-cal .ao-cal__day .n { font-size: 13px; margin-top: 4px; }
+  .ao-cal .ao-cal__day .p { font-size: 12px; margin-top: 2px; }
+  /* 年视图：月份 13→14、金额 13→15、百分比 12→13；格子 14px padding → 20px */
+  .ao-cal .ao-cal__cell { padding: 20px 12px; }
+  .ao-cal .ao-cal__cell h5 { font-size: 14px; margin-bottom: 8px; }
+  .ao-cal .ao-cal__cell .n { font-size: 15px; }
+  .ao-cal .ao-cal__cell .p { font-size: 13px; }
+}
 </style>
 <!-- INLINE_CSS:END -->
 </head>
@@ -2261,10 +2267,6 @@ html, body {
       <div class="cp__head" data-tabs="feed">
         <button class="cp-tab is-active" data-cp-tab="news" title="金十数据快讯（默认）">推荐</button>
         <button class="icon-btn icon-btn--sm cp__close" title="收起"><svg viewBox="0 0 24 24" class="ic"><path d="M9 5l7 7-7 7"/></svg></button>
-</div>
-      <div class="cp__compose">
-        <svg viewBox="0 0 24 24" class="ic"><path d="M4 20l3-8 10-8 3 3-8 10-8 3z"/></svg>
-        <input type="text" placeholder="分享心情或投资心得" />
 </div>
       <ul class="cp__list" id="commentList"></ul>
     </aside>

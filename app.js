@@ -130,11 +130,12 @@
      ------------------------------------------------------------------- */
   const CHART_MODES = {
     time: { bar: null,   limit: 0,   label: '分时' },   // null = 走时段切分逻辑
-    /* 「5日」用 **5m** 而不是 1m：OKX 任何 bar 粒度单次都最多给 **1440 根**（实测 1m/3m/5m/15m/30m/1H
-       全是 1440，只是覆盖时长不同：1m=1天、3m=3天、**5m=5天**、15m=15天…）。
-       原来写 1m → 无论翻多少页都只能拿到 1 天，横轴退化成 10-03/10-04 两天。
-       5m × 1440 = 5 天，正好对上「5日」。 */
-    d5:   { bar: '5m',   limit: 1440, label: '5日', sessions: 5 },
+    /* 「5日」用 **15m**（2026-10-12 用户定，原为 5m）：OKX 单请求最多 **300 根**，
+       5m 要凑满 5 天得翻 5 页，而 cnoyu 的 `after` 翻页又慢又不稳（实测频繁 20s+ 超时），
+       fetchRawCandles 原来又不带单页超时 → 经常只拿到第 1 页 ≈ 1 天（用户报「不是从实时
+       往前推 5 日」）。改 15m 后：5 天 ≈ 480 根 = **2 页**，翻页量从 5 页砍到 2 页。
+       limit 取 600（= 6.25 天）比 5 天多留一天，给「首根前收」当百分比轴基准，仍是 2 页。 */
+    d5:   { bar: '15m',  limit: 600, label: '5日', sessions: 5 },
     d1:   { bar: '1D',   limit: 220, label: '日K' },
     wk:   { bar: '1W',   limit: 160, label: '周K' },
     mo:   { bar: '1M',   limit: 120, label: '月K' },
@@ -166,12 +167,10 @@
 
     // 5日：按美东日分组，只保留最近 N 个交易日（对齐富途的「5日」分时图）
     if (cfg.sessions) {
-      /* ⚠️ OKX 对**任何 bar 粒度**单次都最多返回 **1440 根**（实测 1m/3m/5m/15m/30m/1H 全是 1440），
-         翻页到第 6 页就返回空。所以覆盖时长 = 1440 × bar 粒度：
-           1m → 1 天、3m → 3 天、5m → 5 天、15m → 15 天。
-         「5日」必须用 **5m**（cfg.bar）；用 1m 无论翻多少页都只有 1 天，横轴退化成一个刻度。
-         `need` 只用于决定翻几页，够 1440 即可（bar 粒度已决定实际覆盖范围）。 */
-      const need = Math.min(cfg.limit || 1440, 1440);
+      /* ⚠️ OKX 单次请求最多 **300 根**（cnoyu 镜像实测，官方同）。d5 用 **15m**：
+         5 天 ≈ 480 根 = 2 页（原 5m 需 5 页，cnoyu 翻页不稳 → 只出 1 天，见 CHART_MODES.d5）。
+         `need` = cfg.limit(600) 决定翻几页：ceil(600/300)=2 页；多留的 1 天给下面 prev 基准。 */
+      const need = Math.min(cfg.limit || 600, 1440);
       const raw = await fetchRawCandles(instId, need, cfg.bar);
       const byDay = new Map();
       for (const r of raw) {                     // 最新在前
@@ -489,7 +488,7 @@ const TICKER_TTL = 15000;
       if (pageState.refreshHead && pageState.pages.length) {
         const url0 = OKX_API_BASE + '/market/candles?instId=' + encodeURIComponent(instId) +
           '&bar=' + barArg + '&limit=300';
-        const j0 = await okxFetch(url0).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+        const j0 = await okxFetch(url0, undefined, 8000).then((r) => (r.ok ? r.json() : null)).catch(() => null);
         if (j0 && j0.code === '0' && j0.data && j0.data.length) {
           const newHead = j0.data;
           const newOldest = +newHead[newHead.length - 1][0];
@@ -512,12 +511,17 @@ const TICKER_TTL = 15000;
           ? pageState.pages[pageState.pages.length - 1] : null;
         const cursor = last && last.length ? last[last.length - 1][0] : null;
         const url = OKX_API_BASE + '/market/candles?instId=' + encodeURIComponent(instId) +
-          '&bar=' + barArg + '&limit=300' + (cursor ? '&after=' + cursor : '');
-        const json = await okxFetch(url).then((r) => {
+          '&bar=' + barArg + '&limit=300' + (cursor ? '&after=' + encodeURIComponent(cursor) : '');
+        /* ⚠️ 单页 8s 超时（2026-10-12）：cnoyu 的 `after` 翻页会挂起（实测 20s+ 无响应），
+           而这里原来不传超时 → 整条链卡死、图表空白。超时/失败即 break，
+           **保留已取到的页**返回（第 1 页 ≈ 该粒度已覆盖的时长），绝不抛错把图清空。 */
+        let json = null;
+        try {
+          const r = await okxFetch(url, undefined, 8000);
           if (!r.ok) throw new Error('HTTP ' + r.status);
-          return r.json();
-        });
-        if (json.code !== '0' || !json.data || !json.data.length) break;
+          json = await r.json();
+        } catch (e) { break; }
+        if (!json || json.code !== '0' || !json.data || !json.data.length) break;
         /* ⚠️ 边界去重：部分 OKX 节点 `after` 返回「该时间戳及更早」，
            而 www.cnoyu.org 镜像实测是「严格早于」—— 统一只保留**更早**的部分（两种都对）。 */
         const boundary = last && last.length ? +last[last.length - 1][0] : null;
@@ -2491,6 +2495,17 @@ const TICKER_TTL = 15000;
   /* 数据时间备注用的短日期：'2026-10-02' → '10-02'，其它原样返回。 */
   const asOfMd = (s) => (/^\d{4}-\d{2}-\d{2}$/.test(String(s || '')) ? String(s).slice(5) : String(s || ''));
 
+  /* 把周期工具条的选中态同步到指定 mode。点击按钮自带的 is-active 切换只在
+     initTabs 的点击回调里；程序内切 mode（如「点开外汇/美债默认切 5 日」）
+     loadInstrument 不会碰工具条，这里手动对齐，避免按钮高亮与实际图表不符。 */
+  function syncPeriodTabActive(mode) {
+    const grp = document.querySelector('[data-tabs="period"]');
+    if (!grp) return;
+    grp.querySelectorAll('.ct-tab').forEach((b) => {
+      b.classList.toggle('is-active', b.dataset.chartMode === mode);
+    });
+  }
+
   function renderWatchlist(list, activeCode) {
     const session = usSession();                    // 美股延长时段标签（盘中为 null）
     // 行情页与交易页各有一份自选列表，共享同一数据源；
@@ -2533,6 +2548,15 @@ const TICKER_TTL = 15000;
           row.classList.add('is-active');
           const picked = list.find((x) => x.code === row.dataset.code);
           if (picked) {
+            /* 外汇（USDCNH）/ 美债（10Y）只有日频、没有分时与 1 天数据 —— 若此时停在
+               「分时」会整张图空白（见 loadInstrument 里 fxCode/ustCode 的 time 分支）。
+               用户 2026-10-12 定：「美元/人民币和美债点开时默认显示 5 天吧，因为 1 天的
+               数据就没有」。这里点开这两类时若 chartMode 还是 'time' 就切到 'd5'，
+               并同步周期工具条高亮。其余周期（日K/周K…）对日频源有效，不覆盖用户已选。 */
+            if ((picked.fxCode || picked.ustCode) && chartMode === 'time') {
+              chartMode = 'd5';
+              syncPeriodTabActive('d5');
+            }
             loadInstrument(picked.code);
             // 移动端：点行后切到图表页（列表隐藏，只剩该标的 K 线）
             // （桌面端保持列表常驻，不受影响）

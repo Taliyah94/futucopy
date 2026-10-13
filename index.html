@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<link rel="preload" href="app.js?v=20261011w" as="script" />
+<link rel="preload" href="app.js?v=20261013d" as="script" />
 <!-- ⚠️ 用户要求「没读到数据就显示 --，别产生误导」：
  报价头/账户汇总的初始值一律 --（原来是硬编码的 137.790 / +5.190 / +3.91% 等假数字，
  页面刚加载、JS 还没跑到时就会显示出来）。真实值由 renderQuote / 账户页数据填充。 -->
@@ -1180,6 +1180,96 @@ html, body {
   color: #fff; background: var(--accent);
   border-color: var(--accent);
 }
+/* ================= 「我的」页面（复刻富途个人中心 · 2026-10-13） =================
+   浅色页 + 白卡圆角 + 彩色圆角图标，布局照富途「我的」：头像区 → 会员黑卡 →
+   6 宫格快捷入口 → 4 组菜单（组间 10px 留白）。菜单行暂为视觉复刻，未接功能。 */
+.me-view {
+  flex: 1 1 auto; min-width: 0;
+  display: flex; flex-direction: column;
+  background: #f5f6f8;                /* 比 --bg 再灰一档，白卡才浮得起来（富途同款） */
+  overflow: hidden;
+}
+.me-view[hidden] { display: none !important; }
+.me-page {
+  flex: 1; overflow-y: auto;
+  max-width: 520px; width: 100%; margin: 0 auto;
+  padding: 28px 16px 40px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+/* ---- 头像区 ---- */
+.me-profile { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 6px 0; }
+.me-profile__avatar {
+  width: 64px; height: 64px; border-radius: 50%;
+  background: linear-gradient(135deg, #ffb64d, #ff8f1f);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 28px; font-weight: 700; color: #fff;
+  box-shadow: 0 4px 12px rgba(255, 143, 31, .3);
+}
+.me-profile__name { font-size: 19px; font-weight: 700; color: var(--text); line-height: 1.3; }
+.me-profile__id { font-size: 12px; color: var(--text-3); }
+/* ---- 会员黑卡（富途深蓝紫渐变） ---- */
+.me-vip {
+  display: flex; align-items: center; gap: 10px;
+  border-radius: 12px; padding: 13px 14px;
+  background: linear-gradient(100deg, #46568c 0%, #26314f 100%);
+  color: #fff;
+}
+.me-vip__badge {
+  width: 26px; height: 26px; border-radius: 7px; flex: none;
+  background: linear-gradient(135deg, #f8dca6, #d9a44f);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px; font-weight: 800; color: #4a3418; font-style: italic;
+}
+.me-vip__text { flex: 1; font-size: 14px; font-weight: 600; letter-spacing: .2px; }
+.me-vip__btn {
+  flex: none; border: 0; border-radius: 999px; padding: 6px 14px;
+  background: #fff; color: #26314f;
+  font: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
+}
+.me-vip__btn:hover { background: #f0f2f8; }
+/* ---- 6 宫格快捷入口 ---- */
+.me-quick {
+  background: var(--panel); border-radius: 12px;
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  padding: 14px 6px 8px;
+}
+.me-quick__item {
+  display: flex; flex-direction: column; align-items: center; gap: 7px;
+  padding: 8px 4px 12px; border: 0; background: none; cursor: pointer;
+  font: inherit; color: var(--text-2); border-radius: 10px;
+}
+.me-quick__item:hover { background: var(--panel-2); }
+.me-quick__icon {
+  width: 46px; height: 46px; border-radius: 13px;
+  display: flex; align-items: center; justify-content: center; color: #fff;
+}
+.me-quick__icon svg { width: 24px; height: 24px; }
+.me-quick__icon--shop   { background: #4c8dff; }
+.me-quick__icon--gift   { background: #ff8f1f; }
+.me-quick__icon--coupon { background: #ffc53d; }
+.me-quick__icon--star   { background: #ffb224; }
+.me-quick__icon--bell   { background: #ff7a45; }
+.me-quick__icon--clock  { background: #36c6b8; }
+.me-quick__label { font-size: 12px; line-height: 1; }
+/* ---- 菜单组（白卡，行分隔线） ---- */
+.me-menu { background: var(--panel); border-radius: 12px; overflow: hidden; }
+.me-menu__row {
+  display: flex; align-items: center; gap: 12px; width: 100%;
+  padding: 0 14px; height: 52px;
+  border: 0; background: none; cursor: pointer;
+  font: inherit; font-size: 15px; color: var(--text); text-align: left;
+}
+.me-menu__row + .me-menu__row { border-top: 1px solid #f0f2f5; }
+.me-menu__row:hover { background: var(--panel-2); }
+.me-menu__icon { flex: none; display: flex; }
+.me-menu__icon svg { width: 22px; height: 22px; }
+.me-menu__label { flex: 1; }
+.me-menu__arrow { flex: none; display: flex; color: #c8cdd6; }
+.me-menu__arrow svg { width: 16px; height: 16px; }
+/* 手机：主区被底栏占位，页面底部多留空间 */
+@media (max-width: 720px) {
+  .me-page { padding: 20px 12px 28px; }
+}
 /* ---- 市场榜：三栏并排（成交/涨幅/跌幅）---- */
 .mkt {
   display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1315,12 +1405,6 @@ html, body {
 }
 /* 贴右边缘的行业标签：span 自身贴容器右边缘、向左延伸（否则从容器左侧往右长会被画布裁掉） */
 .ust-heat__cat.is-r span { position: absolute; right: 0; top: 0; border-radius: 0 0 0 6px; }
-.ust-heat__legend {
-  display: flex; flex-wrap: wrap; gap: 14px;
-  padding: 8px 2px 0; font-size: 11px; color: var(--text-3);
-}
-.ust-heat__legend .up { color: var(--up); }
-.ust-heat__legend .down { color: var(--down); }
 /* 窄屏专用：图下方一行行业清单（图内不放标签，见 renderUsTopHeatmap 的 narrow 分支） */
 .ust-heat__catlist { display: flex; flex-wrap: wrap; gap: 6px 12px; padding: 6px 2px 0; font-size: 11px; }
 .ust-heat__catlist span { color: var(--text-2); white-space: nowrap; }
@@ -1876,6 +1960,43 @@ html, body {
 .ao-dmore__btn .ic { width: 14px; height: 14px; transition: transform .18s; }
 .ao-dmore__btn.is-open .ic { transform: rotate(180deg); }
 
+/* ===================== 「其它」tab：房产估值曲线 + 成交列表（2026-10-13） =====================
+   曲线仿「资产走势」同一套画布语言（右侧纵轴刻度 + 起止日期 + 渐变填充），
+   但**没有**时间范围切换（用户：「只要曲线就行，不需要1月3月这些玩意」）。 */
+.ao-other { padding: 4px 20px 20px; }
+.ao-other__head { display: flex; align-items: baseline; gap: 14px; padding: 10px 0 12px; }
+.ao-other__head h4 { margin: 0; font-size: 14px; }
+.ao-other__stat { margin-left: auto; text-align: right; }
+.ao-other__stat span { display: block; font-size: 9px; color: var(--text-3); margin-bottom: 1px; }
+.ao-other__stat b { font-size: 16px; }
+.ao-other__chart { height: 300px; margin: 0 0 6px; position: relative; }
+.ao-other__chart canvas { display: block; width: 100%; height: 100%; }
+.ao-other__lhead { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; }
+.ao-other__lhead > span { font-size: 12px; color: var(--text-2); }
+.ao-other__pager { display: flex; align-items: center; gap: 8px; }
+.ao-other__pager button {
+  border: 0; background: var(--panel-2); border-radius: 6px;
+  width: 26px; height: 26px; padding: 0; cursor: pointer; color: var(--text-2);
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.ao-other__pager button:hover:not(:disabled) { background: var(--border-2); color: var(--text); }
+.ao-other__pager button:disabled { opacity: 0.35; cursor: default; }
+.ao-other__pager button .ic { width: 14px; height: 14px; }
+.ao-other__pager b { font-size: 11px; color: var(--text-2); font-weight: 600; font-variant-numeric: tabular-nums; }
+/* 两栏卡片网格（移动端也保持两栏：卡片信息量小，390px 下每栏 ~170px 放得下） */
+.ao-other__grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.prop-card { background: var(--panel-2); border-radius: 10px; padding: 10px 12px; }
+.prop-card__d { font-size: 13px; font-weight: 700; margin-bottom: 4px; }
+.prop-card__d i { font-style: normal; font-size: 10px; font-weight: 400; color: var(--text-3); margin-left: 4px; }
+.prop-card__row { display: flex; align-items: baseline; justify-content: space-between; font-size: 11px; color: var(--text-3); padding: 1.5px 0; }
+.prop-card__row b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.prop-card--empty { grid-column: 1 / -1; text-align: center; color: var(--text-3); font-size: 12px; padding: 24px 0; }
+@media (max-width: 720px) {
+  .ao-other { padding: 4px 12px 16px; }
+  /* tab 加到 5 个后窄屏放不下：允许换行（原来 4 个刚好一行） */
+  .acc-overview .ao-chart-head .ao-tabs { flex-wrap: wrap; }
+}
+
 /* 走势 tab + 时间范围 */
 /* 用户定稿：统计读数（累计收益/TWR/QQQ 同期）**固定放「时间范围」那一行**，
  与「资产走势」里看到的位置一致（「这俩应该放这儿啊，和资产走势放一个地方」）。
@@ -2142,6 +2263,40 @@ html, body {
   .ao-cal .ao-cal__cell .n { font-size: 15px; }
   .ao-cal .ao-cal__cell .p { font-size: 13px; }
 }
+
+/* 移动端（≤680px）账户页：表格 + 「资产」tab 指标卡字号放大（用户 ：
+「移动端账户页面 证券、基金、现金tab 打开后的表字体也可以大一号吗？
+ 不要忘了证券基金现金里资产tab里面的字体，好像是个单独的逻辑」）。
+桌面端（>1201px）已在上方 min-width:1201px 块放大过（.acc-table 12px / .acc-metric 12px），
+窄屏一直沿用基础规则（.acc-table 11px / .acc-metric 11px）——本块补齐移动端：
+持仓/历史表 11→13px；资产卡 11→13px、金额 b→14px、美元/含利息括注 10→11px、卡标题 12→13px。
+⚠️ 三个坑（本文件前人反复踩过，勿重蹈）：
+① 本块必须放在所有 .acc-table / .acc-metric 基础规则**之后**（基础规则散在 1695~1816 行）——
+ 同特异度下后写胜出；若图省事写进前面的 680px 块（821~1127 行）会被静默覆盖、白改。
+② `.acc-page .acc-table`（0,2,0）与资金明细的 `.acc-detail .acc-table`（0,2,0，1094 行）
+ 同特异度，写一起会把资金明细一起放大——但那个 10px 是刻意调优（5 列在 394px
+ 整屏放下、不左右滚动，见 1094 注释）。所以持仓表用子选择器
+ `.acc-page > .acc-table-wrap > .acc-table` 只命中**直接子级**（三个分类页的持仓表），
+ 历史表走 `.acc-page .acc-history .acc-table`，两者结构上都碰不到 .acc-detail。
+③ 表格本身在 .acc-table-wrap（overflow-x:auto）横向滚动盒里，放大字号只增加
+ 滚动长度、不破布局；名称列 .td-name 固定 150px + .td-clamp 行数截断兜底折行。 */
+@media (max-width: 680px) {
+  /* 持仓表（证券/基金/现金三个 .acc-page 的直接子级 .acc-table-wrap）：11 → 13px */
+  .acc-page > .acc-table-wrap > .acc-table { font-size: 13px; }
+  /* 历史表（成交明细 / 订单 / 成交订单）：11 → 13px */
+  .acc-page .acc-history .acc-table { font-size: 13px; }
+
+  /* 「资产」tab 指标卡（.acc-metric 是单独一套规则，不随 .acc-table）：
+ 卡底 11→13、金额 b →14（加粗醒目；桌面端是 12/13 的 +1 关系，这里保持同关系）、
+ 美元原值括注与含利息备注 10→11、卡标题 h4 12→13。
+ ⚠️ .m-usd 带 min-width:62px + nowrap，11px 下「$47,217.34」仍放得下；
+ 「现金总值」两行结构（.m-note-r）只改 .m-int 字号，不动布局。 */
+  .acc-asset .acc-metric { font-size: 13px; }
+  .acc-asset .acc-metric .m-row b { font-size: 14px; }
+  .acc-asset .acc-metric .m-row .m-usd { font-size: 11px; }
+  .acc-asset .acc-metric .m-note-r .m-int { font-size: 11px; }
+  .acc-asset .acc-metric h4 { font-size: 13px; }
+}
 </style>
 <!-- INLINE_CSS:END -->
 </head>
@@ -2180,7 +2335,7 @@ html, body {
       <button class="rail__item" data-view="comment" data-label="资讯" title="资讯"><svg viewBox="0 0 24 24" class="ic"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 9h8M8 13h8M8 17h5"/></svg></button>
       <button class="rail__item" data-view="screen" data-label="选股" title="选股器"><svg viewBox="0 0 24 24" class="ic"><path d="M4 6h16M7 12h10M10 18h4"/></svg></button>
       <button class="rail__item" data-view="trade" data-label="持仓" title="持仓"><svg viewBox="0 0 24 24" class="ic"><path d="M4 18l5-5 4 3 7-8"/><path d="M16 8h4v4"/></svg></button>
-      <button class="rail__item" data-label="我的" title="我的"><svg viewBox="0 0 24 24" class="ic"><circle cx="12" cy="8" r="4"/><path d="M4 20a8 8 0 0 1 16 0"/></svg></button>
+      <button class="rail__item" data-view="me" data-label="我的" title="我的"><svg viewBox="0 0 24 24" class="ic"><circle cx="12" cy="8" r="4"/><path d="M4 20a8 8 0 0 1 16 0"/></svg></button>
       <div class="rail__spacer"></div>
       <button class="rail__avatar" title="个人中心"></button>
     </nav>
@@ -2377,6 +2532,9 @@ html, body {
                 <button data-ao-tab="cal">收益日历</button>
                 <!-- 统计：品类/币种分布（原先常驻在走势图上方，用户 要求收进 tab） -->
                 <button data-ao-tab="stat" title="品类 / 币种分布">统计</button>
+                <!-- 其它：房产估值曲线 + 成交记录（2026-10-13 用户定稿：「在总资产图表统计右边加一个
+                   tab 叫其它，把房产数据放进去，做个资产走势那样的曲线，只要曲线，不要 1月/3月」） -->
+                <button data-ao-tab="other" title="房产估值走势（瑞源水岸）">其它</button>
 </div>
             <div class="ao-stats" id="aoStats">
               <!-- 累计收益 · CNY：**只在「资产走势」显示**（用户 ）。
@@ -2437,6 +2595,36 @@ html, body {
                   <span id="aoDistMoreTxt">展开全部</span>
                   <svg viewBox="0 0 24 24" class="ic"><path d="M6 9l6 6 6-6"/></svg>
                 </button>
+              </div>
+            </div>
+
+            <!-- 「其它」tab：房产估值曲线（房天下成交记录 → 阶梯线）+ 成交记录列表（两栏、可翻页）。
+ 数据源 = fund_holdings.json 的 _property（fund_holdings.py 每日抓取，2026-10-13 从 asset 仓库迁入）。
+ 用户定稿：只要曲线，不要 1月/3月 范围按钮 —— 故本 tab 不渲染 #aoRanges（applyMode 统一隐藏）。 -->
+
+            <div class="ao-other" id="aoOther" hidden>
+              <div class="ao-other__head">
+                <h4 id="aoPropName">房产估值走势</h4>
+                <div class="ao-other__stat">
+                  <span>最新估值 · CNY</span>
+                  <b class="num" id="aoPropVal">--</b>
+                </div>
+              </div>
+              <div class="ao-other__chart"><canvas id="aoPropChart"></canvas></div>
+              <div class="ao-other__list">
+                <div class="ao-other__lhead">
+                  <span id="aoPropCount">成交记录</span>
+                  <div class="ao-other__pager">
+                    <button id="aoPropPrev" title="上一页" type="button">
+                      <svg viewBox="0 0 24 24" class="ic"><path d="M15 6l-6 6 6 6"/></svg>
+                    </button>
+                    <b id="aoPropPage">1 / 1</b>
+                    <button id="aoPropNext" title="下一页" type="button">
+                      <svg viewBox="0 0 24 24" class="ic"><path d="M9 6l6 6-6 6"/></svg>
+                    </button>
+                  </div>
+                </div>
+                <div class="ao-other__grid" id="aoPropGrid"></div>
               </div>
             </div>
 
@@ -2965,10 +3153,105 @@ html, body {
       </div>
     </section>
 
+    <!-- ================= 我的（复刻富途个人中心 · 2026-10-13） =================
+     布局照富途「我的」：头像区 → 会员黑卡 → 6 宫格快捷入口 → 4 组菜单。
+     菜单行/快捷入口暂为**纯视觉复刻**（未接功能）——要哪行跳哪告诉我就行。
+     头像暂无图片资源：用首字母渐变圆占位，换真实头像把 .me-profile__avatar
+     里的 "T" 换成 <img src="..."> 即可。牛牛号/昵称取自用户富途账号。 -->
+    <section class="me-view" id="meView" hidden>
+      <div class="me-page">
+        <div class="me-profile">
+          <div class="me-profile__avatar">T</div>
+          <div class="me-profile__name">TaliyahN</div>
+          <div class="me-profile__id">牛牛号：26754072</div>
+        </div>
+
+        <div class="me-vip">
+          <div class="me-vip__badge">V</div>
+          <div class="me-vip__text">解锁会员享更多权益</div>
+          <button class="me-vip__btn" type="button">去解锁</button>
+        </div>
+
+        <div class="me-quick">
+          <button class="me-quick__item" type="button">
+            <span class="me-quick__icon me-quick__icon--shop"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8h14l-1 12H6L5 8z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/></svg></span>
+            <span class="me-quick__label">行情商城</span>
+          </button>
+          <button class="me-quick__item" type="button">
+            <span class="me-quick__icon me-quick__icon--gift"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="10" rx="1.5"/><path d="M4 14h16M12 10v10"/><path d="M12 10c-2.5 0-4.5-1-4.5-2.8S8.5 5 9.8 6.2 12 10 12 10zm0 0c2.5 0 4.5-1 4.5-2.8s-1-2.2-2.3-1S12 10 12 10z"/></svg></span>
+            <span class="me-quick__label">我的奖励</span>
+          </button>
+          <button class="me-quick__item" type="button">
+            <span class="me-quick__icon me-quick__icon--coupon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16v3a2 2 0 0 0 0 4v3H4v-3a2 2 0 0 0 0-4V7z"/><path d="M13 7v2M13 11v2M13 15v2" stroke-dasharray="2 2"/></svg></span>
+            <span class="me-quick__label">我的卡券</span>
+          </button>
+          <button class="me-quick__item" type="button">
+            <span class="me-quick__icon me-quick__icon--star"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5l2.6 5.4 5.9.8-4.3 4.1 1.1 5.8L12 16.9l-5.3 2.7 1.1-5.8L3.5 9.7l5.9-.8L12 3.5z"/></svg></span>
+            <span class="me-quick__label">收藏</span>
+          </button>
+          <button class="me-quick__item" type="button">
+            <span class="me-quick__icon me-quick__icon--bell"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 20a2 2 0 0 0 4 0"/></svg></span>
+            <span class="me-quick__label">我的提醒</span>
+          </button>
+          <button class="me-quick__item" type="button">
+            <span class="me-quick__icon me-quick__icon--clock"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg></span>
+            <span class="me-quick__label">足迹</span>
+          </button>
+        </div>
+
+        <div class="me-menu">
+          <button class="me-menu__row" type="button">
+            <span class="me-menu__icon" style="color:#12b886"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V2.5h6V4"/><path d="M9 10h6M9 14h4"/></svg></span>
+            <span class="me-menu__label">任务中心</span>
+            <span class="me-menu__arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></span>
+          </button>
+          <button class="me-menu__row" type="button">
+            <span class="me-menu__icon" style="color:#f5a623"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M8.5 9.5L12 13l3.5-3.5M12 13v4M9.5 15.5h5"/></svg></span>
+            <span class="me-menu__label">积分商城</span>
+            <span class="me-menu__arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></span>
+          </button>
+          <button class="me-menu__row" type="button">
+            <span class="me-menu__icon" style="color:#ff4d4f"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3c3 4 5.5 6 5.5 9.5a5.5 5.5 0 1 1-11 0C6.5 9 9 7 12 3z"/><path d="M12 18a2.5 2.5 0 0 1-2.5-2.5c0-1.5 1-2.5 2.5-4 1.5 1.5 2.5 2.5 2.5 4A2.5 2.5 0 0 1 12 18z"/></svg></span>
+            <span class="me-menu__label">活动中心</span>
+            <span class="me-menu__arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></span>
+          </button>
+        </div>
+
+        <div class="me-menu">
+          <button class="me-menu__row" type="button">
+            <span class="me-menu__icon" style="color:#4c8dff"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 13v-1a8 8 0 0 1 16 0v1"/><rect x="3" y="13" width="4" height="6" rx="1.8"/><rect x="17" y="13" width="4" height="6" rx="1.8"/><path d="M19 19a4 4 0 0 1-4 3h-2"/></svg></span>
+            <span class="me-menu__label">帮助与客服</span>
+            <span class="me-menu__arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></span>
+          </button>
+          <button class="me-menu__row" type="button">
+            <span class="me-menu__icon" style="color:#4c8dff"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7.5 3v5.5c0 4.5-3 7.8-7.5 9.5-4.5-1.7-7.5-5-7.5-9.5V6L12 3z"/><path d="M9.5 12l2 2 3.5-4"/></svg></span>
+            <span class="me-menu__label">反诈作专区</span>
+            <span class="me-menu__arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></span>
+          </button>
+        </div>
+
+        <div class="me-menu">
+          <button class="me-menu__row" type="button">
+            <span class="me-menu__icon" style="color:#4c8dff"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h9l5 5v11H5V4z"/><path d="M14 4v5h5"/><path d="M9 12h6M9 15h4"/></svg></span>
+            <span class="me-menu__label">功能建议</span>
+            <span class="me-menu__arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></span>
+          </button>
+        </div>
+
+        <div class="me-menu">
+          <button class="me-menu__row" type="button">
+            <span class="me-menu__icon" style="color:#8c96a8"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.2 5.2l1.6 1.6M17.2 17.2l1.6 1.6M18.8 5.2l-1.6 1.6M6.8 17.2l-1.6 1.6"/></svg></span>
+            <span class="me-menu__label">设置</span>
+            <span class="me-menu__arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></span>
+          </button>
+        </div>
+      </div>
+    </section>
+
 <!-- 全屏走势图（#aoFs）已整体删除（用户 ）：#aoFsBtn 被 CSS 全尺寸隐藏后浮层
  就没有任何入口，逻辑（app.js）/样式（styles.css）/本段 HTML 一并移除。别再恢复。 -->
 </div>
 </div>
-<script defer src="app.js?v=20261011w"></script>
+<script defer src="app.js?v=20261013d"></script>
 </body>
 </html>

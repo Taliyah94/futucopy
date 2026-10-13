@@ -14,6 +14,21 @@
 (function () {
   'use strict';
 
+  /* -------------------------------------------------------------------
+     静态 JSON 的缓存策略（P0 · 2026-10-13 定稿）
+     -------------------------------------------------------------------
+     GitHub Pages 对 *.json 返回 ETag + Cache-Control: max-age=600。
+     正常访问**直接 fetch**（浏览器默认缓存）：内容没变时发条件请求、
+     服务端回 304（只传几百字节头）；内容变了才下载新 body。
+     这些文件由 GitHub Actions 每日提交，之前 `cache:'no-store'` /
+     `?t=Date.now()` 绕开缓存 → 每次访问全量重下 ~175KB（gzip 后），
+     实测刷新页面的主要耗时就在这。需要强制拉新（调试 / workflow 刚
+     更新想立即看）：URL 加 `?cb=1`，或本地 localhost / 127.0.0.1
+     访问（自动生效，保不「json 更新了本地看不到」）。 */
+  const JSON_NOCACHE = /(?:^|[?&])(?:cb|nocache|debug)=1/.test(location.search)
+    || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+  const jsonUrl = (f) => (JSON_NOCACHE ? f + '?_t=' + Date.now() : f);
+
   /* ===================================================================
  1. 数据层（占位）
  =================================================================== */
@@ -68,7 +83,11 @@
       { code: '10Ymain', name: '10年国债收益率期货',  market: '债',    cat: 'bond', price: null, pct: null, extPrice: null, extPct: null, ustCode: 'ust10y' },
       { code: 'CLmain',  name: 'WTI原油期货主连',     market: 'NYMEX', cat: 'fut',  price: null, pct: null, extPrice: null, extPct: null, instId: 'CL-USDT-SWAP',   live: true },
       { code: 'TQQQ',    name: '三倍做多纳指ETF',     market: 'US',    cat: 'us',   price: null, pct: null, extPrice: null, extPct: null, instId: 'TQQQ-USDT-SWAP', live: true },
-      { code: 'NQmain',  name: '纳斯达克100指数期货', market: 'CME',   cat: 'fut',  price: null, pct: null, extPrice: null, extPct: null, instId: 'US100-USDT-SWAP', live: true },
+      /* 用户 2026-10-13：「把纳斯达克100期货换成 QQQ」—— 原 NQmain（US100-USDT-SWAP）
+ 与 TQQQ 高度同源（都是纳指100暴露，一个 3 倍一个 1 倍），换成 1 倍的 QQQ 后
+ 自选里「纳指」就有了基准 + 杠杆两个刻度。QQQ 是**美股 ETF**，所以 cat 归 'us'、
+ market 用 'US'（与 TQQQ/ORCL 等同），按美股口径切盘前/盘中/盘后/夜盘、默认分时。 */
+      { code: 'QQQ',     name: '纳指100ETF',          market: 'US',    cat: 'us',   price: null, pct: null, extPrice: null, extPct: null, instId: 'QQQ-USDT-SWAP',  live: true },
       { code: 'ORCL',    name: '甲骨文',             market: 'US',    cat: 'us',   price: null, pct: null, extPrice: null, extPct: null, instId: 'ORCL-USDT-SWAP', live: true },
       { code: 'NVDA',    name: '英伟达',             market: 'US',    cat: 'us',   price: null, pct: null, extPrice: null, extPct: null, instId: 'NVDA-USDT-SWAP', live: true },
       { code: 'MSFT',    name: '微软',               market: 'US',    cat: 'us',   price: null, pct: null, extPrice: null, extPct: null, instId: 'MSFT-USDT-SWAP', live: true },
@@ -1175,7 +1194,7 @@ const TICKER_TTL = 15000;
   async function loadFxSeries() {
     if (fxCache.rows && Date.now() - fxCache.at < FX_CACHE_MS) return fxCache.rows;
     const r = await Promise.race([
-      fetch(FX_JSON + '?t=' + Date.now()),          // 绕开浏览器对 JSON 的强缓存
+      fetch(jsonUrl(FX_JSON)),                     // 正常走 HTTP 缓存(304)；?cb=1/本地才强制拉新
       new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 10000)),
     ]);
     if (!r.ok) throw new Error('fund_holdings.json http ' + r.status);
@@ -1673,18 +1692,23 @@ const TICKER_TTL = 15000;
  - 残余仓位按 QQQ 推算（同样走 1m，无则当日固定）。
  全部序列取不到时 computeFundAt 退化成 estimateFund 的当日值，不报错、不卡。 */
     const fundObjs = fundObjsPre;
-    let fundModels = [];          // ⚠️ let：下面 fundObjs.map 的结果会整体重新赋值（const 会抛 Assignment to constant）
+    const fundModels = [];        // 有估值模型的基金（逐点算）；est 为空的走 fundConst 常数项
     let fundFlat = [];
+    /* 没进模型的基金（est 为空：navDate 缺失 / 账户页未跑完）→ 市值不能凭空消失：
+    按**常数项**补回每个点（与现金同类）。⚠️ 只在**有模型**时才记 —— 全都没模型时
+    computeFundAt 退返回 p.fund（已是全部基金合计），再加就重复计数。 */
+    let fundConst = 0;
     if (fundObjs.length) {
       /* candleMap 已在上面**串行**取回（与正股腿共用 OKX 限频桶，绝不能并发），
- 这里直接复用，不再拉第二遍（原来这两段会重复请求同一批 K 线）。 */
+      这里直接复用，不再拉第二遍（原来这两段会重复请求同一批 K 线）。 */
       const candleMap = fundCandleMap || {};
       const txUs = TRADE_POS.txUs || {};   // 账户闭包发布的 Alpaca 基准价表（活引用）
-      fundModels = fundObjs.map((f) => {
+      let droppedFund = 0;
+      fundObjs.forEach((f) => {
         /* estimateFund 定义在账户闭包 → 经 TRADE_POS 发布后才够得着（见其发布处注释）。
- 还没发布（账户页未跑完）时 est 为空 → 该基金退回「当日常数」，曲线照画。 */
+        还没发布（账户页未跑完）时 est 为空 → 该基金退回「当日常数」，曲线照画。 */
         const est = (typeof TRADE_POS.estimateFund === 'function') ? TRADE_POS.estimateFund(f, f.navDate) : null;
-        if (!est) return null;
+        if (!est) { droppedFund += (f.estAmount != null ? f.estAmount : f.amount) || 0; return; }
         const parts = (est.parts || []).map((p) => {
           const base = (p.m === 'us' && txUs[p.code] && txUs[p.code].base > 0) ? txUs[p.code].base : null;
           const series = (p.m === 'us' && candleMap[p.code] && candleMap[p.code].length) ? candleMap[p.code] : null;
@@ -1696,8 +1720,9 @@ const TICKER_TTL = 15000;
           dailyCn: ((1 + (est.qqq || 0)) * (1 + (est.fxUsd || 0)) - 1),
           qqqSeries: (candleMap.QQQ && candleMap.QQQ.length) ? candleMap.QQQ : null, _price: null,
         } : null;
-        return { shares: f.shares, navL: f.navL, parts, residual, idleTerm: (est.idleW / 100) * (est.fxUsd || 0) };
-      }).filter(Boolean);
+        fundModels.push({ shares: f.shares, navL: f.navL, parts, residual, idleTerm: (est.idleW / 100) * (est.fxUsd || 0) });
+      });
+      fundConst = fundModels.length ? droppedFund : 0;
       fundFlat = [];
       fundModels.forEach((m) => {
         m.parts.forEach((p) => { if (p.series) fundFlat.push({ p, series: p.series }); });
@@ -1859,7 +1884,7 @@ const TICKER_TTL = 15000;
         ts, equityUsd, fund: __fund, legs: __legP,
         parts: fundFlat.map((fz) => (fz.p ? fz.p._price : fz.r._price)),
       });
-      out.push({ ts, price: equityUsd * target + __fund + cash });
+      out.push({ ts, price: equityUsd * target + __fund + fundConst + cash });
     }
     /* 基准 = **账户资产**（用户 ：「推算总资产曲线涨跌幅基准应该是账户资产 1052275 吧，
  +1.1% 左右」）。也就是持仓页汇总框第一行那个数（IBKR 账面口径：证券权益 + 基金 + 现金），
@@ -1880,10 +1905,16 @@ const TICKER_TTL = 15000;
 
     return {
       base,
-      /* 曲线里「基金段」用的市值（= 末点那份 computeFundAt()）。汇总框每次刷新都会重算基金估值
- （首屏先按官方净值、行情到位后再补算涨跌），这条腿是**常数项**，若曲线在估值升级前算完
- 就整条偏低一截 → 由 syncAssetFund() 按差额整体抬降，不必等下一个 60s 重建窗口。 */
-      fund: fundAtLast,
+      /* 曲线里「基金段」用的市值（= 末点那份 computeFundAt()）。
+     ⚠️ 基金段是**逐点现值**（每个 ts 调一次 computeFundAt：该分钟成分股价格 × 当日净值），
+     不是常数 —— 成分股分钟价不可变，所以每个点的基金段也是定值，刷新不变。
+     fundComplete = 建成时基金模型是否就绪：false = 退化路径（fundModels 为空，
+     每个点共用同一个实时估值常数），仅此情况允许 syncAssetFund 整体抬降兜底；
+     true = 逐点真值，**一律不再抬降**（用户 2026-10-13：「预测总资产曲线历史最高点的数
+     还是每次刷新都跳……每个成分股该时间的价格都是定值，加起来肯定是定值」——
+     旧实现把汇总实时估值整体加进每个点，历史点全被背上「当前」基金值 → 高点金额每次刷新都跳）。 */
+      fund: fundAtLast + fundConst,
+      fundComplete: fundModels.length > 0,
       pts: out.map((d) => ({
         t: etHHMM(d.ts),
         day: etMD(d.ts),        // 'MM/DD'：1D 窗口跨日界时要靠它画竖线（见 drawAssetChart）
@@ -2214,18 +2245,24 @@ const TICKER_TTL = 15000;
     for (const d of assetChartData.pts) d.pct = (d.v / nb - 1) * 100;
   }
 
-  /* 基金段整体抬降（ 新增，与上面 syncAssetBase 同一族问题）。
- 曲线口径 = Σ(股数×分钟价)×汇率 + **基金段** + 现金，其中基金段由 computeFundAt() 现算、
- 在一天内是「只抬高度、不改形状」的常数项；而汇总框那股基金估值是**分梯队升级**的
- （首屏先按官方净值算 ≈ 0 涨幅，行情到位后再补算涨跌，实测差 ~1.1 万）。
- 于是「曲线先算完、估值后升级」时，整条曲线会偏低一截，且要干等下一个 60s 重建窗口。
- 修法：曲线自己记住算它时用的基金值（assetChartData.fund），和当轮 `parts.fund`（= 汇总框
- 同款口径，由 renderTradeSum 同步写入）比一次，差额**整体加到每个点**上。
- ⚠️ 必须整条抬（不能只改末点），否则会变成「一条平的曲线 + 末端一根跳柱」。
- ⚠️ 差额在 1 元以内不动，避免每轮行情刷新都重画整条线（那是纯抖动）。 */
+  /* 基金段兜底抬降（与 syncAssetBase 同一族问题，但**只服务于退化路径**）。
+  曲线口径 = Σ(股数×分钟价)×汇率 + **基金段** + 现金。两种建成情况：
+  ① 基金模型就绪（assetChartData.fundComplete = true）：基金段由 computeFundAt(ts)
+     **逐点现算**（该分钟成分股价格 × 当日净值），成分股分钟价不可变 → 每个点本来就是
+     定值。此时**什么都不做** —— 旧实现把汇总框实时估值 parts.fund 与曲线基金段的差额
+     整体加到每个点上，而 parts.fund 每 15s 随行情变 → 全部历史点被背上「当前这一刻」
+     的基金值，整条曲线每 15s 平移一次，历史最高点金额每次刷新都跳（用户 2026-10-13）。
+     曲线要更新只认 60s 重建窗口（用不可变 K 线重算，逐点定值）。
+  ② 基金模型未就绪（false，退化路径：fundModels 为空 → 每个点共用同一个实时估值常数）：
+     保留差额整体抬降，避免首屏「曲线偏低一截」干等 60s；下一个重建窗口用真数据重算后
+     自动进入情况 ①。
+  ⚠️ 必须整条抬（不能只改末点），否则会变成「一条平的曲线 + 末端一根跳柱」。
+  ⚠️ 差额在 1 元以内不动，避免每轮行情刷新都重画整条线（那是纯抖动）。 */
   function syncAssetFund() {
     const p = TRADE_POS.parts;
     if (!assetChartData || !assetChartData.pts || !assetChartData.pts.length) return;
+    /* 情况 ①：基金段已是逐点真值 → 历史点保持定值，禁止再用实时估值平移（见上方注释）。 */
+    if (assetChartData.fundComplete) return;
     if (!(assetChartData.fund > 0) || !p || !(p.fund > 0)) return;
     const d = p.fund - assetChartData.fund;
     if (!isFinite(d) || Math.abs(d) < 1) return;
@@ -2846,7 +2883,8 @@ const TICKER_TTL = 15000;
                       map3: AO_BENCH.keys.slice(-3).map((k) => AO_BENCH.map[k]), live: AO_BENCH.live }),
       /* 分时图：暴露出来才能在**任意时刻**复现「某条腿拿不到 K 线」的半截数据场景
  （真实情况只在 OKX 限频时偶发），验证曲线是「沿用旧的」而不是「画断崖」。 */
-      chart: { refresh: refreshAssetChart, series: assetSeries, data: () => assetChartData },
+      chart: { refresh: refreshAssetChart, series: assetSeries, data: () => assetChartData,
+               sync: () => syncAssetChartState() },
       /* 收益日历 / 侧栏 TWR（）：分段收益率不对时用来看 calIndex 内部状态。 */
       cal: () => {
         try {
@@ -3905,7 +3943,7 @@ const TICKER_TTL = 15000;
  all_stocks.json）→ **优先读该文件**；读不到/为空再走下方浏览器端实时合并兜底
  （规则与 py 逐条一致：代码去重、市值取大、名称 SP500 优先、含中文名英文大写）。 */
     try {
-      const ra = await fetch('all_stocks.json', { cache: 'no-store' });
+      const ra = await fetch(jsonUrl('all_stocks.json'));
       if (ra.ok) {
         const aj = await ra.json();
         const rows0 = Array.isArray(aj && aj.rows) ? aj.rows : [];
@@ -3914,6 +3952,12 @@ const TICKER_TTL = 15000;
             c: String(x.c || '').trim(),
             n: idxNameUpper(String(x.n == null ? '' : x.n).trim()),
             ind: (x.ind == null || x.ind === '') ? null : String(x.ind).trim(),
+            /* FMP 画像（fetch_fmp_profiles.py 每日补、fund_holdings.py 合并时写进 rows）：
+             fi = 细行业（Semiconductors / Drug Manufacturers - General…）——「板块」热力图
+             的分组键（用户 2026-10-13：「用全部个股的 JSON 取市值前 100 画热力图」）；
+             fs = FMP 部门（粗一级）。表格不展示，仅热力图用。 */
+            fi: (x.fmpIndustry == null || x.fmpIndustry === '') ? null : String(x.fmpIndustry).trim(),
+            fs: (x.fmpSector == null || x.fmpSector === '') ? null : String(x.fmpSector).trim(),
             w: null,
             mc: (x.mc != null && isFinite(x.mc)) ? x.mc : null,
             p: (x.p != null && isFinite(x.p)) ? x.p : null,
@@ -3925,7 +3969,7 @@ const TICKER_TTL = 15000;
         }
       }
     } catch (_) { /* all_stocks.json 不可用 → 走下方 fund_holdings.json 实时合并 */ }
-    const r = await fetch(FX_JSON, { cache: 'no-store' });
+    const r = await fetch(jsonUrl(FX_JSON));
     if (!r.ok) throw new Error('fund_holdings.json 不可达（http ' + r.status + '）');
     const fj = await r.json();
     const sp = Array.isArray(fj.sp500) ? parseIndexRows(fj.sp500) : [];
@@ -3967,6 +4011,19 @@ const TICKER_TTL = 15000;
       v.row.n = idxNameUpper(v.row.n);
       return v.row;
     }).sort((a, b) => ((b.mc != null ? b.mc : -1) - (a.mc != null ? a.mc : -1)));
+    /* FMP 行业兜底：all_stocks.json 缺失时，独立文件 fmp_profiles.json（fetch_fmp_profiles.py
+     每日跑）仍按代码给出 fmpSector/fmpIndustry → 补到行上，「板块」热力图才有细行业可分组；
+     补不到就退回指数行业 ind（renderSectors 里 grp = fi || ind || '其他'）。 */
+    try {
+      const rf = await fetch(jsonUrl('fmp_profiles.json'));
+      if (rf.ok) {
+        const fp = await rf.json();
+        for (const r of rows) {
+          const pf = fp && fp[String(r.c || '').toUpperCase()];
+          if (pf && pf.fmpIndustry) { r.fi = String(pf.fmpIndustry).trim(); r.fs = pf.fmpSector || null; }
+        }
+      }
+    } catch (_) { /* 无 FMP 画像 → 热力图分组退回指数行业 ind */ }
     const asOf = [fj.sp500_asof, fj.nasdaq100_asof].filter(Boolean).sort().pop() || '';
     /* ⚠️ 谷歌双股权特例（与板块热力图一致）：GOOGL/GOOG 只留市值最大的一只。 */
     return { rows: dedupGoogleShareClass(rows), asOf, source: 'fund_holdings.json（每日快照）', nSp: sp.length, nNd: nd.length };
@@ -4031,10 +4088,18 @@ const TICKER_TTL = 15000;
  换成 560×1000（面积不变，只是竖过来）→ 高约 768px，配合页面滚动看得很清楚。
  ⚠️ 容器 CSS 必须同步（.ust-heat--portrait 的 aspect-ratio），否则百分比坐标会被拉伸变形。 */
     const narrowNow = (typeof window !== 'undefined') && window.innerWidth < 720;
-    const W = narrowNow ? 560 : 1000, H = narrowNow ? 1000 : 560;
+    /* 桌面端长宽比**由 fitUstHeat 按容器实测注入**（opts.W/H，默认 1000×560）：
+ 用户 2026-10-13「桌面端左右还夹着一块白边」—— 容器宽高比 ≠ 1000/560 时，固定比例
+ 要么左右留白、要么撑出滚动条，所以画布比例跟着容器走，树图用新 W/H 重算，
+ 百分比坐标跟着新画布走 → 零失真，只是整体铺满。
+ 手机竖版（narrowNow）仍固定 560×1000 + 页面滚动，不走这套。 */
+    const W = (opts && opts.W) || (narrowNow ? 560 : 1000);
+    const H = (opts && opts.H) || (narrowNow ? 1000 : 560);
     const map = new Map();
     for (const x of rows) {
-      const cat = majorCat(x.ind, x.n);
+      /* 分组键：renderSectors 传 FMP 细行业（x.grp，见该函数内 grp = fi || ind || '其他'）；
+       无 grp 的老调用退回 majorCat 大类归集。 */
+      const cat = x.grp || majorCat(x.ind, x.n);
       if (!map.has(cat)) map.set(cat, []);
       map.get(cat).push(x);
     }
@@ -4106,8 +4171,19 @@ const TICKER_TTL = 15000;
         + ';top:' + (ly / H * 100).toFixed(3) + '%;width:' + (cr.w / W * 100).toFixed(3)
         + '%;height:' + (cr.h / H * 100).toFixed(3) + '%"><span>' + cpEsc(labTxt) + '</span></div>');
     }
+    /* 行业黑框（用户 2026-10-13：「热力图不同行业应该用个黑框隔起来，现在分不清」）：
+两级树图里同行业的格子彼此紧贴、行业之间原本只靠底色渐变区分 → 给每个行业矩形描一圈
+近黑边框，行业边界一眼可辨。⚠️ 两个细节：
+① box-sizing:border-box → 框画在矩形**内部**，不抢占格子面积、不改变树图布局；
+② 必须整批放到 cells 末尾（所有格子之后）→ 框盖在格子接缝上，线条连续不断；
+   若穿插在各类别的格子之间，后放的格子会盖掉先放的框。 */
+    for (const c of cats) {
+      cells.push('<div class="ust-heat__frame" style="left:' + (c.rect.x / W * 100).toFixed(3)
+        + '%;top:' + (c.rect.y / H * 100).toFixed(3) + '%;width:' + (c.rect.w / W * 100).toFixed(3)
+        + '%;height:' + (c.rect.h / H * 100).toFixed(3) + '%"></div>');
+    }
     /* 窄屏：图内标签已跳过 → 图下方给一行行业清单（行业名 + 市值加权 1 年回报），
- 信息不丢、字也读得清。 */
+    信息不丢、字也读得清。 */
     const catList = narrow
       ? '<div class="ust-heat__catlist">' + cats.map((c) => {
         const wt = c.wpct == null ? '' : (' ' + (c.wpct > 0 ? '+' : '') + c.wpct.toFixed(1) + '%');
@@ -4132,71 +4208,115 @@ const TICKER_TTL = 15000;
     return rows.filter((r) => r !== drop);
   }
 
-  /* 板块（行业）热力图 —— 用户定稿：**改用 fund_holdings.json，不再拉东财**。
- 数据源只能是 **Nasdaq 100 快照**：两份快照里**只有纳指带 industry 字段**
- （SP500 快照无行业，实测 industry 取值：Technology 47 / Consumer Discretionary 14 /
- Industrials 13 / Health Care 10 / Consumer Staples 6 / Telecommunications 4 /
- Utilities 4 / Energy 2 / Basic Materials 1 —— 101 只全都有行业，无缺失）。
- 着色口径 = **1 年回报**（快照没有当日涨跌幅；东财那套已停用）→ heatColor cap=50。
- 面积 ∝ 市值（快照自带 marketCap，101 只全有值）。 */
+  /* 板块（行业）热力图 —— 2026-10-13 用户定稿：「用那个全部个股的 JSON，取市值前 100 名
+  画热力图（谷歌算一个），只分大行业就行」。
+  · 数据源 = **all_stocks.json**（S&P 500 + Nasdaq 100 合并去重，518 只）→ 取市值前 100；
+  · 分组 = **FMP 大行业 fmpSector**（11 类，实测市值占比：Technology 46% /
+    Communication Services 12% / Financial Services 10% / Consumer Cyclical 9% /
+    Healthcare 8% / Industrials 7% / Consumer Defensive 5% / Energy 2% /
+    Real Estate 0.5% / Basic Materials 0.4% / Utilities 0.3%）；
+  · 谷歌双股权 GOOGL/GOOG 由 loadAllStocks 内的 dedupGoogleShareClass 去重 → 只算一只；
+  · 行业之间描**黑框**分隔（renderUsTopHeatmap 末尾整批 push 的 .ust-heat__frame）。
+  着色口径 = **1 年回报**（快照没有当日涨跌幅）→ heatColor cap=50；面积 ∝ 市值。 */
   async function renderSectors() {
     const host = $('#screenBody');
     if (!host) return;
     host.hidden = false;
     const seq = ++screenRenderSeq;
-    host.innerHTML = '<div class="screen-empty">正在读取板块数据（Nasdaq 100 行业）…</div>';
+    host.innerHTML = '<div class="screen-empty">正在读取板块数据（全部个股 · 市值前 100）…</div>';
     let data;
     try {
-      data = await loadIndexConstituents('nasdaq-100');
+      /* ⚠️ 2026-10-13 用户定稿：「用那个全部个股的 JSON，取市值前 100 名画热力图（谷歌算一个），
+       只分大行业就行」—— 数据源从 Nasdaq 100 快照（101 只）换成 all_stocks.json 的
+       **全市场合并表**（518 只），取市值前 100；分组只到 FMP 大行业（fs）。 */
+      data = await loadAllStocks();
     } catch (e) {
       if (seq !== screenRenderSeq) return;
       host.innerHTML = '<div class="screen-empty">板块数据读取失败：' + cpEsc(String(e.message || e))
-        + '<br>（数据源 = fund_holdings.json 的 <code>nasdaq100</code> 每日快照）</div>';
+        + '<br>（数据源 = <code>all_stocks.json</code> 每日抓取时聚合，兜底 <code>fund_holdings.json</code> 快照）</div>';
       return;
     }
     if (seq !== screenRenderSeq) return;
-    /* ret 是小数（0.2548 = +25.48%）→ 乘 100 交给热力图；无市值/无回报的行直接剔除
- （面积为 0 或着色灰都会让图失真，宁缺勿错）。 */
-    const rowsRaw = (data.rows || [])
-      .map((x) => ({ c: x.c, n: x.n, ind: x.ind, mc: x.mc, pct: (x.ret == null ? null : x.ret * 100) }))
-      .filter((x) => x.mc > 0);
-    /* ⚠️ 谷歌双股权特例：GOOGL / GOOG 只算市值最大的一只，避免热力图把谷歌双算（仅谷歌）。 */
-    const rows = dedupGoogleShareClass(rowsRaw);
+    /* ret 是小数（0.2548 = +25.48%）→ 乘 100 交给热力图；无市值的行直接剔除
+    （面积为 0 会让树图失真，宁缺勿错）。**取市值前 100**（用户定稿）；
+    谷歌已在 loadAllStocks 里去重（GOOGL/GOOG 只留市值大的一只）→ 只算一个。 */
+    const rows = (data.rows || [])
+      .filter((x) => x.mc > 0)
+      .sort((a, b) => (b.mc || 0) - (a.mc || 0))
+      .slice(0, 100)
+      .map((x) => ({
+        c: x.c, n: x.n,
+        /* 分组键 = FMP 大行业（fs）；缺 FMP 画像的老数据退回 majorCat 中文大类 */
+        grp: x.fs || majorCat(x.ind, x.n),
+        ind: x.ind, mc: x.mc, pct: (x.ret == null ? null : x.ret * 100),
+      }));
     const asOf = data.asOf ? String(data.asOf).slice(0, 10) : '';
-    const nInd = new Set(rows.map((x) => x.ind).filter(Boolean)).size;
+    const nGrp = new Set(rows.map((x) => x.grp).filter(Boolean)).size;
     const bar = '<div class="screen-bar">'
       + '<b>板块热力图</b>'
-      + '<span>Nasdaq 100 · ' + nInd + ' 个行业 · 面积 ∝ 市值 · 共 ' + rows.length + ' 只</span>'
+      + '<span>全部个股 · 市值前 ' + rows.length + ' · ' + nGrp + ' 个大行业 · 面积 ∝ 市值</span>'
       + '<span>着色 = 1 年回报（±50% 饱和）</span>'
       + (asOf ? '<span>数据日期 ' + cpEsc(asOf) + '</span>' : '')
-      + '<span class="screen-bar__src">来源：' + cpEsc(data.source || 'fund_holdings.json（每日快照）') + '</span></div>';
+      + '<span class="screen-bar__src">来源：' + cpEsc(data.source || 'all_stocks.json（每日抓取时聚合）') + '</span></div>';
+    const hmOpts = { cap: 50, note: '按 1 年回报着色' };
+    /* 记住本次渲染参数：fitUstHeat 适配容器长宽比时要按同样的 rows/opts 重画
+ （只改虚拟画布 W/H，数据 / 配色 / 图例文案都不变）。 */
+    ustHeatLast = { rows, opts: hmOpts };
     host.innerHTML = bar + '<div class="ust-heat__fit">'
-      + renderUsTopHeatmap(rows, { cap: 50, note: '按 1 年回报着色' })
+      + renderUsTopHeatmap(rows, hmOpts)
       + '</div>';
     fitUstHeat();
     ensureUstHeatWatch();
   }
 
-  /* 桌面端热力图「一屏画完、不滚动」（用户 ）：
- .ust-heat__fit 是 flex:1 的居中容器（见 styles.css 的 @media min-width:721px），
- 这里量出它的可用高度，把 .ust-heat 宽度压到 min(容器宽, 可用高×1000/560)——
- aspect-ratio:1000/560 不动 → 百分比坐标零失真，整图缩进一屏，.screen-body 不出滚动条。
+  /* 最近一次板块热力图渲染参数（rows + opts）—— fitUstHeat 改画布长宽比时按它重画。 */
+  let ustHeatLast = null;
+  /* 桌面端热力图「一屏画完、不滚动 + 铺满无白边」（用户 ：「热力图桌面端我不想滚动下拉，
+ 就用当前的屏幕画热力图就行」；2026-10-13 又提：「左右还夹着一块白边」）。
+ .ust-heat__fit 是 flex:1 的容器（见 styles.css 的 @media min-width:721px），
+ 这里量出它的可用宽高，让**虚拟画布的长宽比跟随容器**：W 固定 1000、H 按
+ availW/availH 反推（floor 保证实际高度 ≤ 可用高，不出滚动条），再用同样的
+ rows/opts 以新 W/H 重画树图，最后把 .ust-heat 设为 width:100% + aspect-ratio:W/H
+ → 高恰好用满、左右也顶到边，百分比坐标随新画布重算、零失真。
+ ⚠️ 旧做法是 width=min(容器宽, 可用高×1000/560)：高度为紧约束时左右各留一条白带
+ （实测 1512×900：容器 1462 宽、图仅 1286，两侧各 88px）——已废用。
+ ⚠️ 只有 H 变化 ≥1 才重画：RO 每次回调都重建 DOM 会无谓抖动。
  手机竖版（innerWidth<720 / .ust-heat--portrait）不插手：清掉内联尺寸，回归自然流+页面滚动。 */
   function fitUstHeat() {
     const wrap = document.querySelector('#screenBody .ust-heat__fit');
-    const heat = wrap && wrap.querySelector('.ust-heat');
+    if (!wrap) return;
+    const heat = wrap.querySelector('.ust-heat');
     if (!heat) return;
     if (window.innerWidth < 720 || heat.classList.contains('ust-heat--portrait')) {
-      heat.style.width = ''; heat.style.maxHeight = '';
+      heat.style.width = ''; heat.style.maxHeight = ''; heat.style.aspectRatio = '';
       return;
     }
     const legend = wrap.querySelector('.ust-heat__legend');
     /* −14 = 热力图自身 margin-top:10px + 4px 呼吸余量；图例高度实测（可能换行） */
     const availH = wrap.clientHeight - (legend ? legend.offsetHeight : 0) - 14;
-    const maxW = wrap.clientWidth;
-    if (availH < 160 || maxW <= 0) { heat.style.width = ''; heat.style.maxHeight = ''; return; }
-    heat.style.width = Math.min(maxW, availH * 1000 / 560).toFixed(1) + 'px';
-    heat.style.maxHeight = Math.floor(availH) + 'px';
+    const availW = wrap.clientWidth;
+    if (availH < 160 || availW <= 0) {
+      heat.style.width = ''; heat.style.maxHeight = ''; heat.style.aspectRatio = '';
+      return;
+    }
+    const W = 1000;
+    /* floor：实际高 = availW×H/1000 ≤ availH → 绝不撑出滚动条；夹 240~1000 防极端视口把图拉成细带 */
+    const H = Math.max(240, Math.min(1000, Math.floor(1000 * availH / availW)));
+    const curH = heat.style.aspectRatio ? +(heat.style.aspectRatio.split('/')[1] || 0) : 560;
+    if (ustHeatLast && Math.abs(curH - H) >= 1) {
+      wrap.innerHTML = renderUsTopHeatmap(ustHeatLast.rows, Object.assign({}, ustHeatLast.opts, { W: W, H: H }));
+    }
+    const h2 = wrap.querySelector('.ust-heat');
+    if (!h2) return;
+    if (!ustHeatLast) {                                   // 兜底：没有记录渲染参数时退回旧的收缩做法
+      h2.style.width = Math.min(availW, availH * 1000 / 560).toFixed(1) + 'px';
+      h2.style.maxHeight = Math.floor(availH) + 'px';
+      h2.style.aspectRatio = '';
+      return;
+    }
+    h2.style.width = '100%';
+    h2.style.aspectRatio = W + '/' + H;
+    h2.style.maxHeight = '';
   }
 
   /* 容器尺寸变化 → 重新适配。ResizeObserver 观察 #screenBody（其盒子只随视口/外壳变化，
@@ -4294,7 +4414,7 @@ const TICKER_TTL = 15000;
  两级皆失败 → 「读取失败」空态（守铁律不编数字）。 */
     let j = null;
     try {
-      const r = await fetch(FX_JSON, { cache: 'no-store' });
+      const r = await fetch(jsonUrl(FX_JSON));
       if (r.ok) {
         const fj = await r.json();
         const arr = fj && fj[cfg.key];
@@ -4307,7 +4427,7 @@ const TICKER_TTL = 15000;
     } catch (_) { /* fund_holdings.json 不可用 */ }
     if (!j) {
       try {
-        const r = await fetch(cfg.file, { cache: 'no-store' });
+        const r = await fetch(jsonUrl(cfg.file));
         if (r.ok) j = await r.json();
       } catch (_) { /* 无本地文件 */ }
     }
@@ -4439,41 +4559,36 @@ const TICKER_TTL = 15000;
   // 选股器：页面加载即后台实时预拉东财（打开 tab 时大概率已在内存，仍受 EM_LIVE_TTL 约束）
   prefetchScreener();
 
-    // 支持 #account / #trade 直达（用正则取 hash，避免带上后面的查询串）
+    // 支持 #account / #trade / #screen / #comment / #market 直达（用正则取 hash，避免带上后面的查询串）
+    // ⚠️ 刷新按钮重载前会把当前视图写进 hash（见 initRefresh），这里必须接住全部视图，
+    // 否则「点刷新」后丢 tab（用户 2026-10-13：刷新要相当于 F5，F5 是不会丢 tab 的）。
     const hash = (location.hash || '').replace(/^#/, '').split('?')[0];
     if (hash === 'account') switchView('account');
     else if (hash === 'trade') switchView('trade');
+    else if (hash === 'screen') switchView('screen');
+    else if (hash === 'comment') switchView('comment');
+    else if (hash === 'market') switchView('market');
   })();
 
-  /* 顶栏刷新按钮：行情视图重拉自选+当前标的；账户视图重跑账户数据加载 */
+  /* 顶栏刷新按钮（2026-10-13 用户定稿：「改成点一下相当于 f5」）：
+  整页重载，所有数据重新拉一遍 —— 自选行情、K 线、**基金净值日**（navDate 只在
+  initAccountData 里拉，增量刷新刷不到它；以前点按钮净值日不变，用户要的是
+  「点一下全部重新来」）。
+  两个细节：
+  ① 带 `cb=1` 重载 —— Pages 给 json 设了 max-age=600，普通 F5 在 10 分钟窗口内
+     会直接吃浏览器缓存（可能拿到旧数据）；cb=1 走 jsonUrl 的强制拉新通道，
+     保证拿到 workflow 刚提交的新版（代价 ~175KB，与旧按钮每次全量重拉相同）。
+  ② 把当前视图写进 hash 再走 —— switchView 不写 hash，直接重载会丢 tab；
+     boot 处（#account/#trade 直达）会读 hash 恢复视图。 */
   (function initRefresh() {
     const btn = document.querySelector('.topbar .icon-btn[title="刷新"]');
-    const accountView = $('#accountView');
-    if (!btn || !accountView) return;
-    let accLoading = false;
+    if (!btn) return;
     btn.addEventListener('click', () => {
-      if (!accountView.hidden) {
-        if (accLoading) return;
-        accLoading = true;
-        /* ⚠️ 账户视图里走**增量刷新**（就是 15s 定时器那套 `TRADE_POS.refresh`），
- 不再整页 `initAccountData()` 重跑一遍 —— 后者要把 Asset_parsed / 基金东财脚本 /
- Alpaca 分页全拉一遍（实测 4~8s），点一下刷新就卡住半分钟，用户看到的就是
- 「点刷新之后证券半天出不来」。行情没就绪（还没加载过账户数据）时才退回全量初始化。 */
-        const inc = TRADE_POS && TRADE_POS.refresh;
-        if (typeof inc === 'function') {
-          Promise.resolve(inc()).finally(() => { accLoading = false; });
-        } else {
-          Promise.resolve(initAccountData()).finally(() => { accLoading = false; });
-        }
-      } else {
-        fetchWatchlist();
-        fetchTxWatch();
-        fetchFxWatch();
-        const sel = APP_DATA.watchlist.find((x) => x.code === APP_DATA.quote.code)
-                 || APP_DATA.watchlist.find((x) => x.live)
-                 || APP_DATA.watchlist[0];
-        if (sel) loadInstrument(sel.code);
-      }
+      const active = document.querySelector('.rail__item.is-active');
+      const u = new URL(location.href);
+      u.searchParams.set('cb', '1');
+      if (active && active.dataset.view) u.hash = active.dataset.view;
+      location.href = u.toString();
     });
   })();
 
@@ -4876,38 +4991,9 @@ const applyMode = (mode, skipDraw) => {
   document.addEventListener('visibilitychange', tryJin10OnVisible);
   window.addEventListener('focus', tryJin10OnVisible);
 
-  /* 顶栏「刷新」按钮（移动端左侧唯一保留的按钮）：
- 手动重拉一轮数据 = 自选行情 + 外汇行 + 当前标的图表/分时。
- 行为与启动序列一致，按钮转圈给出反馈。 */
-  const btnReload = document.getElementById('btnReload');
-  if (btnReload) {
-    /* 兜底超时：fetch() 本身没有超时上限，若某个源（frankfurter 外汇、
- Alpaca）在弱网/不可达时会挂住 Promise.all，按钮就一直转圈。
- 这里给整体加 8s 上限，超时也照样恢复按钮。 */
-    const withTimeout = (p, ms) => Promise.race([
-      p, new Promise((r) => setTimeout(r, ms)),
-    ]);
-
-    btnReload.addEventListener('click', async () => {
-      if (btnReload.disabled) return;
-      btnReload.disabled = true;
-      btnReload.classList.add('is-loading');       // CSS 里做旋转动画
-      try {
-        await withTimeout(Promise.all([
-          fetchWatchlist(),
-          typeof fetchTxWatch === 'function' ? fetchTxWatch() : Promise.resolve(),
-          typeof fetchFxWatch === 'function' ? fetchFxWatch() : Promise.resolve(),
-          loadInstrument((APP_DATA.quote || {}).code),   // 重画当前标的图表
-        ]), 8000);
-      } catch (e) {
-        /* 静默失败：15s 定时任务会兜底重试 */
-      } finally {
-        btnReload.disabled = false;
-        btnReload.classList.remove('is-loading');
-      }
-    });
-  }
-
+  /* 刷新按钮已改为整页重载（见上方 initRefresh：点一下 = F5 + cb=1 强制拉新），
+  此处旧的「增量刷新」handler 整块删除 —— 同一按钮绑两套行为会互相叠跑
+  （账户视图下自选被重拉两次），且增量路径刷不到基金净值日。 */
   /* 美元/离岸人民币：**只读** `fund_holdings.json` 的 `usdcnh_daily`（用户 定稿）。
  数据由 `fund_holdings.py` 每天抓 frankfurter 写进文件，前端不再直连外币接口：
  - 浏览器直连 frankfurter 会偶发 `ERR_CERT_COMMON_NAME_INVALID`（静默失败 → 行没价）；
@@ -4954,7 +5040,7 @@ const applyMode = (mode, skipDraw) => {
   async function loadUsTreasurySeries() {
     if (ustCache.rows && Date.now() - ustCache.at < UST_CACHE_MS) return ustCache.rows;
     const r = await Promise.race([
-      fetch(FX_JSON + '?t=' + Date.now()),
+      fetch(jsonUrl(FX_JSON)),
       new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 10000)),
     ]);
     if (!r.ok) throw new Error('fund_holdings.json http ' + r.status);
@@ -6689,8 +6775,8 @@ const applyMode = (mode, skipDraw) => {
     }
     async function accJson(url, opts) {
       try {
-        // 本地 JSON 会被浏览器缓存（数据文件每天由 workflow 更新），加时间戳强制取最新
-        const u = /^https?:/i.test(url) ? url : url + '?_t=' + Date.now();
+        // 本地 JSON：正常让浏览器走 HTTP 缓存（Pages ETag/304）；仅 ?cb=1/本地调试加时间戳
+        const u = /^https?:/i.test(url) ? url : jsonUrl(url);
         /* fetch() 没有内置超时，源不可达时会永远挂着（实测 frankfurter 挂 15s+），
  上游 await 会连带把整个 initAccountData 卡死 → 整页全是 `--`。
  这里统一加 8s 上限，失败返回 null 让调用方走本地兜底口径。 */
@@ -6925,22 +7011,20 @@ const applyMode = (mode, skipDraw) => {
  会把 10-01 误当成基准日，导致 QQQ 系基金涨跌恒为 0。 */
     const ymd = (s) => String(s || '').replace(/-/g, '');
 
-    /* ---- 本地数据（性能：）----
- ⚠️ 原来这里是**串行** `await asset` → `await fundH`，两个文件加起来 1.1MB，
- 串行等于把两次网络往返叠加（实测首屏被拖到 4.6s 才出数）。改为**并行**。
- ⚠️ `accJson` 默认给本地 JSON 追加 `?_t=Date.now()`（见其注释）——那是为了"每天
- workflow 更新后立刻拿到新版"，但代价是**每次都强制重新下载 1.1MB**。
- 实测刷新页面的主要耗时就在这里。改成条件缓存：
- - 开发/调试（?cb= 或 localhost 且带 nocache）→ 仍强制绕过，走原逻辑；
- - 正常访问 → 不加时间戳，让浏览器走 HTTP 缓存（Pages 会给这些 json 设 ETag，
- 内容没变时返回 304，几乎零成本）。
- 数据新鲜度由 GitHub Actions 每天提交 + 用户手动刷新保证，不依赖查询串。 */
-    const ACC_NOCACHE = /(?:^|[?&])(?:cb|nocache|debug)=1/.test(location.search)
-      || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
-    const jsonUrl = (f) => (ACC_NOCACHE ? f + '?_t=' + Date.now() : f);
+    /* ---- 本地数据（性能：并行 + 条件缓存）----
+⚠️ 原来这里是**串行** `await asset` → `await fundH`，两个文件加起来 1.1MB，
+串行等于把两次网络往返叠加（实测首屏被拖到 4.6s 才出数）。改为**并行**。
+⚠️ `accJson` 原来无条件给本地 JSON 追加 `?_t=Date.now()`——代价是**每次访问
+都强制重新下载 ~520KB（gzip 后 ~150KB）**，实测刷新页面主要耗时就在这里。
+已改为条件缓存（P0 · 2026-10-13，开关统一用文件头的 jsonUrl）：
+- 开发/调试（?cb=1 / localhost / 127.0.0.1）→ 加时间戳强制拉新，走原逻辑；
+- 正常访问 → 不加时间戳，让浏览器走 HTTP 缓存（Pages 会给这些 json 设 ETag，
+内容没变时返回 304，几乎零成本）。
+数据新鲜度由 GitHub Actions 每天提交 + 用户手动刷新保证，不依赖查询串。 */
+    /* jsonUrl / 缓存开关统一用文件头共享版本（原 ACC_NOCACHE 局部定义已上移，避免两处漂移） */
     const [asset, fundH] = await Promise.all([
-      accJson(jsonUrl('Asset_parsed.json')),
-      accJson(jsonUrl('fund_holdings.json')),
+      accJson('Asset_parsed.json'),   // accJson 内部经 jsonUrl 决定是否加戳（见文件头 P0）
+      accJson('fund_holdings.json'),
     ]);
     if (!asset) return;
     const seed = asset.seed || {};
@@ -8397,7 +8481,11 @@ fundAmount += f.amount;
  本金 167,600 是当年换汇**实付的人民币**、不含汇率效应 → 差额里汇率损益天然被计入。
  三处（侧栏 / 收益日历 / 账户曲线）都是这个口径，金额能对上。
  ⚠️ 别为了「让数字更好看」把这里换成固定汇率或剔除汇率 —— 那会让它与日历、曲线分叉。 */
-      const stockCumCny = offCumCny != null ? offCumCny : stockEquityCny - 167600;
+      /* ⚠️ 实时口径（off 为空）要 + anchorDelta：官方快照缺最新日时，实时推算看不到
+ 官方净值里的「IBKR 独有项」（10-09 到期期权残留 +135 USD ≈ 903 CNY），
+ 收益日历的补点已含这份修正，这里不加就会比日历少 903（用户报过的口径差）。
+ 官方口径（offCumCny）本身已含，不要加。 */
+      const stockCumCny = offCumCny != null ? offCumCny : stockEquityCny + (TRADE_POS.anchorDelta || 0) - 167600;
       setTxt('mStockVal', f2(rtVal * FX));
       setTxt('mStockLong', f2(longVal() * FX));
       setTxt('mStockShort', f2(shortVal() * FX));
@@ -8408,7 +8496,7 @@ fundAmount += f.amount;
       usdNote('mStockValUsd', rtVal);
       usdNote('mStockLongUsd', longVal());
       usdNote('mStockShortUsd', shortVal());
-      usdNote('mPnlTotalUsd', offCumCny != null ? off.last.value + offTqqqUsd(off.last.date) - 167600 / off.fx : (ibkrCashAll + rtVal) - 167600 / FX);
+      usdNote('mPnlTotalUsd', offCumCny != null ? off.last.value + offTqqqUsd(off.last.date) - 167600 / off.fx : (ibkrCashAll + rtVal) + ((TRADE_POS.anchorDelta || 0) / FX) - 167600 / FX);
       // 证券净值 = 证券账户权益 = (盈透现金 + 持仓实时市值) 折 CNY，与「总资产」里的证券口径一致
       setTxt('mStockEquity', f2(stockEquityCny));
       usdNote('mStockEquityUsd', ibkrCashAll + rtVal);
@@ -8456,12 +8544,12 @@ fundAmount += f.amount;
     let stockEquityCny = (ibkrCashAll + rtPosVal) * FX;   // ↓ 供下方总资产/曲线沿用
     let stockTodayCny = todayPnlUsd * FX;
     let stockPnlCny = rows.reduce((s, r) => s + (r.pnl || 0), 0) * FX;
-    let stockCumCny = (ibkrCashAll + rtPosVal) * FX - 167600;
+    let stockCumCny = (ibkrCashAll + rtPosVal) * FX + (TRADE_POS.anchorDelta || 0) - 167600;
     function recalcStockTotals() {
       stockEquityCny = (ibkrCashAll + rtPosVal) * FX;
       stockTodayCny = todayPnlUsd * FX;
       stockPnlCny = rows.reduce((s, r) => s + (r.pnl || 0), 0) * FX;
-      stockCumCny = stockEquityCny - 167600;
+      stockCumCny = stockEquityCny + (TRADE_POS.anchorDelta || 0) - 167600;
       /* ⚠️ 把**实时证券权益**发布到 TRADE_POS，供收益日历补「今天」那个点
  （用户 ：「日历也该和侧栏总资产一样预测，正股和期权都算，等 IBKR 更新了再换回 IBKR」）。
  口径与侧栏「证券」完全相同：IBKR 账户内现金 + 实时持仓市值（正股 **含期权**，按实时价，
@@ -8494,6 +8582,30 @@ fundAmount += f.amount;
         if (!covered) return null;                 // 一个都没覆盖 → 不可信，不补
         return (ibkrCashAll + posVal) * FX;
       };
+      /* 官方快照缺最新日时（ibkrOfficial() 返回 null → 侧栏走**实时推算**口径），
+ 实时推算看不到官方净值里的「IBKR 独有项」—— 实测 10-09 一批 0DTE 期权到期后，
+ 官方净值残留 +135 USD（≈903 CNY），而 holdings 只剩 ORCL 正股，
+ 推算段（现金+利息+正股+TQQQ）凑不出这 135。
+ 收益日历的 rtFill/closeFills 已用 anchorDelta 锚定修正（见 calIndex 处说明），
+ 侧栏「累计盈亏」若不修正就比日历**少这一份** —— 用户报的「日历 161,538 vs
+ 卡片累计盈亏 160,635」，差 903.06 CNY 全在这（基金段两端分毫不差）。
+ 这里用**同源公式**补上：δ = 官方净值(最后快照日) − 同日实时推算值(去 TQQQ)。
+ ⚠️ 只加进「累计盈亏」金额；净值/总资产展示仍是实时口径，不加。
+ ⚠️ 官方口径（off 非空）时**不能**加 —— 官方净值本身已含这 135，再加就重复
+ （renderStockSum / renderAccTotal 里都只在 off 为空的分支加）。 */
+      let anchorDelta = 0;
+      const nvValid = ((asset && asset.totalNetValueDaily) || []).filter((r) => r.value > 100);
+      if (nvValid.length) {
+        const ls = nvValid[nvValid.length - 1];
+        const lsDate = String(ls.date);
+        const eqLast = TRADE_POS.stockEquityOn(lsDate);          // CNY，含 TQQQ
+        if (eqLast != null && eqLast > 0) {
+          const qcLs = tqqqCloseOn(lsDate);
+          const tqMvLs = (qcLs != null && CAL_TQQQ_SHARES > 0) ? qcLs * CAL_TQQQ_SHARES * fxOn(lsDate) : 0;
+          anchorDelta = ls.value * fxOn(lsDate) - (eqLast - tqMvLs);
+        }
+      }
+      TRADE_POS.anchorDelta = anchorDelta;
       renderStockSum();               // 侧栏「证券 / 今日盈亏 / 累计盈亏」+ 资产卡
       refreshAoTail();                // 走势图末点（今天）= 实时正股价外推，跟着行情走
       totalCny = renderAccTotal();    // 账户页总资产 + 累计（函数声明已提升）
@@ -8613,7 +8725,10 @@ fundAmount += f.amount;
       setTxt('accTotalNotePct', yestBase > 0 ? pctS(todayCny / yestBase) : '--', todayCny);
       // 累计盈亏 = 证券累计(IBKR净值+TQQQ市值-入金-买入成本) + 基金累计(净值-JSON成本)
       // 官方口径时证券累计 = 最新官方净值×当日汇率 + 快照日 TQQQ 市值 − 167600（净值不含 TQQQ，必须补）
-      const cumCny = (off ? off.last.value * off.fx + offTqqqUsd(off.last.date) * off.fx - 167600 : eqCny - 167600) + fundCum;
+      /* ⚠️ 实时口径（off 为空）同样 + anchorDelta，与 renderStockSum 的证券累计同源：
+ 官方快照缺最新日时实时推算看不到「IBKR 独有项」（+135 USD ≈ 903 CNY），
+ 不加就会比收益日历年/月收益少这一份（用户报过的 903 口径差）。 */
+      const cumCny = (off ? off.last.value * off.fx + offTqqqUsd(off.last.date) * off.fx - 167600 : eqCny + (TRADE_POS.anchorDelta || 0) - 167600) + fundCum;
       setTxt('accTotalCum', f2(cumCny, true), cumCny);
       /* 累计收益率 = **TWR**，且与日历/走势**完全同源**（同一个 calIndex().twrAll）。
  用户 选方案 B：侧栏总资产与日历对齐为「**不含现金**」——

@@ -175,7 +175,10 @@
       const need = Math.min(cfg.limit || 600, 1440);
       const raw = await fetchRawCandles(instId, need, cfg.bar);
       const byDay = new Map();
-      for (const r of raw) {                     // 最新在前
+      /* raw 最新在前（fetchRawCandles 返回），反转后每个交易日的数组变成 旧→新，
+ 这样 out 拼接出来整体是「旧→新」的时间正序，折线右端才落在**最新一根**（实时），
+ 不会被倒序后停在当天 00:00 开盘那根（即「5日右边没到实时」的根因）。 */
+      for (const r of raw.slice().reverse()) {   // 旧 -> 新
         const et = new Date(new Date(+r[0]).toLocaleString('en-US', { timeZone: 'America/New_York' }));
         const key = et.getFullYear() + '-' + String(et.getMonth() + 1).padStart(2, '0') + '-' + String(et.getDate()).padStart(2, '0');
         if (!byDay.has(key)) byDay.set(key, []);
@@ -1544,6 +1547,9 @@ const TICKER_TTL = 15000;
   const assetIconSvg = (key) => '<svg viewBox="0 0 14 16" aria-hidden="true">' + (ASSET_SESS[key] ? ASSET_SESS[key].icon : '') + '</svg>';
   /* 默认时段 = 当前进行中的美东时段（与自选页分时同款规则：夜盘看夜盘、盘前看盘前） */
   let assetSessSel = currentSessionKey();
+  /* 基金成分股 1m 序列缓存：本轮某 US 成分股(OKX 永续)没取到时沿用上轮，
+  避免静默退化成当日常数导致聚合曲线刷新抖动。 */
+  let assetFundCandleCache = null;
 
   /* 取「该时段内」的持仓总资产分钟序列。
  返回 null = 数据不足/没持仓，调用方直接画空白。 */
@@ -1627,6 +1633,15 @@ const TICKER_TTL = 15000;
       fundCandleMap = {};
       (await Promise.all(symArr.map(async (s) => [s, await fetchLeg(inst2(s))]))).forEach(
         ([s, pts]) => { fundCandleMap[s] = pts; });
+      /* 守门：本轮某成分股没取到（OKX 抖动/限频）时沿用上轮成功序列，
+      避免 computeFundAt 静默退化成当日常数 → 曲线形状随刷新抖动。 */
+      const prevMap = assetFundCandleCache || {};
+      symArr.forEach((s) => {
+        if (!fundCandleMap[s] || !fundCandleMap[s].length) {
+          if (prevMap[s] && prevMap[s].length) fundCandleMap[s] = prevMap[s];
+        }
+      });
+      assetFundCandleCache = fundCandleMap;
     }
     const legs = stockLegs.concat(optLegs);
 
@@ -1716,7 +1731,25 @@ const TICKER_TTL = 15000;
     const nowTs = Date.now();
     /* 时间轴 = 所有腿该时段内的 ts 并集（升序）。
  24h 时段不按 ET 时段 match，直接取滚动 24 小时窗口。 */
-    const tsSet = new Set();
+    /* 横轴 = 连续整分钟网格（不再用各腿 ts 并集）。
+    用户报「每次刷新曲线历史形状都不一样」(峰值 104.1w↔104.0w)：根因是 axis 由各腿 ts
+    并集每次重建，OKX forming bar 滚动使并集尾部采样点略移，峰值随之微抖。固定成连续
+    分钟网格后横轴完全确定，逐点前值填充，形状稳定。 */
+    const gridMin = 60000;
+    let sessStart = null;
+    if (key === 'h24') {
+      sessStart = Math.floor((nowTs - 24 * 3600 * 1000) / gridMin) * gridMin;
+    } else if (key === 'all') {
+      sessStart = etLast20Ts(nowTs);
+    } else if (sessDef) {
+      const sMin = SESS_START_MIN[key];
+      if (sMin != null) sessStart = etTsOn(nowTs, etMinutes(nowTs) >= sMin ? 0 : -1, sMin);
+    }
+    if (sessStart == null) return null;
+    const gridEnd = Math.floor(nowTs / gridMin) * gridMin;
+    let axis = [];
+    for (let t = Math.ceil(sessStart / gridMin) * gridMin; t <= gridEnd; t += gridMin) axis.push(t);
+    if (axis.length < 2) return null;
     const target = Number.isFinite(p.fx) ? p.fx : 1;
     const cash = p.cash || 0;
     /* 每只股/期权在该时段首点之前的空档，用**昨收**顶上（= 基准价），
@@ -1727,20 +1760,6 @@ const TICKER_TTL = 15000;
  见下方合成循环里的长注释（修「曲线末点掉一根」）。初值 = 昨收（窗口起点用）。 */
     const lastPx = legs.map((leg) => (leg.s.prev > 0 ? leg.s.prev : null));
 
-    for (const leg of legs) {
-      for (const pt of leg.pts) {
-        const m = etMinutes(pt.ts);
-        if (key === 'h24') {
-          if (pt.ts >= nowTs - 24 * 3600 * 1000) tsSet.add(pt.ts);
-        } else if (key === 'all') {
-          tsSet.add(pt.ts);
-        } else if (sessDef && sessDef.match(m)) {
-          tsSet.add(pt.ts);
-        }
-      }
-    }
-    let axis = Array.from(tsSet).sort((a, b) => a - b);
-    if (axis.length < 2) return null;
 
     /* ⚠️⚠️ **窗口裁剪**（用户 ：「推算总资产曲线图横坐标不太对吧」）。
  上面 tsSet 只是「按 match 过滤 24h 全量」，**没有取「最近一个该时段窗口」**，
@@ -2545,14 +2564,14 @@ const TICKER_TTL = 15000;
           row.classList.add('is-active');
           const picked = list.find((x) => x.code === row.dataset.code);
           if (picked) {
-            /* 外汇（USDCNH）/ 美债（10Y）只有日频、没有分时与 1 天数据 —— 若此时停在
- 「分时」会整张图空白（见 loadInstrument 里 fxCode/ustCode 的 time 分支）。
- 用户 定：「美元/人民币和美债点开时默认显示 5 天吧，因为 1 天的
- 数据就没有」。这里点开这两类时若 chartMode 还是 'time' 就切到 'd5'，
- 并同步周期工具条高亮。其余周期（日K/周K…）对日频源有效，不覆盖用户已选。 */
-            if ((picked.fxCode || picked.ustCode) && chartMode === 'time') {
-              chartMode = 'd5';
-              syncPeriodTabActive('d5');
+            /* 外汇（USDCNH）/ 美债（10Y）只有日频、没有分时，点开默认 5 日；
+ 证券（美股）/ 期货 / 加密币 有分时 + 美东时段（盘前/盘中/盘后/夜盘），点开默认分时。
+ 每个标的都按「类型默认」复位 chartMode，避免被上一次选的模式污染
+ （如看完美债 5 日再点美股仍停在 5 日、应回分时 + 时段）。 */
+            const defMode = (picked.fxCode || picked.ustCode) ? 'd5' : 'time';
+            if (chartMode !== defMode) {
+              chartMode = defMode;
+              syncPeriodTabActive(defMode);
             }
             loadInstrument(picked.code);
             // 移动端：点行后切到图表页（列表隐藏，只剩该标的 K 线）
@@ -5111,7 +5130,12 @@ const applyMode = (mode, skipDraw) => {
       .map((x) => ({ name: x.name, code: '', val: x.val, color: AO_CAT_COLOR[x.name] || '#b06be0' }));
     aoDist.data.cat = paint(g.cat);
     aoDist.data.cur = paint(g.cur);
-    aoDist.total = total > 0 ? total : 0;
+    /* ⚠️ 环形图总和 = 正资产扇区之和，**不含负资产**（融券空头/负现金等）。
+       外部传入的 total（= totalCny，是含负资产的代数和）只供账户页「金额」口径使用，
+       若直接当环形图分母，会让各扇区 pct 之和 < 1、环填不满一圈、ORCL 起笔角度被稀释偏移。
+       用户 ：「总和应该是不含负资产的」。renderAoDist 也会用当前数据集自身之和再算一遍，
+       保证三个视角（资产/分类/币种）各自自洽。 */
+    aoDist.total = sorted.reduce((s, x) => s + x.val, 0);
     /* 数据到达时总览页可能还 hidden（canvas 父容器尺寸 0，画了也白画）。
  打个标记，等真正切到「统计」tab 时由 applyMode 补画一次。 */
     aoDist.dirty = true;
@@ -5133,7 +5157,11 @@ const applyMode = (mode, skipDraw) => {
     const list = document.getElementById('aoDistList');
     if (!canvas || !list) return;
     const items = aoDistCurrent();
-    const total = aoDist.total;
+    /* 占比分母 / 中心总额 = 当前数据集自身之和（正资产，不含负资产）。
+       ⚠️ 不再用外部传入的 totalCny（含负资产的代数和）：否则各扇区 pct 之和 < 1、
+       环填不满一圈、起笔角度被稀释。用户 ：「总和应该是不含负资产的」。
+       三个视角各自用各自的 items 之和，互不干扰、扇区恒满 100%。 */
+    const total = items.reduce((s, x) => s + (x.val || 0), 0);
 
     // 中心总额
     const hole = document.getElementById('aoDonutTotal');
@@ -6067,7 +6095,13 @@ const applyMode = (mode, skipDraw) => {
  这样末值同源、累计就对上了。⚠️ 只替换「最新净值日」这一天，不动更早的历史
  （历史就是那些净值本身，没得可换）。 */
       const fund = fundByDate[date] != null ? fundByDate[date] : null;
-      const fundLive = (fund != null && CAL_FUND_LIVE.amount > 0 && CAL_FUND_LIVE.byDate[date])
+      /* ：用最新净值日补「json 净值历史还没入库、但实时接口已披露 navL」的情况
+ （如 10-09：fund_holdings.json 的 nav 缓存只到 10-07，运行时却已抓到 10-09 净值）。
+ 只要当天是基金最新净值日（CAL_FUND_LIVE.byDate 为真），就算 fundByDate 没该条目，
+ 也用 nav 口径的市值（CAL_FUND_LIVE.amount = Σ份额×最新navL，非实时估算）补上当日盈亏，
+ 否则那天基金段会被算成 0（实测 10-09 gF=0，应 ≈ +1926）。
+ 仍只补最新净值日那一天，更早的历史日不动（见上方口径注释）。 */
+      const fundLive = (CAL_FUND_LIVE.amount > 0 && CAL_FUND_LIVE.byDate[date])
         ? CAL_FUND_LIVE.amount : fund;
       /* TQQQ 当日市值 = **TQQQ 自己的收盘价** × 股数 × 当日汇率
  （该日若无日线，沿用最近一条 ≤ 该日）。 */

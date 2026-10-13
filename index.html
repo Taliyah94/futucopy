@@ -1288,11 +1288,25 @@ html, body {
 .ust-heat__cell {
   position: absolute; box-sizing: border-box; overflow: hidden;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
-  padding: 0 2px; border: 1px solid rgba(255, 255, 255, 0.4);
-  color: #fff; font-size: 12px; line-height: 1.15; letter-spacing: -0.2px;
+  padding: 0 2px; border: 1px solid rgba(20, 23, 31, 0.16);
+  /* 用户 2026-10-13：「里边的代码和涨跌幅应该是用黑色的比较醒目」——
+ 格子底色是半透明红/绿（alpha 0.18~0.80 叠在 --panel-2 #f4f6f9 上）：淡格子上
+ 白字几乎看不见（最淡处约 rgb(206,226,214)），中等饱和度格子白字也压不住。
+ 改成近黑 var(--text) 后淡/浓两头都清晰（最浓处对比度仍 ≈5.4:1）。
+ ⚠️ 分隔线同步从白换淡黑：白边在浅格子上会消失，同行业相邻格子糊成一片。 */
+  color: var(--text); font-size: 12px; line-height: 1.15; letter-spacing: -0.2px;
 }
 .ust-heat__cell b { font-weight: 700; }
 .ust-heat__cell i { font-style: normal; font-variant-numeric: tabular-nums; opacity: 0.95; }
+/* 行业黑框（用户 2026-10-13：「热力图不同行业应该用个黑框隔起来，现在分不清」）：
+   每个行业矩形描一圈近黑边。box-sizing:border-box → 框画在矩形内部，不抢占格子面积；
+   pointer-events:none 不挡交互；DOM 排在所有格子之后（renderUsTopHeatmap 末尾整批 push）
+   → 盖住格子接缝、线条连续。z-index:1 低于行业标签（z-index:2）→ 标签仍压在线框上。 */
+.ust-heat__frame {
+  position: absolute; box-sizing: border-box; z-index: 1;
+  border: 2px solid rgba(20, 23, 31, 0.85);
+  pointer-events: none;
+}
 .ust-heat__cat { position: absolute; z-index: 2; pointer-events: none; }
 .ust-heat__cat span {
   display: inline-block; padding: 1px 6px 2px; white-space: nowrap;
@@ -1408,6 +1422,8 @@ html, body {
   .ust-heat { margin-top: 8px; }
   .ust-heat--portrait { aspect-ratio: 560 / 1000; }
   .ust-heat__cell { font-size: 10px; }
+  /* 手机画布 560 宽（桌面 1000）→ 框线按比例收细，别把窄格子吃掉 */
+  .ust-heat__frame { border-width: 1.5px; }
   .ust-heat__cat span { font-size: 10px; padding: 1px 4px 2px; }
   /* 副行（代码 / 权重）比主行小一号：主行 11px、副行 10px */
   .idx-const .us-top__n i, .idx-const .us-top__m i { font-size: 10px; }

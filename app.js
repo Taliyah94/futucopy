@@ -2923,6 +2923,14 @@ const TICKER_TTL = 15000;
             })(),
             rtStock: Math.round((TRADE_POS && TRADE_POS.rtStockCny) || 0),
             closeStock: Math.round((TRADE_POS && TRADE_POS.closeStockCny) || 0),
+            /* 今天格内部状态：rtFillDate/Val + anchorDelta + 中间补点 + TQQQ 今日是否有日线 */
+            rtFill: (function () {
+              const v = i.rtFillVal;
+              return { date: i.rtFillDate, val: v == null ? null : Math.round(v),
+                       anchorDelta: Math.round(i.anchorDelta || 0),
+                       closeFills: Object.keys(i.closeFills || {}),
+                       tqqqToday: CAL_TQQQ_MAP ? (CAL_TQQQ_MAP[i.rtFillDate || ''] != null) : null };
+            })(),
             eqOn0606: (function () {
               const f = (TRADE_POS && TRADE_POS.stockEquityOn) ? TRADE_POS.stockEquityOn('2026-10-06') : null;
               return f == null ? 'null' : Math.round(f);
@@ -2976,7 +2984,7 @@ const TICKER_TTL = 15000;
                              rS: d.rS == null ? null : +(d.rS * 100).toFixed(2),
                              rF: d.rF == null ? null : +(d.rF * 100).toFixed(2) })),
           };
-        } catch (e) { return { error: e.message }; }
+        } catch (e) { return { error: e.message, stack: String(e.stack || '').split('\n').slice(0, 4) }; }
       },
     };
   }
@@ -3469,12 +3477,13 @@ const TICKER_TTL = 15000;
     ).join(' '));
   }
 
-  /* 左侧 rail 视图切换：自选(行情终端) / 账户 / 资讯 / 选股器 / 持仓 */
+  /* 左侧 rail 视图切换：自选(行情终端) / 账户 / 资讯 / 选股器 / 持仓 / 我的 */
   (function initViewSwitch() {
     const items = document.querySelectorAll('.rail__item[data-view]');
     const accountView = $('#accountView');
     const tradeView = $('#tradeView');
     const screenView = $('#screenView');
+    const meView = $('#meView');
     if (!items.length || !accountView) return;
 
     function switchView(view) {
@@ -3482,12 +3491,14 @@ const TICKER_TTL = 15000;
       const isTrade = view === 'trade';
       const isComment = view === 'comment';
       const isScreen = view === 'screen';
+      const isMe = view === 'me';
       items.forEach((b) => b.classList.toggle('is-active', b.dataset.view === view));
-      /* accountView 独占主区（自带侧栏 + 主区），所以资讯/选股视图下必须一起藏掉 ——
+      /* accountView 独占主区（自带侧栏 + 主区），所以资讯/选股/我的视图下必须一起藏掉 ——
  否则它仍占着 flex 位置，右侧内容被挤到最右、文字溢出（实测过）。 */
-      accountView.hidden = isMarket || isTrade || isComment || isScreen;
+      accountView.hidden = isMarket || isTrade || isComment || isScreen || isMe;
       if (tradeView) tradeView.hidden = !isTrade;
       if (screenView) screenView.hidden = !isScreen;
+      if (meView) meView.hidden = !isMe;
       /* 持仓页右侧资讯栏：两个面板共用同一份数据，但 DOM 各自一份 ——
  页面启动时只渲染了自选页那份（持仓页那时还隐藏着，且列表是空的），
  切进来时必须补一次渲染，否则持仓页看到的是空白列表。 */
@@ -4078,11 +4089,9 @@ const TICKER_TTL = 15000;
   })();
 
   /* 板块热力图（两级 squarified 树图）
- opts.cap = 着色饱和阈值（默认 ±5% 给「当日涨跌幅」；板块图用 **1 年回报** → 传 50）
- opts.note = 图例尾注文案。 */
+ opts.cap = 着色饱和阈值（默认 ±5% 给「当日涨跌幅」；板块图用 **1 年回报** → 传 50） */
   function renderUsTopHeatmap(rows, opts) {
     const cap = (opts && opts.cap) || 5;
-    const note = (opts && opts.note) || '行业分大类';
     /* ⚠️ 手机端改用**竖版画布**（用户 ：「手机端板块那个热力图改成个竖着的」）：
  横版 1000×560 在 430px 宽下只有 241px 高，101 只被压成一条横带、大票也看不清；
  换成 560×1000（面积不变，只是竖过来）→ 高约 768px，配合页面滚动看得很清楚。
@@ -4190,9 +4199,10 @@ const TICKER_TTL = 15000;
         return '<span>' + cpEsc(c.name) + '<i>' + wt + '</i></span>';
       }).join('') + '</div>'
       : '';
+    /* 用户 2026-10-13：图例整行删除（先删「面积∝市值/1年回报」尾注，再删「涨绿跌红」色键）
+       —— 头部说明与图例全部清掉，热力图只留格子本身。
+       ⚠️ fitUstHeat 的图例高度抵扣逻辑（legend ? offsetHeight : 0）已随之删除，图少占 ~20px 无需改适配。 */
     return '<div class="ust-heat' + (narrow ? ' ust-heat--portrait' : '') + '">' + cells.join('') + '</div>'
-      + '<div class="ust-heat__legend"><span class="up">涨（绿）</span><span class="down">跌（红）</span>'
-      + '<span class="muted">格子面积 ∝ 市值 · ' + cpEsc(note) + '</span></div>'
       + catList;
   }
 
@@ -4251,14 +4261,13 @@ const TICKER_TTL = 15000;
         ind: x.ind, mc: x.mc, pct: (x.ret == null ? null : x.ret * 100),
       }));
     const asOf = data.asOf ? String(data.asOf).slice(0, 10) : '';
-    const nGrp = new Set(rows.map((x) => x.grp).filter(Boolean)).size;
+    /* 用户 2026-10-13：「全部个股 · 市值前 100 · 11 个大行业 · 面积 ∝ 市值 / 着色 = 1 年回报
+    （±50% 饱和）」两行说明删了 —— 头部只留标题 + 数据日期 + 来源。 */
     const bar = '<div class="screen-bar">'
       + '<b>板块热力图</b>'
-      + '<span>全部个股 · 市值前 ' + rows.length + ' · ' + nGrp + ' 个大行业 · 面积 ∝ 市值</span>'
-      + '<span>着色 = 1 年回报（±50% 饱和）</span>'
       + (asOf ? '<span>数据日期 ' + cpEsc(asOf) + '</span>' : '')
       + '<span class="screen-bar__src">来源：' + cpEsc(data.source || 'all_stocks.json（每日抓取时聚合）') + '</span></div>';
-    const hmOpts = { cap: 50, note: '按 1 年回报着色' };
+    const hmOpts = { cap: 50 };
     /* 记住本次渲染参数：fitUstHeat 适配容器长宽比时要按同样的 rows/opts 重画
  （只改虚拟画布 W/H，数据 / 配色 / 图例文案都不变）。 */
     ustHeatLast = { rows, opts: hmOpts };
@@ -4291,9 +4300,9 @@ const TICKER_TTL = 15000;
       heat.style.width = ''; heat.style.maxHeight = ''; heat.style.aspectRatio = '';
       return;
     }
-    const legend = wrap.querySelector('.ust-heat__legend');
-    /* −14 = 热力图自身 margin-top:10px + 4px 呼吸余量；图例高度实测（可能换行） */
-    const availH = wrap.clientHeight - (legend ? legend.offsetHeight : 0) - 14;
+    /* −14 = 热力图自身 margin-top:10px + 4px 呼吸余量。
+       （2026-10-13：图例整行删除后不再需要减图例高度，原先 legend ? offsetHeight : 0 恒为 0，一并清掉。） */
+    const availH = wrap.clientHeight - 14;
     const availW = wrap.clientWidth;
     if (availH < 160 || availW <= 0) {
       heat.style.width = ''; heat.style.maxHeight = ''; heat.style.aspectRatio = '';
@@ -4568,6 +4577,7 @@ const TICKER_TTL = 15000;
     else if (hash === 'screen') switchView('screen');
     else if (hash === 'comment') switchView('comment');
     else if (hash === 'market') switchView('market');
+    else if (hash === 'me') switchView('me');
   })();
 
   /* 顶栏刷新按钮（2026-10-13 用户定稿：「改成点一下相当于 f5」）：
@@ -4774,12 +4784,18 @@ const applyMode = (mode, skipDraw) => {
       const isChart = mode === 'return' || mode === 'asset';
       const cal = document.getElementById('aoCal');
       const dist = document.getElementById('aoDist');
+      const other = document.getElementById('aoOther');
       const chart = document.getElementById('aoChartWrap');
       const stats = document.getElementById('aoStats');
       const ranges = document.getElementById('aoRanges');
       if (cal) cal.hidden = mode !== 'cal';
       // 分布图原先常驻在走势图上方，用户 要求收进「统计」tab
       if (dist) dist.hidden = mode !== 'stat';
+      /* 「其它」tab：房产估值曲线 + 成交列表（2026-10-13 新增）。
+ ⚠️ 它与 cal/dist 一样是独立 section（hidden 切换），**不**走 chart/stats/ranges 那套
+ display 显隐 —— 所以时间范围按钮（1月/3月/今年/全部）在这里自动隐藏，正是用户要的
+ 「只要曲线，不需要1月3月这些玩意」。 */
+      if (other) other.hidden = mode !== 'other';
       if (chart) chart.style.display = isChart ? '' : 'none';
       if (stats) stats.style.display = isChart ? '' : 'none';
       if (ranges) ranges.style.display = isChart ? '' : 'none';
@@ -4807,6 +4823,7 @@ const applyMode = (mode, skipDraw) => {
       if (skipDraw) return;
       if (mode === 'cal') drawAoCal();
       else if (mode === 'stat') renderAoDist();
+      else if (mode === 'other') renderAoOther();
       else if (isChart) drawAoChart();
     };
     tabs.forEach((b) => b.addEventListener('click', () => {
@@ -4822,6 +4839,12 @@ const applyMode = (mode, skipDraw) => {
       aoState.hover = null;
       drawAoChart();
     }));
+    /* 「其它」tab：成交列表翻页。handler 里引用后 const 声明的 propPage / renderAoPropList
+ 不存在 TDZ 问题 —— 点击发生在整份脚本求值完成之后，与 applyMode 里引用 drawAoChart 同一模式。 */
+    const propPrev = document.getElementById('aoPropPrev');
+    const propNext = document.getElementById('aoPropNext');
+    if (propPrev) propPrev.addEventListener('click', () => { propPage.page--; renderAoPropList(); });
+    if (propNext) propNext.addEventListener('click', () => { propPage.page++; renderAoPropList(); });
     /* 「对比QQQ」开关：叠一条同期全买 QQQ 的基准线。
  ⚠️ 用户定稿：**只在「收益率走势」tab 生效**——
  收益率是纯投资回报，与指数可比；资产走势含现金进出（汇丰从 39 万扣到 23 万），
@@ -4863,6 +4886,7 @@ const applyMode = (mode, skipDraw) => {
     const wasMobile = AC_MQ.matches;
     placeAssetChart();
     drawChart(); drawAoChart(); drawAccSpark(); drawAssetChart(assetChartData);
+    renderAoPropChart();                            // 「其它」tab 隐藏时 W<60 直接返回，无需判断 mode
     if (AC_MQ.matches !== wasMobile) refreshAssetChart(true);
   });
   document.addEventListener('DOMContentLoaded', renderAll);
@@ -5645,6 +5669,170 @@ const applyMode = (mode, skipDraw) => {
     else aoStatDefault();
   }
 
+  /* ===================== 「其它」tab：房产估值曲线 + 成交列表 =====================
+  数据源：fund_holdings.json 的 _property（房天下小区成交记录；fund_holdings.py 每日抓取，
+  2026-10-13 从 Taliyah94/asset 仓库的 fund_holdings.py 平移，该仓库的两个 workflow 已关闭）。
+  曲线口径（与 asset 站点「房产」卡片一致）：估值 = 71.56㎡ × 「≤ 当日最近一笔成交」的单价，
+  即一条**阶梯线**——每出现一笔新成交，估值跳变到新单价；无成交的日子持稳。
+  用户 2026-10-13 定稿：「做个资产走势那样的曲线，只要曲线就行，不需要1月3月这些玩意」
+  → 复用资产走势的画布语言（右轴刻度/起止日期/渐变填充/同一个橙），但不做时间范围切换、不做悬停光标。 */
+  const PROPERTY_AREA_M2 = 71.56;      // 本人房产面积（㎡）；小区里其它面积的成交只用来推市场单价
+  const PROP_PAGE_SIZE = 12;           // 成交列表每页条数（两栏 × 6 行）
+  let propPage = { page: 1 };          // 成交列表当前页
+
+  /* _property.deals → 升序 [{date, c: 估值}]；同日多笔取最后一笔（deals 按日期倒序给出，
+     同日内后出现的成交更新，按日期归组时后写覆盖先写即可）。 */
+  function propSeries() {
+    const p = aoState.prop;
+    if (!p || !Array.isArray(p.deals) || !p.deals.length) return [];
+    const byDate = {};
+    for (const d of p.deals) {
+      if (!d || !d.date || !(d.unit_price > 0)) continue;
+      byDate[d.date] = PROPERTY_AREA_M2 * d.unit_price;
+    }
+    return Object.keys(byDate).sort().map((date) => ({ date, c: byDate[date] }));
+  }
+
+  function renderAoOther() {
+    renderAoPropChart();
+    renderAoPropList();
+  }
+
+  function renderAoPropChart() {
+    const canvas = document.getElementById('aoPropChart');
+    if (!canvas) return;
+    const wrap = canvas.parentElement;
+    const W = wrap.clientWidth, H = wrap.clientHeight;
+    if (W < 60 || H < 60) return;                     // tab 隐藏时不画（clientWidth=0）
+    const dpr = window.devicePixelRatio || 1;
+    if (canvas.width !== Math.round(W * dpr) || canvas.height !== Math.round(H * dpr)) {
+      canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
+    }
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+
+    const comm = (aoState.prop && aoState.prop.community) || {};
+    const nameEl = document.getElementById('aoPropName');
+    if (nameEl) nameEl.textContent = (comm.name || '房产') + ' 估值走势';
+    const valEl = document.getElementById('aoPropVal');
+
+    const data = propSeries();
+    if (!data.length) {
+      if (valEl) valEl.textContent = '--';
+      ctx.font = '11px "PingFang SC","Microsoft YaHei",sans-serif';
+      ctx.fillStyle = '#949aab';
+      ctx.textAlign = 'center';
+      ctx.fillText('暂无房产成交数据', W / 2, H / 2);
+      return;
+    }
+    const lastV = data[data.length - 1].c;
+    if (valEl) {
+      valEl.textContent = '¥' + lastV.toLocaleString('zh-CN', { maximumFractionDigits: 0 });
+      valEl.classList.remove('up', 'down');
+      valEl.classList.add(lastV >= data[0].c ? 'up' : 'down');   // 项目约定：涨绿跌红
+    }
+
+    const padL = 12, padR = 58, padT = 14, padB = 26;
+    const plotW = W - padL - padR, plotH = H - padT - padB;
+    let lo = Infinity, hi = -Infinity;
+    for (const p of data) { if (p.c < lo) lo = p.c; if (p.c > hi) hi = p.c; }
+    const span = (hi - lo) || Math.max(1, hi * 0.01);
+    const yMin = lo - span * 0.10, yMax = hi + span * 0.10;
+    const X = (i) => padL + (i / (data.length - 1)) * plotW;
+    const Y = (v) => padT + (1 - (v - yMin) / (yMax - yMin)) * plotH;
+    const FONT = '10px "PingFang SC","Microsoft YaHei",sans-serif';       // 起止日期
+    const TICK_FONT = '9px "PingFang SC","Microsoft YaHei",sans-serif';    // 纵轴刻度
+    const lineC = '#ff8f1f';                       // 与「资产走势」同一个橙（同属资产口径曲线）
+    const fillC = 'rgba(255,143,31,0.10)';
+
+    ctx.font = TICK_FONT;
+    ctx.textBaseline = 'middle';
+    for (let i = 0; i <= 4; i++) {                 // 网格 + 右侧纵轴（万元，比 6 位数千分位紧凑）
+      const y = padT + (i / 4) * plotH;
+      const v = yMax - (i / 4) * (yMax - yMin);
+      ctx.strokeStyle = 'rgba(15,23,42,0.06)';
+      ctx.setLineDash([3, 4]);
+      ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + plotW, y); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#949aab';
+      ctx.textAlign = 'left';
+      ctx.fillText((v / 1e4).toFixed(1) + '万', padL + plotW + 4, y);
+    }
+
+    /* 阶梯线：成交日之间估值持稳（水平段），新成交日跳变（垂直段）；
+       填充沿阶梯下沿一路铺到画布底（与资产走势的渐变填充同一手法）。 */
+    ctx.beginPath();
+    ctx.moveTo(X(0), Y(data[0].c));
+    for (let i = 1; i < data.length; i++) {
+      ctx.lineTo(X(i), Y(data[i - 1].c));          // 水平段：维持旧估值
+      ctx.lineTo(X(i), Y(data[i].c));              // 垂直段：跳变到新估值
+    }
+    ctx.strokeStyle = lineC;
+    ctx.lineWidth = 1.4;
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+    ctx.lineTo(X(data.length - 1), padT + plotH);  // 填充下沿
+    ctx.lineTo(X(0), padT + plotH);
+    ctx.closePath();
+    ctx.fillStyle = fillC;
+    ctx.fill();
+
+    ctx.fillStyle = lineC;                          // 每个成交日一个小圆点（真实事件标记）
+    for (let i = 0; i < data.length; i++) {
+      ctx.beginPath();
+      ctx.arc(X(i), Y(data[i].c), 1.6, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.font = FONT;                                // 起止日期
+    ctx.fillStyle = '#949aab';
+    ctx.textAlign = 'left';
+    ctx.fillText(data[0].date, padL, H - 10);
+    ctx.textAlign = 'right';
+    ctx.fillText(data[data.length - 1].date, padL + plotW, H - 10);
+  }
+
+  /* 成交记录列表：两栏卡片 + 翻页。按成交日期倒序（最新在前）。 */
+  function renderAoPropList() {
+    const grid = document.getElementById('aoPropGrid');
+    if (!grid) return;
+    const cnt = document.getElementById('aoPropCount');
+    const pg = document.getElementById('aoPropPage');
+    const prev = document.getElementById('aoPropPrev');
+    const next = document.getElementById('aoPropNext');
+    const p = aoState.prop;
+    const deals = (p && Array.isArray(p.deals)) ? p.deals.slice() : [];
+    deals.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));   // 倒序：最新在前
+    const pages = Math.max(1, Math.ceil(deals.length / PROP_PAGE_SIZE));
+    if (propPage.page > pages) propPage.page = pages;
+    if (propPage.page < 1) propPage.page = 1;
+    if (cnt) {
+      const src = (deals.length && deals[0].source) ? deals[0].source : '房天下';
+      cnt.textContent = deals.length ? ('成交记录 · 共 ' + deals.length + ' 笔 · 来源：' + src) : '成交记录';
+    }
+    if (pg) pg.textContent = propPage.page + ' / ' + pages;
+    if (prev) prev.disabled = propPage.page <= 1;
+    if (next) next.disabled = propPage.page >= pages;
+    if (!deals.length) {
+      grid.innerHTML = '<div class="prop-card prop-card--empty">暂无成交记录</div>';
+      return;
+    }
+    const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (ch) =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+    const from = (propPage.page - 1) * PROP_PAGE_SIZE;
+    grid.innerHTML = deals.slice(from, from + PROP_PAGE_SIZE).map((d) => {
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(d.date || ''));
+      const wk = m ? ' 周' + '日一二三四五六'[new Date(+m[1], +m[2] - 1, +m[3]).getDay()] : '';
+      return '<div class="prop-card">'
+        + '<div class="prop-card__d">' + esc(d.date) + '<i>' + wk + '</i></div>'
+        + '<div class="prop-card__row"><span>面积</span><b>' + (+d.area_m2).toFixed(2) + ' ㎡</b></div>'
+        + '<div class="prop-card__row"><span>成交总价</span><b>' + (+d.total_wan).toFixed(0) + ' 万</b></div>'
+        + '<div class="prop-card__row"><span>成交单价</span><b>' + (+d.unit_price).toLocaleString('zh-CN') + ' 元/㎡</b></div>'
+        + '</div>';
+    }).join('');
+  }
+
   /* 顶部统计行：恒显区间累计收益 / 区间收益率（跟随末点，与光标位置无关）。
  ⚠️ 原先还有一套「悬停时把统计行换成 日期 + 资产净值 / 当日收益」（aoSetStat 的 point/dayGain 分支
  + `.ao-stats.is-hover` CSS + `.ao-stat--hover` 节点）， 按用户要求整套删除，
@@ -6056,7 +6244,7 @@ const applyMode = (mode, skipDraw) => {
  （用户：「基金和现金都预测得不准，只有证券是准确的」）。
  ⚠️ 补的是 **IBKR 那一段**（权益 − 当日 TQQQ 市值）：权益**含 TQQQ**，
  而 TQQQ 在下面另有一段独立的增益，直接把总量塞进 stockByDate 会重复算一份 TQQQ。 */
-    let rtFillDate = null, rtFillVal = null;
+    let rtFillDate = null, rtFillVal = null, anchorDelta = 0;
     const closeFills = {};     // 中间缺快照日 → 收盘价口径的 IBKR 段权益（不含 TQQQ）
     const rtStockCny = (TRADE_POS && TRADE_POS.rtStockCny) || 0;
     const closeStockCny = (TRADE_POS && TRADE_POS.closeStockCny) || 0;
@@ -6089,8 +6277,9 @@ const applyMode = (mode, skipDraw) => {
  修法：δ = 官方净值(最后快照日) − 推算值(同一天)，补点值统一 +δ：
  · 没有新行情（盘前/休市）→ 补点恰 = 官方净值 → 当日盈亏 0，与"无交易"一致；
  · 有新行情（盘中/夜盘）→ 补点 = 官方净值 + 区间真实涨跌，135 的口径差被抵掉。
- 取不到推算值（Alpaca 日线缺失）→ δ=0，维持原口径（宁缺勿错）。 */
-      let anchorDelta = 0;
+ 取不到推算值（Alpaca 日线缺失）→ δ=0，维持原口径（宁缺勿错）。
+ ⚠️ anchorDelta 声明在函数作用域（return 的调试口要读它），这里只赋值。 */
+      anchorDelta = 0;
       if (lastIbkr && typeof TRADE_POS.stockEquityOn === 'function') {
         const eqLast = TRADE_POS.stockEquityOn(lastIbkr);      // CNY，含 TQQQ
         if (eqLast != null && eqLast > 0) {
@@ -6190,7 +6379,7 @@ const applyMode = (mode, skipDraw) => {
       const fundLive = (CAL_FUND_LIVE.amount > 0 && CAL_FUND_LIVE.byDate[date])
         ? CAL_FUND_LIVE.amount : fund;
       /* TQQQ 当日市值 = **TQQQ 自己的收盘价** × 股数 × 当日汇率
- （该日若无日线，沿用最近一条 ≤ 该日）。 */
+      （该日若无日线，沿用最近一条 ≤ 该日）。 */
       const qClose = tqqqCloseOn(date);
       const q = qClose != null ? qClose * tqqqShares * fxOn(date) : null;
       /* 期初在投资产 = 循环变量更新**之前**的三段之和（Dietz 的 BMV）。
@@ -6361,6 +6550,10 @@ const applyMode = (mode, skipDraw) => {
       cumStock: Math.round(cumStock), cumFund: Math.round(cumFund),
       cumAll: Math.round(cumStock + cumFund),
       lastDen: Math.round(days.length ? days[days.length - 1].cny : 0),
+      /* 实时补点内部状态（?cpdebug=1 排查「今天格」用）：
+       rtFillDate/rtFillVal = 今天（美股交易日）补的 IBKR 段权益；
+       anchorDelta = 官方净值锚定修正；closeFills = 中间缺快照日的收盘价补点。 */
+      rtFillDate, rtFillVal, anchorDelta, closeFills,
     };
   }
 
@@ -8295,8 +8488,15 @@ fundAmount += f.amount;
         h, price: pAcct, pTrade, pAcct, prevClose, qty, cost, mult, src,
         value, tradeValue, pnl, pnlRatio, todayPnl, todayPct,
         tradeChgUsd, tradePct, pctBase,
-        /* 完整日线序列（Alpaca），收益日历 `TRADE_POS.stockEquityOn(date)` 按日期估值时要用 */
-        series: (qq && qq.stock && qq.stock[k] && qq.stock[k].series) || null,
+        /* 完整日线序列（Alpaca），收益日历 `TRADE_POS.stockEquityOn(date)` 按日期估值时要用。
+        ⚠️ 期权行必须取**期权自己的**日线（qq.opt[occ].series，与上面 ①′ 块 pAcct 同源）——
+        原来取 qq.stock[k]（k = 压平后的 OCC 码，如 'ORCL261016C00145000'，不在 qq.stock 里）
+        → 恒为 null → stockEquityOn 把期权行**整行跳过** → anchorDelta 把期权市值当成
+        「官方净值独有项」吸走，再与 rtStockCny 里的期权现值重复计量
+        （实测 10-13 今天格凭空 −1,546 = 期权 −226.5 USD 的市值，用户 报的 bug）。 */
+        series: (h.opt
+          ? ((qq && qq.opt && qq.opt[h.occ] && qq.opt[h.occ].series) || null)
+          : ((qq && qq.stock && qq.stock[k] && qq.stock[k].series) || null)),
         // 排序键 + 交易页要用：code/name/valueCny(账户市值) / pnlCny(累计) / tradeValueCny / tradeChgCny
         code: h.code, name: h.name,
         valueCny: cny(value), pnlCny: cny(pnl), todayCny: cny(todayPnl),
@@ -9001,6 +9201,11 @@ fundAmount += f.amount;
       }
     }
     aoState.series = aoSeries;
+    /* 房产数据（房天下成交记录，fund_holdings.json 的 _property）→ 「其它」tab 的
+       估值曲线 + 成交列表用（见 renderAoPropChart / renderAoPropList）。 */
+    aoState.prop = (fundH && fundH._property && Array.isArray(fundH._property.deals) && fundH._property.deals.length)
+      ? { community: fundH._property.community || {}, deals: fundH._property.deals.slice() }
+      : null;
     return aoSeries;
     }
     rebuildAoSeries();
@@ -9130,6 +9335,7 @@ fundAmount += f.amount;
     if (typeof renderTradeList === 'function') renderTradeList();
     aoState.ready = true;
     drawAoChart();
+    if (aoState.mode === 'other') renderAoOther();   // 数据就绪时若正停在「其它」tab，补画
 
     /* ---- 资金明细弹窗数据：三类账户的每日净值序列（从两个 JSON 读取） ---- */
     // 证券：IBKR 每日净值 totalNetValueDaily，单位 USD（账户本币，弹窗直接显示美元）

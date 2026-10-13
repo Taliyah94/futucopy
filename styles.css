@@ -1243,6 +1243,96 @@ html, body {
   padding: 40px 20px; text-align: center;
   font-size: 13px; line-height: 1.9; color: var(--text-3);
 }
+/* ================= 「我的」页面（复刻富途个人中心 · 2026-10-13） =================
+   浅色页 + 白卡圆角 + 彩色圆角图标，布局照富途「我的」：头像区 → 会员黑卡 →
+   6 宫格快捷入口 → 4 组菜单（组间 10px 留白）。菜单行暂为视觉复刻，未接功能。 */
+.me-view {
+  flex: 1 1 auto; min-width: 0;
+  display: flex; flex-direction: column;
+  background: #f5f6f8;                /* 比 --bg 再灰一档，白卡才浮得起来（富途同款） */
+  overflow: hidden;
+}
+.me-view[hidden] { display: none !important; }
+.me-page {
+  flex: 1; overflow-y: auto;
+  max-width: 520px; width: 100%; margin: 0 auto;
+  padding: 28px 16px 40px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+/* ---- 头像区 ---- */
+.me-profile { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 6px 0; }
+.me-profile__avatar {
+  width: 64px; height: 64px; border-radius: 50%;
+  background: linear-gradient(135deg, #ffb64d, #ff8f1f);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 28px; font-weight: 700; color: #fff;
+  box-shadow: 0 4px 12px rgba(255, 143, 31, .3);
+}
+.me-profile__name { font-size: 19px; font-weight: 700; color: var(--text); line-height: 1.3; }
+.me-profile__id { font-size: 12px; color: var(--text-3); }
+/* ---- 会员黑卡（富途深蓝紫渐变） ---- */
+.me-vip {
+  display: flex; align-items: center; gap: 10px;
+  border-radius: 12px; padding: 13px 14px;
+  background: linear-gradient(100deg, #46568c 0%, #26314f 100%);
+  color: #fff;
+}
+.me-vip__badge {
+  width: 26px; height: 26px; border-radius: 7px; flex: none;
+  background: linear-gradient(135deg, #f8dca6, #d9a44f);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px; font-weight: 800; color: #4a3418; font-style: italic;
+}
+.me-vip__text { flex: 1; font-size: 14px; font-weight: 600; letter-spacing: .2px; }
+.me-vip__btn {
+  flex: none; border: 0; border-radius: 999px; padding: 6px 14px;
+  background: #fff; color: #26314f;
+  font: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
+}
+.me-vip__btn:hover { background: #f0f2f8; }
+/* ---- 6 宫格快捷入口 ---- */
+.me-quick {
+  background: var(--panel); border-radius: 12px;
+  display: grid; grid-template-columns: repeat(3, 1fr);
+  padding: 14px 6px 8px;
+}
+.me-quick__item {
+  display: flex; flex-direction: column; align-items: center; gap: 7px;
+  padding: 8px 4px 12px; border: 0; background: none; cursor: pointer;
+  font: inherit; color: var(--text-2); border-radius: 10px;
+}
+.me-quick__item:hover { background: var(--panel-2); }
+.me-quick__icon {
+  width: 46px; height: 46px; border-radius: 13px;
+  display: flex; align-items: center; justify-content: center; color: #fff;
+}
+.me-quick__icon svg { width: 24px; height: 24px; }
+.me-quick__icon--shop   { background: #4c8dff; }
+.me-quick__icon--gift   { background: #ff8f1f; }
+.me-quick__icon--coupon { background: #ffc53d; }
+.me-quick__icon--star   { background: #ffb224; }
+.me-quick__icon--bell   { background: #ff7a45; }
+.me-quick__icon--clock  { background: #36c6b8; }
+.me-quick__label { font-size: 12px; line-height: 1; }
+/* ---- 菜单组（白卡，行分隔线） ---- */
+.me-menu { background: var(--panel); border-radius: 12px; overflow: hidden; }
+.me-menu__row {
+  display: flex; align-items: center; gap: 12px; width: 100%;
+  padding: 0 14px; height: 52px;
+  border: 0; background: none; cursor: pointer;
+  font: inherit; font-size: 15px; color: var(--text); text-align: left;
+}
+.me-menu__row + .me-menu__row { border-top: 1px solid #f0f2f5; }
+.me-menu__row:hover { background: var(--panel-2); }
+.me-menu__icon { flex: none; display: flex; }
+.me-menu__icon svg { width: 22px; height: 22px; }
+.me-menu__label { flex: 1; }
+.me-menu__arrow { flex: none; display: flex; color: #c8cdd6; }
+.me-menu__arrow svg { width: 16px; height: 16px; }
+/* 手机：主区被底栏占位，页面底部多留空间 */
+@media (max-width: 720px) {
+  .me-page { padding: 20px 12px 28px; }
+}
 /* 美股榜：7 列定宽表。窄屏整体横向滚动，不换行（宁可横滑也不要挤成一团）。 */
 .us-top { padding: 0 16px; min-width: 780px; }
 .us-top__hd, .us-top__row {
@@ -1307,12 +1397,6 @@ html, body {
 }
 /* 贴右边缘的行业标签：span 自身贴容器右边缘、向左延伸（否则从容器左侧往右长会被画布裁掉） */
 .ust-heat__cat.is-r span { position: absolute; right: 0; top: 0; border-radius: 0 0 0 6px; }
-.ust-heat__legend {
-  display: flex; flex-wrap: wrap; gap: 14px;
-  padding: 8px 2px 0; font-size: 11px; color: var(--text-3);
-}
-.ust-heat__legend .up { color: var(--up); }
-.ust-heat__legend .down { color: var(--down); }
 /* 窄屏专用：图下方一行行业清单（图内不放标签，见 renderUsTopHeatmap 的 narrow 分支） */
 .ust-heat__catlist { display: flex; flex-wrap: wrap; gap: 6px 12px; padding: 6px 2px 0; font-size: 11px; }
 .ust-heat__catlist span { color: var(--text-2); white-space: nowrap; }

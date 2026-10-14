@@ -1288,14 +1288,17 @@ def dump_all_stocks(obj):
 
 
 # ---------------------------------------------------------------------------
-# FMP sector / industry 缓存（fetch_fmp_profiles.py 抓，2026-10-12 起；
-# 2026-10-14 改为只维护市值前 200：日常补指数调仓新进 + asof 超 30 天重核对）
+# FMP 行业 + 收盘价缓存（fetch_fmp_profiles.py 抓，2026-10-12 起；
+# 2026-10-14 改为「市值前 100 · 每天抓行业 + 收盘价」，见下方说明）
 #
-# 缓存只含 all_stocks.json 市值前 200 的条目（symbol → {fmpSector,
-# fmpIndustry, asof}）；掉出前 200 的会被 fetch_fmp_profiles.py 剪掉。
-# 本脚本每日**重生成** all_stocks.json，会把行内 fmp 字段冲掉 → 每次生成后
-# 调用 attach_fmp_cache 把缓存合并进行内，保证「昨天抓的今天还在」；
-# 反过来 200 名以外的行因为没有缓存条目，旧 fmp 字段不会被带回（符合预期）。
+# 缓存只含 all_stocks.json 市值前 100 的条目（symbol → {fmpSector,
+# fmpIndustry, price, asof}）；掉出前 100 的会被 fetch_fmp_profiles.py 剪掉。
+# 本脚本每日**重生成** all_stocks.json，会把行内 fmp 字段和 p 都冲掉 → 每次生成后
+# 调用 attach_fmp_cache 把缓存合并进行内（**含用 FMP 收盘价覆盖 p**），保证
+# 「昨天抓的今天还在」；反过来 100 名以外的行因为没有缓存条目，旧 fmp 字段不会被
+# 带回、p 保持 historyofmarket 源值（符合预期）。
+# ⚠️ attach_fmp_cache 必须覆盖 p：否则每天 23:00 本脚本重生成后，前 100 的
+#    FMP 收盘价会消失，直到次日 05:00 的 FMP workflow 才回来（一天里来回横跳）。
 # 缓存文件不存在 = 还没开始抓 = 空操作。
 # ---------------------------------------------------------------------------
 FMP_CACHE_FILE = "fmp_profiles.json"
@@ -1317,7 +1320,15 @@ def load_fmp_cache(path):
 
 def attach_fmp_cache(rows, cache):
     """把 FMP 缓存合并进 all_stocks 行（就地改 rows）：命中 symbol 补
-    fmpSector / fmpIndustry。返回补上的条数（供顶层 nFmp）。"""
+    fmpSector / fmpIndustry，并**用缓存收盘价覆盖 p**。返回补上的条数（供顶层 nFmp）。
+
+    ⚠️ 为什么要在这里也覆盖 p（用户 2026-10-14 定稿「前 100 的现价用 FMP 收盘价」）：
+    北京 05:00 的 fetch_fmp_profiles.py 会把 FMP 收盘价写进 all_stocks.json，但本脚本
+    北京 23:00 每日**重新生成** rows（p 回到 historyofmarket 值）→ 若不在这里回填，
+    每天 23:00 之后 FMP 价格就没了、到次日 05:00 才回来，一天里来回横跳。
+    缓存里没有的 symbol（掉出前 100 / 还没抓）→ 保持 historyofmarket 的 p，不动。
+    price 缺失或非正 → 同样不动 p（铁律：没数据就留着，绝不写 0）。
+    """
     if not cache:
         return 0
     n = 0
@@ -1327,6 +1338,9 @@ def attach_fmp_cache(rows, cache):
             continue
         r["fmpSector"] = e.get("fmpSector") if e.get("fmpSector") is not None else None
         r["fmpIndustry"] = e.get("fmpIndustry") if e.get("fmpIndustry") is not None else None
+        px = e.get("price")
+        if isinstance(px, (int, float)) and px > 0:
+            r["p"] = round(float(px), 2)
         n += 1
     return n
 

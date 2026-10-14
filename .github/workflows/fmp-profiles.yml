@@ -1,22 +1,42 @@
-name: 抓取 FMP 行业分类（市值前 200）
+name: 抓取 FMP 行业与收盘价（市值前 100）
 
+# 每日自动：北京时间 05:00（= UTC 21:00，前一天晚上）。
+#   ⚠️ 选这个时刻是因为美股 16:00 ET 收盘 = 北京 04:00（夏令时）/ 05:00（冬令时），
+#      所以夏令时下 05:00 拿到的是**收盘后 1 小时**的 FMP price = 当日收盘价；
+#      冬令时（11 月第一个周日起）UTC 21:00 恰好等于美东 16:00 收盘那一刻，
+#      若发现偶尔取到盘中价，把 cron 往后挪一小时即可（"0 22 * * *" = 北京 06:00）。
+#      另一个 workflow（抓取基金持仓与净值）在北京 23:00 跑，会重新生成
+#      all_stocks.json —— 它调用的 attach_fmp_cache 已同步改成「命中缓存就
+#      一并覆盖 p」，所以 FMP 收盘价全天都在，不会被冲掉。
+#
 # 手动触发：Actions 标签页 → 本 workflow → Run workflow。
 # 可选输入（一般全部留空用默认值即可）：
-#   scope     —— 维护市值前 N 只（默认 200；前端热力图只取前 100，200 绰绰有余）。
-#   stale-days—— 缓存超过 N 天 → 重抓核对行业是否变类（默认 30；填 0 = 强制全量重核对）。
-#   limit     —— 单轮最多抓取个数（默认 200；FMP 免费额度 250 次/天，留余量）。
-#   apikey    —— FMP API Key。**推荐**在仓库 Settings → Secrets and variables →
-#                Actions 添加 FMP_API_KEY（只需配一次，之后本输入框留空即可）；
-#                没配 secret 时才需要在这里粘贴 key。
+#   scope       —— 维护市值前 N 只（默认 100）。
+#   refresh-days—— 收盘价缓存超过 N 天重抓（默认 1 = 每天；0=强制全量）。
+#   stale-days  —— 行业缓存超过 N 天重抓核对是否变类（默认 30）。
+#                  收盘价与行业来自同一次请求 → 实际取两者更严格的那个。
+#   limit       —— 单轮最多抓取个数（默认 200；FMP 免费额度 250 次/天，留余量）。
+#   apikey      —— FMP API Key。**推荐**在仓库 Settings → Secrets and variables →
+#                  Actions 添加 FMP_API_KEY（只需配一次，之后本输入框留空即可）；
+#                  没配 secret 时才需要在这里粘贴 key。
 on:
+  # 北京 05:00 = UTC 21:00（前一天晚上；cron 用 UTC；GitHub 定时不保证准点，通常有几分钟延迟）
+  # 此时美股已收盘（对应美东 17:00 前一交易日）→ FMP profile 的 price 就是当日收盘价。
+  schedule:
+    - cron: "0 21 * * *"
+
   workflow_dispatch:
     inputs:
       scope:
-        description: "维护市值前 N 只（默认 200）"
+        description: "维护市值前 N 只（默认 100）"
         required: false
-        default: "200"
+        default: "100"
+      refresh-days:
+        description: "收盘价超过 N 天重抓（默认 1 = 每天）"
+        required: false
+        default: "1"
       stale-days:
-        description: "缓存超过 N 天重抓核对（默认 30；0=强制全量）"
+        description: "行业超过 N 天重抓核对（默认 30；0=强制全量）"
         required: false
         default: "30"
       limit:
@@ -34,7 +54,7 @@ permissions:
 jobs:
   fetch:
     runs-on: ubuntu-latest
-    # 200 个 × (0.35s 间隔 + 请求耗时 + 偶发重试) 通常 3~5 分钟；留足余量
+    # 100 个 × (0.35s 间隔 + 请求耗时 + 偶发重试) 通常 1~2 分钟；留足余量
     timeout-minutes: 20
     steps:
       - name: 检出仓库
@@ -47,7 +67,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: 抓取 FMP sector / industry（市值前 200，核对替换/补缺）
+      - name: 抓取 FMP 行业 + 收盘价（市值前 100，收盘价覆盖 all_stocks.json 的 p）
         env:
           FMP_API_KEY: ${{ secrets.FMP_API_KEY || github.event.inputs.apikey }}
         run: |
@@ -56,7 +76,8 @@ jobs:
             exit 1
           fi
           python3 fetch_fmp_profiles.py \
-            --scope "${{ github.event.inputs.scope || '200' }}" \
+            --scope "${{ github.event.inputs.scope || '100' }}" \
+            --refresh-days "${{ github.event.inputs.refresh-days || '1' }}" \
             --stale-days "${{ github.event.inputs.stale-days || '30' }}" \
             --limit "${{ github.event.inputs.limit || '200' }}"
 
@@ -68,6 +89,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "内容无变化，跳过提交"
           else
-            git commit -m "chore: 更新 FMP 行业分类（市值前200）$(date +'%Y-%m-%d')"
+            git commit -m "chore: 更新 FMP 行业与收盘价（市值前100）$(date +'%Y-%m-%d')"
             git push
           fi

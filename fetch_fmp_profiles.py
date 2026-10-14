@@ -1,50 +1,66 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-抓取 all_stocks.json **市值前 N 只**（默认 200）的 FMP sector / industry，
-与 JSON 现况核对：不一样就替换、空着就补上，写回 all_stocks.json。
+抓取 all_stocks.json **市值前 N 只**（默认 100）的 FMP **行业 + 收盘价**，
+与 JSON 现况核对：行业不一样就替换、空着就补上；**收盘价覆盖行内 p**（用户
+2026-10-14 定稿：historyofmarket 的现价由 FMP 收盘价替换），写回 all_stocks.json。
 
 用途
 ----
 选股器「全部个股」= S&P 500 + Nasdaq 100 合并去重（all_stocks.json，由
 fund_holdings.py 每日生成，行序 = 市值降序）。本脚本给市值前 N 只补一套
-FMP（Financial Modeling Prep）的行业分类，与 historyofmarket 的 ind 是两套
-口径、并存不冲突：
+FMP（Financial Modeling Prep）的行业分类 + 最新收盘价，与 historyofmarket
+的 ind / p 是两套口径，前 N 只以 FMP 为准：
 
     {"c": "AAPL", "n": "苹果", "ind": "Technology",
-     "mc": ..., "p": ..., "ret": ...,
+     "mc": ..., "p": 228.52, "ret": ...,
      "fmpSector": "Technology", "fmpIndustry": "Consumer Electronics"}
 
 接口：FMP stable profile（旧 api/v3/profile 已于 2025-08-31 停用）
     GET https://financialmodelingprep.com/stable/profile?symbol=AAPL&apikey=KEY
-    → [{"symbol": "AAPL", "sector": "Technology", "industry": "Consumer Electronics", ...}]
+    → [{"symbol": "AAPL", "sector": "Technology",
+        "industry": "Consumer Electronics", "price": 228.52, ...}]
+    一次请求同时给到 sector / industry / **price**（收盘价）→ 不额外耗额度。
 
-范围（用户 2026-10-14 定稿：只维护市值前 200）
+范围（用户 2026-10-14 定稿：只维护市值前 100）
 ----
-· 只抓市值前 N 只（--scope，默认 200；all_stocks.json 行序即市值降序，
+· 只抓市值前 N 只（--scope，默认 100；all_stocks.json 行序即市值降序，
   防御性再按 mc 排一次）；
-· 前端「板块」热力图只取市值前 100 分组 → 前 200 覆盖绰绰有余；
+· 前端「板块」热力图与「全部个股」排序都只看头部 → 前 100 覆盖足够；
 · 掉出前 N 的票：缓存条目删除、all_stocks.json 行内 fmp 字段剥掉
   （fund_holdings.py 每日重生成 + attach_fmp_cache 也只会带回前 N 的数据，
-  两边一致，不会春风吹又生）。
+  两边一致，不会春风吹又生）。**p 不还原**：这些行每天由 fund_holdings.py
+  用 historyofmarket 现值重新生成，本来就是源值。
 
-每日节奏（FMP 免费 key 250 次/天）
+每日节奏（FMP 免费 key 250 次/天；前 100 → 约 100 次/天，留足重试余量）
 ----
-每轮待抓 = ① 前 N 里**没抓过**的（指数调仓新进）+
-          ② 抓过但 **asof 超过 --stale-days 天**的（默认 30，月度重核对——
-             FMP 偶尔调整行业分类，月度频率足够，不必每日全量烧额度）。
---stale-days 0 = 强制全量重核对（本次切换范围时跑过一次，之后日常 30 天）。
+**收盘价必须每天刷新**（--refresh-days，默认 1），行业只需月度核对
+（--stale-days，默认 30）。两者来自**同一次请求**，故取更严格的那个：
+    待抓 = 没抓过 + asof 早于 min(refresh-days, stale-days) 天前
+→ 日常实际是**每天全量重抓前 100**（价格要新鲜；行业顺带核对，无额外成本）。
+--stale-days 0 或 --refresh-days 0 = 强制全量重抓。
 
-核对 / 替换 / 补缺（写回规则，用户 2026-10-14 定稿）
+核对 / 替换 / 补缺（写回规则）
 ----
-抓到的 (sector, industry) 与 JSON 现况（行内 fmp 字段，缺失时回退看缓存
+行业：抓到的 (sector, industry) 与 JSON 现况（行内 fmp 字段，缺失时回退看缓存
 旧值）比对：
   · 旧值空、新值非空            → 补上（filled）；
   · 新旧都非空且不同            → 替换（changed，stderr 列新旧值名单）；
   · 相同                        → 不动（same）。
-写回 all_stocks.json：前 N 行用缓存（核对后的值）**替换**行内 fmp 字段；
-范围外的行**剥掉** fmpSector / fmpIndustry（只维护前 N，旧的清掉）。
-fund_holdings.py 每日重生成会冲掉行内字段，故每次全量回填（双保险）。
+收盘价：抓到且 > 0 → **覆盖**行内 p（保留 2 位小数，与 historyofmarket 同精度）；
+        抓不到（FMP 没这条 / price 缺失）→ **不动 p**（绝不写 0，见项目铁律
+        「没数据就显示 --」：宁可留昨天的真价，也不造一个假的）。
+写回 all_stocks.json：前 N 行用缓存（核对后的值）**替换**行内 fmp 字段 + p；
+范围外的行**剥掉** fmpSector / fmpIndustry。
+
+⚠️ 与 fund_holdings.py 的协同（每日先后顺序，别搞反）
+----
+· 北京 05:00 本脚本跑 → 更新缓存 fmp_profiles.json + 回写 all_stocks.json；
+· 北京 23:00 fund_holdings.py 跑（cron "0 15 * * *"）→ **重新生成** all_stocks.json
+  （p 回到 historyofmarket 值）后调用 attach_fmp_cache —— 该函数已同步改成
+  「命中缓存就一并覆盖 p」→ 一天里任何时刻看，前 N 只的 p 都是 FMP 收盘价。
+  若只改本脚本不改 attach_fmp_cache，每天 23:00 之后 FMP 价格会被冲掉、
+  到次日 05:00 才回来（实测会来回横跳）。
 
 ticker 兼容
 ----
@@ -53,16 +69,20 @@ FMP 确实没数据的 symbol（空数组）也会入缓存（空串），避免
 
 用法
 ----
-  python3 fetch_fmp_profiles.py                    # 日常：补新 + 核对超 30 天的
-  python3 fetch_fmp_profiles.py --stale-days 0     # 强制全量重核对（默认 200 个）
-  python3 fetch_fmp_profiles.py --scope 100        # 改维护范围（默认 200）
+  python3 fetch_fmp_profiles.py                    # 日常：前 100，行业 + 收盘价
+  python3 fetch_fmp_profiles.py --refresh-days 0   # 强制全量重抓（默认 100 个）
+  python3 fetch_fmp_profiles.py --scope 200        # 改维护范围（默认 100）
   python3 fetch_fmp_profiles.py --limit 5          # 单轮最多抓 5 个（试跑）
   python3 fetch_fmp_profiles.py --limit 0          # 不抓，只做缓存剪枝/回写
   python3 fetch_fmp_profiles.py --apikey XXXX      # 或设环境变量 FMP_API_KEY
 
-CI：手动 workflow .github/workflows/fmp-profiles.yml（workflow_dispatch）。
-    apikey 输入框**留空**即可——在仓库 Settings → Secrets and variables →
-    Actions 配一次 FMP_API_KEY，workflow 优先读 Secret。
+CI：.github/workflows/fmp-profiles.yml
+    · **定时** cron "0 21 * * *" = 北京 05:00（对应美东收盘后 1 小时，取到的是
+      上一交易日收盘价）。注意夏令时：UTC 21:00 在夏令时为美东 17:00（收盘后
+      1 小时，稳妥）；冬令时为美东 16:00 = 恰好收盘那一刻，可能偶发取到盘中价，
+      真发现不对就把 cron 往后挪一小时（"0 22 * * *" = 北京 06:00）；
+    · 也可手动 Run workflow。apikey 输入框**留空**即可——在仓库 Settings →
+      Secrets and variables → Actions 配一次 FMP_API_KEY，workflow 优先读 Secret。
 """
 
 import argparse
@@ -122,13 +142,29 @@ def _is_fatal(code, txt):
         "invalid api", "unauthorized", "forbidden"))
 
 
+def _to_price(v):
+    """把 FMP 的 price 字段转成 float；缺失/非数字/非正 → None（绝不返回 0）。
+
+    ⚠️ 项目铁律「没数据就显示 --」：价格拿不到必须留 None 让上层**不改** p，
+    绝不能兜一个 0 或负数进去（那是最像真的假数）。
+    """
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    if not (f > 0) or f != f:      # 排除 0 / 负数 / NaN
+        return None
+    return f
+
+
 def fetch_fmp_profile(symbol, apikey, retries=2, timeout=20):
-    """抓单个 symbol 的 (sector, industry)。
+    """抓单个 symbol 的 (sector, industry, price)。
 
     返回：
-      (s, i)  成功（s/i 可能为空串 —— FMP 有这条记录但没填行业）；
-      ("", "") FMP 确实没这个票的数据（空数组）→ 入缓存，避免每日重抓；
-      None     网络/服务端问题 → 不入缓存，次日再试。
+      (s, i, px) 成功（s/i 可能为空串 —— FMP 有这条记录但没填行业；
+                      px 可能是 None —— 没给价格，此时**不要**动行内 p）；
+      ("", "", None) FMP 确实没这个票的数据（空数组）→ 入缓存，避免每日重抓；
+      None           网络/服务端问题 → 不入缓存，次日再试。
     抛出 FmpFatal：额度/key 问题，调用方应熔断整轮。
     """
     variants = [symbol]
@@ -148,14 +184,16 @@ def fetch_fmp_profile(symbol, apikey, retries=2, timeout=20):
             except Exception:  # noqa: BLE001 - 非 JSON（如 Premium 纯文本报错）
                 obj = None
             if isinstance(obj, list) and obj and isinstance(obj[0], dict):
-                return (str(obj[0].get("sector") or ""), str(obj[0].get("industry") or ""))
+                d = obj[0]
+                return (str(d.get("sector") or ""), str(d.get("industry") or ""),
+                        _to_price(d.get("price")))
             if isinstance(obj, list) and not obj:
                 saw_empty = True
                 break                         # 该变体无数据 → 换下一个变体，不必重试
             # 其余（超时 / 5xx / 非 JSON）→ 退避后重试同一变体
             if attempt < retries:
                 time.sleep(1.5 * attempt)
-    return ("", "") if saw_empty else None
+    return ("", "", None) if saw_empty else None
 
 
 def _mc_of(r):
@@ -166,18 +204,21 @@ def _mc_of(r):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(
-        description="抓取 all_stocks.json 市值前 N 只的 FMP sector/industry，"
-                    "与 JSON 核对后替换/补缺并写回")
+        description="抓取 all_stocks.json 市值前 N 只的 FMP 行业 + 收盘价，"
+                    "与 JSON 核对后替换/补缺并写回（收盘价覆盖行内 p）")
     ap.add_argument("--all-stocks", default="all_stocks.json",
                     help="全部个股 JSON 路径（默认 all_stocks.json）")
     ap.add_argument("--cache", default=None,
                     help="FMP 缓存路径（默认 <all-stocks 同目录>/fmp_profiles.json）")
     ap.add_argument("--apikey", default=None,
                     help="FMP API Key（或环境变量 FMP_API_KEY）")
-    ap.add_argument("--scope", type=int, default=200,
-                    help="只维护市值前 N 只（默认 200）")
+    ap.add_argument("--scope", type=int, default=100,
+                    help="只维护市值前 N 只（默认 100）")
+    ap.add_argument("--refresh-days", type=int, default=1,
+                    help="收盘价：缓存超过 N 天 → 重抓（默认 1 = 每天）")
     ap.add_argument("--stale-days", type=int, default=30,
-                    help="缓存 asof 超过 N 天 → 重抓核对（默认 30；0=强制全量重核对）")
+                    help="行业：缓存 asof 超过 N 天 → 重抓核对（默认 30）。"
+                         "实际取 min(refresh-days, stale-days)，因为两者同一次请求")
     ap.add_argument("--limit", type=int, default=200,
                     help="单轮最多抓取个数（默认 200；FMP 免费额度 250/天）")
     ap.add_argument("--sleep", type=float, default=0.35,
@@ -226,17 +267,22 @@ def main(argv=None):
     n_before = len(cache)
     cache = {k: v for k, v in cache.items() if k in in_scope}
     n_pruned = n_before - len(cache)
-    force_all = args.stale_days <= 0
-    cutoff = "9999-99-99" if force_all else (
-        _dt.date.today() - _dt.timedelta(days=args.stale_days)).isoformat()
+    force_all = args.stale_days <= 0 or args.refresh_days <= 0
+    # 收盘价要每天新鲜（refresh-days），行业只需月度核对（stale-days）；
+    # 两者来自**同一次 profile 请求** → 取更严格的那个（min），等于每天全量重抓。
+    days = [d for d in (args.stale_days, args.refresh_days) if d > 0]
+    cutoff = "9999-99-99" if (force_all or not days) else (
+        _dt.date.today() - _dt.timedelta(days=min(days))).isoformat()
     todo, reason = [], {}
     for c in codes:
         e = cache.get(c)
         if not e:
             todo.append(c)                       # 没抓过（调仓新进 / 首次）
             reason[c] = "new"
-        elif force_all or str(e.get("asof") or "") < cutoff:
-            todo.append(c)                       # 太旧 → 重抓核对行业变类
+        # ⚠️ 用 <= 不是 <：refresh-days=1（每天）时 cutoff = 昨天，
+        #    asof=昨天 就该重抓；写成 < 会变成「隔一天才抓一次」（实测 off-by-one）。
+        elif force_all or str(e.get("asof") or "") <= cutoff:
+            todo.append(c)                       # 太旧 → 重抓（刷新收盘价 + 核对行业变类）
             reason[c] = "stale"
     if args.limit >= 0:
         todo = todo[:args.limit]
@@ -285,21 +331,31 @@ def main(argv=None):
                 sys.stderr.write("  [替换] %s: %s → %s\n" % (sym, old_i, res[1] or "-"))
             elif old_i:
                 stat["same"] += 1
+            e_old = cache.get(sym) or {}
             cache[sym] = {
                 "fmpSector": res[0],
                 "fmpIndustry": res[1],
+                # 收盘价：本轮拿到就更新；拿不到（res[2] is None）→ **沿用缓存旧价**
+                # 并把 asof 仍记为今天（避免次日把它当"缺价"反复重抓同一只）。
+                # ⚠️ 若连旧价都没有 → 写 None，上层写回时**不动**行内 p（不编造）。
+                "price": res[2] if res[2] is not None else e_old.get("price"),
                 "asof": _dt.date.today().isoformat(),
             }
+            if res[2] is not None:
+                stat["price"] = stat.get("price", 0) + 1
             fetched.add(sym)
             done += 1
             if done <= 3 or done % 25 == 0:
-                sys.stderr.write("  [%d/%d] %s → %s / %s\n"
-                                 % (i, len(todo), sym, res[0] or "-", res[1] or "-"))
+                sys.stderr.write("  [%d/%d] %s → %s / %s / %s\n"
+                                 % (i, len(todo), sym, res[0] or "-", res[1] or "-",
+                                    ("%.2f" % res[2]) if res[2] is not None else "无价"))
         if i < len(todo):
             time.sleep(args.sleep)
 
-    # ④ 写回 all_stocks.json：前 N 行用缓存（核对后的值）替换；范围外剥掉 fmp 字段
-    n_attached = 0
+    # ④ 写回 all_stocks.json：前 N 行用缓存（核对后的值）替换行业 + **收盘价覆盖 p**；
+    #    范围外剥掉 fmp 字段（p 保持 historyofmarket 源值，不还原也不覆盖）
+    n_attached, n_price = 0, 0
+    price_lines = []
     for r in rows:
         c = str((r or {}).get("c") or "").strip().upper()
         if c in in_scope:
@@ -308,11 +364,22 @@ def main(argv=None):
                 r["fmpSector"] = e.get("fmpSector") if e.get("fmpSector") is not None else None
                 r["fmpIndustry"] = e.get("fmpIndustry") if e.get("fmpIndustry") is not None else None
                 n_attached += 1
+                px = e.get("price")
+                if isinstance(px, (int, float)) and px > 0:
+                    new_p = round(float(px), 2)
+                    old_p = r.get("p")
+                    if old_p != new_p:
+                        if len(price_lines) < 12:
+                            price_lines.append("    %s: %s → %.2f" % (c, old_p, new_p))
+                        n_price += 1
+                    r["p"] = new_p
+                # px 缺失 / ≤0 → 一个字都不动（铁律：没数据就留着，不写 0）
         else:
             r.pop("fmpSector", None)
             r.pop("fmpIndustry", None)
     doc["rows"] = rows
     doc["nFmp"] = n_attached
+    doc["nFmpPrice"] = n_price
     if not args.no_write:
         try:
             with open(cache_path, "w", encoding="utf-8") as f:
@@ -329,15 +396,19 @@ def main(argv=None):
         left_stale = len([c for c in codes if c in cache and c not in fetched])
     else:
         left_stale = len([c for c in codes
-                          if cache.get(c) and str(cache[c].get("asof") or "") < cutoff])
-    sys.stderr.write("完成：新抓 %d（补缺 %d、替换 %d、未变 %d），失败 %d，缓存共 %d；"
-                     "已回填 all_stocks.json %d/%d 只（范围外剥掉旧 fmp 字段）；"
+                          if cache.get(c) and str(cache[c].get("asof") or "") <= cutoff])
+    sys.stderr.write("完成：新抓 %d（补缺 %d、替换 %d、未变 %d、拿到收盘价 %d），失败 %d，缓存共 %d；"
+                     "已回填 all_stocks.json 行业 %d/%d 只、**收盘价覆盖 p %d 只**（范围外剥掉旧 fmp 字段）；"
                      "还剩 新进 %d + 待重核 %d，耗时 %.0fs\n"
-                     % (done, stat["filled"], stat["changed"], stat["same"], len(failed),
-                        len(cache), n_attached, len(codes), left_new, left_stale,
+                     % (done, stat["filled"], stat["changed"], stat["same"],
+                        stat.get("price", 0), len(failed),
+                        len(cache), n_attached, len(codes), n_price, left_new, left_stale,
                         time.time() - t0))
     if changed_lines:
-        sys.stderr.write("替换名单（JSON 旧值 → FMP 新值）：\n%s\n" % "\n".join(changed_lines))
+        sys.stderr.write("行业替换名单（JSON 旧值 → FMP 新值）：\n%s\n" % "\n".join(changed_lines))
+    if price_lines:
+        sys.stderr.write("收盘价覆盖名单（historyofmarket 旧 p → FMP 收盘价，"
+                         "仅列前 %d 条）：\n%s\n" % (len(price_lines), "\n".join(price_lines)))
     if failed:
         sys.stderr.write("失败名单：%s\n" % ", ".join(failed[:50]))
     # 有待抓且一个都没成功 → 非零退出，方便 CI/手动运行看出问题

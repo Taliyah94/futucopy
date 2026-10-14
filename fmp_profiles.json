@@ -69,6 +69,11 @@
     "fmpIndustry": "Regulated Electric",
     "fmpSector": "Utilities"
   },
+  "AES": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Diversified Utilities",
+    "fmpSector": "Utilities"
+  },
   "AFL": {
     "asof": "2026-10-12",
     "fmpIndustry": "Insurance - Life",
@@ -79,20 +84,45 @@
     "fmpIndustry": "Insurance - Diversified",
     "fmpSector": "Financial Services"
   },
+  "AIZ": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Insurance - Property & Casualty",
+    "fmpSector": "Financial Services"
+  },
   "AJG": {
     "asof": "2026-10-12",
     "fmpIndustry": "Insurance - Brokers",
     "fmpSector": "Financial Services"
+  },
+  "AKAM": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Software - Infrastructure",
+    "fmpSector": "Technology"
   },
   "ALAB": {
     "asof": "2026-10-12",
     "fmpIndustry": "Semiconductors",
     "fmpSector": "Technology"
   },
+  "ALB": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Chemicals - Specialty",
+    "fmpSector": "Basic Materials"
+  },
+  "ALGN": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Medical - Devices",
+    "fmpSector": "Healthcare"
+  },
   "ALL": {
     "asof": "2026-10-12",
     "fmpIndustry": "Insurance - Property & Casualty",
     "fmpSector": "Financial Services"
+  },
+  "ALLE": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Security & Protection Services",
+    "fmpSector": "Industrials"
   },
   "ALNY": {
     "asof": "2026-10-12",
@@ -149,6 +179,16 @@
     "fmpIndustry": "Insurance - Brokers",
     "fmpSector": "Financial Services"
   },
+  "AOS": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Industrial - Machinery",
+    "fmpSector": "Industrials"
+  },
+  "APA": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Oil & Gas Exploration & Production",
+    "fmpSector": "Energy"
+  },
   "APD": {
     "asof": "2026-10-12",
     "fmpIndustry": "Chemicals - Specialty",
@@ -168,6 +208,16 @@
     "asof": "2026-10-12",
     "fmpIndustry": "Software - Application",
     "fmpSector": "Technology"
+  },
+  "APTV": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Auto - Parts",
+    "fmpSector": "Consumer Cyclical"
+  },
+  "ARE": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "REIT - Office",
+    "fmpSector": "Real Estate"
   },
   "ARES": {
     "asof": "2026-10-12",
@@ -193,6 +243,11 @@
     "asof": "2026-10-12",
     "fmpIndustry": "Semiconductors",
     "fmpSector": "Technology"
+  },
+  "AVY": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Packaging & Containers",
+    "fmpSector": "Consumer Cyclical"
   },
   "AWK": {
     "asof": "2026-10-12",
@@ -224,6 +279,16 @@
     "fmpIndustry": "Banks - Diversified",
     "fmpSector": "Financial Services"
   },
+  "BALL": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Packaging & Containers",
+    "fmpSector": "Consumer Cyclical"
+  },
+  "BAX": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Medical - Instruments & Supplies",
+    "fmpSector": "Healthcare"
+  },
   "BBY": {
     "asof": "2026-10-12",
     "fmpIndustry": "Specialty Retail",
@@ -238,6 +303,16 @@
     "asof": "2026-10-12",
     "fmpIndustry": "Electrical Equipment & Parts",
     "fmpSector": "Industrials"
+  },
+  "BEN": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Asset Management",
+    "fmpSector": "Financial Services"
+  },
+  "BF.B": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Beverages - Wineries & Distilleries",
+    "fmpSector": "Consumer Defensive"
   },
   "BG": {
     "asof": "2026-10-12",
@@ -299,6 +374,11 @@
     "fmpIndustry": "Asset Management",
     "fmpSector": "Financial Services"
   },
+  "BXP": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "REIT - Office",
+    "fmpSector": "Real Estate"
+  },
   "C": {
     "asof": "2026-10-12",
     "fmpIndustry": "Banks - Diversified",
@@ -359,10 +439,20 @@
     "fmpIndustry": "Software - Application",
     "fmpSector": "Technology"
   },
+  "CDW": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Information Technology Services",
+    "fmpSector": "Technology"
+  },
   "CEG": {
     "asof": "2026-10-12",
     "fmpIndustry": "Independent Power Producers",
     "fmpSector": "Utilities"
+  },
+  "CF": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Agricultural Inputs",
+    "fmpSector": "Basic Materials"
   },
   "CFG": {
     "asof": "2026-10-12",
@@ -373,6 +463,16 @@
     "asof": "2026-10-12",
     "fmpIndustry": "Household & Personal Products",
     "fmpSector": "Consumer Defensive"
+  },
+  "CHRW": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Integrated Freight & Logistics",
+    "fmpSector": "Industrials"
+  },
+  "CHTR": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Telecommunications Services",
+    "fmpSector": "Communication Services"
   },
   "CI": {
     "asof": "2026-10-12",
@@ -391,6 +491,11 @@
   },
   "CL": {
     "asof": "2026-10-12",
+    "fmpIndustry": "Household & Personal Products",
+    "fmpSector": "Consumer Defensive"
+  },
+  "CLX": {
+    "asof": "2026-10-14",
     "fmpIndustry": "Household & Personal Products",
     "fmpSector": "Consumer Defensive"
   },
@@ -444,6 +549,11 @@
     "fmpIndustry": "Financial - Data & Stock Exchanges",
     "fmpSector": "Financial Services"
   },
+  "COO": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Medical - Instruments & Supplies",
+    "fmpSector": "Healthcare"
+  },
   "COP": {
     "asof": "2026-10-12",
     "fmpIndustry": "Oil & Gas Exploration & Production",
@@ -469,10 +579,20 @@
     "fmpIndustry": "Specialty Business Services",
     "fmpSector": "Industrials"
   },
+  "CPT": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "REIT - Residential",
+    "fmpSector": "Real Estate"
+  },
   "CRH": {
     "asof": "2026-10-12",
     "fmpIndustry": "Construction Materials",
     "fmpSector": "Basic Materials"
+  },
+  "CRL": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Medical - Diagnostics & Research",
+    "fmpSector": "Healthcare"
   },
   "CRM": {
     "asof": "2026-10-12",
@@ -493,6 +613,11 @@
     "asof": "2026-10-12",
     "fmpIndustry": "Communication Equipment",
     "fmpSector": "Technology"
+  },
+  "CSGP": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Real Estate - Services",
+    "fmpSector": "Real Estate"
   },
   "CSX": {
     "asof": "2026-10-12",
@@ -539,6 +664,11 @@
     "fmpIndustry": "Internet Content & Information",
     "fmpSector": "Communication Services"
   },
+  "DD": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Chemicals",
+    "fmpSector": "Basic Materials"
+  },
   "DDOG": {
     "asof": "2026-10-12",
     "fmpIndustry": "Software - Application",
@@ -548,6 +678,11 @@
     "asof": "2026-10-12",
     "fmpIndustry": "Agricultural - Machinery",
     "fmpSector": "Industrials"
+  },
+  "DECK": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Apparel - Footwear & Accessories",
+    "fmpSector": "Consumer Cyclical"
   },
   "DELL": {
     "asof": "2026-10-12",
@@ -589,6 +724,11 @@
     "fmpIndustry": "Discount Stores",
     "fmpSector": "Consumer Defensive"
   },
+  "DOC": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "REIT - Healthcare Facilities",
+    "fmpSector": "Real Estate"
+  },
   "DOV": {
     "asof": "2026-10-12",
     "fmpIndustry": "Industrial - Machinery",
@@ -598,6 +738,11 @@
     "asof": "2026-10-12",
     "fmpIndustry": "Chemicals",
     "fmpSector": "Basic Materials"
+  },
+  "DPZ": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Restaurants",
+    "fmpSector": "Consumer Cyclical"
   },
   "DRI": {
     "asof": "2026-10-12",
@@ -613,6 +758,11 @@
     "asof": "2026-10-12",
     "fmpIndustry": "Regulated Electric",
     "fmpSector": "Utilities"
+  },
+  "DVA": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Medical - Care Facilities",
+    "fmpSector": "Healthcare"
   },
   "DVN": {
     "asof": "2026-10-12",
@@ -643,6 +793,16 @@
     "asof": "2026-10-12",
     "fmpIndustry": "Regulated Electric",
     "fmpSector": "Utilities"
+  },
+  "EFX": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Consulting Services",
+    "fmpSector": "Industrials"
+  },
+  "EG": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Insurance - Reinsurance",
+    "fmpSector": "Financial Services"
   },
   "EIX": {
     "asof": "2026-10-12",
@@ -683,6 +843,11 @@
     "asof": "2026-10-12",
     "fmpIndustry": "Oil & Gas Exploration & Production",
     "fmpSector": "Energy"
+  },
+  "ERIE": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Insurance - Property & Casualty",
+    "fmpSector": "Financial Services"
   },
   "ES": {
     "asof": "2026-10-12",
@@ -759,8 +924,18 @@
     "fmpIndustry": "Copper",
     "fmpSector": "Basic Materials"
   },
+  "FDS": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Financial - Data & Stock Exchanges",
+    "fmpSector": "Financial Services"
+  },
   "FDX": {
     "asof": "2026-10-12",
+    "fmpIndustry": "Integrated Freight & Logistics",
+    "fmpSector": "Industrials"
+  },
+  "FDXF": {
+    "asof": "2026-10-14",
     "fmpIndustry": "Integrated Freight & Logistics",
     "fmpSector": "Industrials"
   },
@@ -784,6 +959,16 @@
     "fmpIndustry": "Software - Infrastructure",
     "fmpSector": "Technology"
   },
+  "FICO": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Software - Application",
+    "fmpSector": "Technology"
+  },
+  "FIS": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Information Technology Services",
+    "fmpSector": "Technology"
+  },
   "FISV": {
     "asof": "2026-10-12",
     "fmpIndustry": "Information Technology Services",
@@ -804,6 +989,21 @@
     "fmpIndustry": "Hardware, Equipment & Parts",
     "fmpSector": "Technology"
   },
+  "FOX": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Entertainment",
+    "fmpSector": "Communication Services"
+  },
+  "FOXA": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Entertainment",
+    "fmpSector": "Communication Services"
+  },
+  "FRT": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "REIT - Retail",
+    "fmpSector": "Real Estate"
+  },
   "FSLR": {
     "asof": "2026-10-12",
     "fmpIndustry": "Solar",
@@ -814,10 +1014,20 @@
     "fmpIndustry": "Software - Infrastructure",
     "fmpSector": "Technology"
   },
+  "FTV": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Hardware, Equipment & Parts",
+    "fmpSector": "Technology"
+  },
   "GD": {
     "asof": "2026-10-12",
     "fmpIndustry": "Aerospace & Defense",
     "fmpSector": "Industrials"
+  },
+  "GDDY": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Software - Infrastructure",
+    "fmpSector": "Technology"
   },
   "GE": {
     "asof": "2026-10-12",
@@ -829,6 +1039,11 @@
     "fmpIndustry": "Medical - Devices",
     "fmpSector": "Healthcare"
   },
+  "GEN": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Software - Infrastructure",
+    "fmpSector": "Technology"
+  },
   "GEV": {
     "asof": "2026-10-12",
     "fmpIndustry": "Industrial - Machinery",
@@ -838,6 +1053,16 @@
     "asof": "2026-10-12",
     "fmpIndustry": "Drug Manufacturers - General",
     "fmpSector": "Healthcare"
+  },
+  "GIS": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Packaged Foods",
+    "fmpSector": "Consumer Defensive"
+  },
+  "GL": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Insurance - Life",
+    "fmpSector": "Financial Services"
   },
   "GLW": {
     "asof": "2026-10-12",
@@ -849,6 +1074,11 @@
     "fmpIndustry": "Auto - Manufacturers",
     "fmpSector": "Consumer Cyclical"
   },
+  "GNRC": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Industrial - Machinery",
+    "fmpSector": "Industrials"
+  },
   "GOOG": {
     "asof": "2026-10-12",
     "fmpIndustry": "Internet Content & Information",
@@ -858,6 +1088,11 @@
     "asof": "2026-10-12",
     "fmpIndustry": "Internet Content & Information",
     "fmpSector": "Communication Services"
+  },
+  "GPC": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Auto - Parts",
+    "fmpSector": "Consumer Cyclical"
   },
   "GPN": {
     "asof": "2026-10-12",
@@ -884,6 +1119,11 @@
     "fmpIndustry": "Oil & Gas Equipment & Services",
     "fmpSector": "Energy"
   },
+  "HAS": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Leisure",
+    "fmpSector": "Consumer Cyclical"
+  },
   "HBAN": {
     "asof": "2026-10-12",
     "fmpIndustry": "Banks - Regional",
@@ -903,6 +1143,11 @@
     "asof": "2026-10-12",
     "fmpIndustry": "Insurance - Diversified",
     "fmpSector": "Financial Services"
+  },
+  "HII": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Aerospace & Defense",
+    "fmpSector": "Industrials"
   },
   "HLT": {
     "asof": "2026-10-12",
@@ -933,6 +1178,21 @@
     "asof": "2026-10-12",
     "fmpIndustry": "Computer Hardware",
     "fmpSector": "Technology"
+  },
+  "HRL": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Packaged Foods",
+    "fmpSector": "Consumer Defensive"
+  },
+  "HSIC": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Medical - Distribution",
+    "fmpSector": "Healthcare"
+  },
+  "HST": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "REIT - Hotel & Motel",
+    "fmpSector": "Real Estate"
   },
   "HSY": {
     "asof": "2026-10-12",
@@ -974,6 +1234,11 @@
     "fmpIndustry": "Medical - Diagnostics & Research",
     "fmpSector": "Healthcare"
   },
+  "IEX": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Industrial - Machinery",
+    "fmpSector": "Industrials"
+  },
   "IFF": {
     "asof": "2026-10-12",
     "fmpIndustry": "Chemicals - Specialty",
@@ -999,6 +1264,16 @@
     "fmpIndustry": "Software - Application",
     "fmpSector": "Technology"
   },
+  "INVH": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "REIT - Residential",
+    "fmpSector": "Real Estate"
+  },
+  "IP": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Paper, Lumber & Forest Products",
+    "fmpSector": "Basic Materials"
+  },
   "IQV": {
     "asof": "2026-10-12",
     "fmpIndustry": "Medical - Diagnostics & Research",
@@ -1019,9 +1294,24 @@
     "fmpIndustry": "Medical - Instruments & Supplies",
     "fmpSector": "Healthcare"
   },
+  "IT": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Information Technology Services",
+    "fmpSector": "Technology"
+  },
   "ITW": {
     "asof": "2026-10-12",
     "fmpIndustry": "Industrial - Machinery",
+    "fmpSector": "Industrials"
+  },
+  "IVZ": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Asset Management",
+    "fmpSector": "Financial Services"
+  },
+  "J": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Engineering & Construction",
     "fmpSector": "Industrials"
   },
   "JBHT": {
@@ -1038,6 +1328,11 @@
     "asof": "2026-10-12",
     "fmpIndustry": "Construction Materials",
     "fmpSector": "Basic Materials"
+  },
+  "JKHY": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Information Technology Services",
+    "fmpSector": "Technology"
   },
   "JNJ": {
     "asof": "2026-10-12",
@@ -1068,6 +1363,11 @@
     "asof": "2026-10-12",
     "fmpIndustry": "Packaged Foods",
     "fmpSector": "Consumer Defensive"
+  },
+  "KIM": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "REIT - Retail",
+    "fmpSector": "Real Estate"
   },
   "KKR": {
     "asof": "2026-10-12",
@@ -1109,6 +1409,11 @@
     "fmpIndustry": "Insurance - Property & Casualty",
     "fmpSector": "Financial Services"
   },
+  "LDOS": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Information Technology Services",
+    "fmpSector": "Technology"
+  },
   "LEN": {
     "asof": "2026-10-12",
     "fmpIndustry": "Residential Construction",
@@ -1122,6 +1427,11 @@
   "LHX": {
     "asof": "2026-10-12",
     "fmpIndustry": "Aerospace & Defense",
+    "fmpSector": "Industrials"
+  },
+  "LII": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Industrial - Machinery",
     "fmpSector": "Industrials"
   },
   "LIN": {
@@ -1144,6 +1454,11 @@
     "fmpIndustry": "Aerospace & Defense",
     "fmpSector": "Industrials"
   },
+  "LNT": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Regulated Electric",
+    "fmpSector": "Utilities"
+  },
   "LOW": {
     "asof": "2026-10-12",
     "fmpIndustry": "Home Improvement",
@@ -1153,6 +1468,11 @@
     "asof": "2026-10-12",
     "fmpIndustry": "Semiconductors",
     "fmpSector": "Technology"
+  },
+  "LULU": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Apparel - Retail",
+    "fmpSector": "Consumer Cyclical"
   },
   "LUV": {
     "asof": "2026-10-12",
@@ -1179,10 +1499,20 @@
     "fmpIndustry": "Financial - Credit Services",
     "fmpSector": "Financial Services"
   },
+  "MAA": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "REIT - Residential",
+    "fmpSector": "Real Estate"
+  },
   "MAR": {
     "asof": "2026-10-12",
     "fmpIndustry": "Travel Lodging",
     "fmpSector": "Consumer Cyclical"
+  },
+  "MAS": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Construction Materials",
+    "fmpSector": "Basic Materials"
   },
   "MCD": {
     "asof": "2026-10-12",
@@ -1229,6 +1559,16 @@
     "fmpIndustry": "Internet Content & Information",
     "fmpSector": "Communication Services"
   },
+  "MGM": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Gambling, Resorts & Casinos",
+    "fmpSector": "Consumer Cyclical"
+  },
+  "MKC": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Packaged Foods",
+    "fmpSector": "Consumer Defensive"
+  },
   "MLM": {
     "asof": "2026-10-12",
     "fmpIndustry": "Construction Materials",
@@ -1248,6 +1588,11 @@
     "asof": "2026-10-12",
     "fmpIndustry": "Tobacco",
     "fmpSector": "Consumer Defensive"
+  },
+  "MOS": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Agricultural Inputs",
+    "fmpSector": "Basic Materials"
   },
   "MPC": {
     "asof": "2026-10-12",
@@ -1324,6 +1669,11 @@
     "fmpIndustry": "Software - Application",
     "fmpSector": "Technology"
   },
+  "NCLH": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Travel Services",
+    "fmpSector": "Consumer Cyclical"
+  },
   "NDAQ": {
     "asof": "2026-10-12",
     "fmpIndustry": "Financial - Data & Stock Exchanges",
@@ -1398,6 +1748,21 @@
     "asof": "2026-10-12",
     "fmpIndustry": "Semiconductors",
     "fmpSector": "Technology"
+  },
+  "NVR": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Residential Construction",
+    "fmpSector": "Consumer Cyclical"
+  },
+  "NWS": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Publishing",
+    "fmpSector": "Communication Services"
+  },
+  "NWSA": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Publishing",
+    "fmpSector": "Communication Services"
   },
   "NXPI": {
     "asof": "2026-10-12",
@@ -1544,6 +1909,21 @@
     "fmpIndustry": "Banks - Regional",
     "fmpSector": "Financial Services"
   },
+  "PNR": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Industrial - Machinery",
+    "fmpSector": "Industrials"
+  },
+  "PNW": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Regulated Electric",
+    "fmpSector": "Utilities"
+  },
+  "PODD": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Medical - Devices",
+    "fmpSector": "Healthcare"
+  },
   "PPG": {
     "asof": "2026-10-12",
     "fmpIndustry": "Chemicals - Specialty",
@@ -1604,6 +1984,11 @@
     "fmpIndustry": "Internet Content & Information",
     "fmpSector": "Communication Services"
   },
+  "REG": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "REIT - Retail",
+    "fmpSector": "Real Estate"
+  },
   "REGN": {
     "asof": "2026-10-12",
     "fmpIndustry": "Biotechnology",
@@ -1639,6 +2024,11 @@
     "fmpIndustry": "Industrial - Machinery",
     "fmpSector": "Industrials"
   },
+  "ROL": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Specialty Business Services",
+    "fmpSector": "Industrials"
+  },
   "ROP": {
     "asof": "2026-10-12",
     "fmpIndustry": "Software - Application",
@@ -1658,6 +2048,11 @@
     "asof": "2026-10-12",
     "fmpIndustry": "Aerospace & Defense",
     "fmpSector": "Industrials"
+  },
+  "RVTY": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Medical - Diagnostics & Research",
+    "fmpSector": "Healthcare"
   },
   "SBAC": {
     "asof": "2026-10-12",
@@ -1683,6 +2078,11 @@
     "asof": "2026-10-12",
     "fmpIndustry": "Chemicals - Specialty",
     "fmpSector": "Basic Materials"
+  },
+  "SJM": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Packaged Foods",
+    "fmpSector": "Consumer Defensive"
   },
   "SKYD": {
     "asof": "2026-10-12",
@@ -1718,6 +2118,11 @@
     "asof": "2026-10-12",
     "fmpIndustry": "Regulated Electric",
     "fmpSector": "Utilities"
+  },
+  "SOLV": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Medical - Instruments & Supplies",
+    "fmpSector": "Healthcare"
   },
   "SPCX": {
     "asof": "2026-10-12",
@@ -1769,6 +2174,11 @@
     "fmpIndustry": "Packaging & Containers",
     "fmpSector": "Consumer Cyclical"
   },
+  "SWK": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Manufacturing - Tools & Accessories",
+    "fmpSector": "Industrials"
+  },
   "SWKS": {
     "asof": "2026-10-12",
     "fmpIndustry": "Semiconductors",
@@ -1803,6 +2213,11 @@
     "asof": "2026-10-12",
     "fmpIndustry": "Hardware, Equipment & Parts",
     "fmpSector": "Technology"
+  },
+  "TECH": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Biotechnology",
+    "fmpSector": "Healthcare"
   },
   "TEL": {
     "asof": "2026-10-12",
@@ -1864,6 +2279,11 @@
     "fmpIndustry": "Specialty Business Services",
     "fmpSector": "Industrials"
   },
+  "TRMB": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Hardware, Equipment & Parts",
+    "fmpSector": "Technology"
+  },
   "TROW": {
     "asof": "2026-10-12",
     "fmpIndustry": "Asset Management",
@@ -1873,6 +2293,11 @@
     "asof": "2026-10-12",
     "fmpIndustry": "Insurance - Property & Casualty",
     "fmpSector": "Financial Services"
+  },
+  "TSCO": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Specialty Retail",
+    "fmpSector": "Consumer Cyclical"
   },
   "TSLA": {
     "asof": "2026-10-12",
@@ -1904,6 +2329,16 @@
     "fmpIndustry": "Semiconductors",
     "fmpSector": "Technology"
   },
+  "TXT": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Aerospace & Defense",
+    "fmpSector": "Industrials"
+  },
+  "TYL": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Software - Application",
+    "fmpSector": "Technology"
+  },
   "UAL": {
     "asof": "2026-10-12",
     "fmpIndustry": "Airlines, Airports & Air Services",
@@ -1913,6 +2348,16 @@
     "asof": "2026-10-12",
     "fmpIndustry": "Software - Application",
     "fmpSector": "Technology"
+  },
+  "UDR": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "REIT - Residential",
+    "fmpSector": "Real Estate"
+  },
+  "UHS": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Medical - Care Facilities",
+    "fmpSector": "Healthcare"
   },
   "ULTA": {
     "asof": "2026-10-12",
@@ -2094,6 +2539,16 @@
     "fmpIndustry": "Insurance - Brokers",
     "fmpSector": "Financial Services"
   },
+  "WY": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "REIT - Specialty",
+    "fmpSector": "Real Estate"
+  },
+  "WYNN": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Gambling, Resorts & Casinos",
+    "fmpSector": "Consumer Cyclical"
+  },
   "XEL": {
     "asof": "2026-10-12",
     "fmpIndustry": "Regulated Electric",
@@ -2118,6 +2573,11 @@
     "asof": "2026-10-12",
     "fmpIndustry": "Restaurants",
     "fmpSector": "Consumer Cyclical"
+  },
+  "ZBH": {
+    "asof": "2026-10-14",
+    "fmpIndustry": "Medical - Devices",
+    "fmpSector": "Healthcare"
   },
   "ZBRA": {
     "asof": "2026-10-12",

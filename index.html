@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<link rel="preload" href="app.js?v=20261014d" as="script" />
+<link rel="preload" href="app.js?v=20261014r" as="script" />
 <!-- ⚠️ 用户要求「没读到数据就显示 --，别产生误导」：
  报价头/账户汇总的初始值一律 --（原来是硬编码的 137.790 / +5.190 / +3.91% 等假数字，
  页面刚加载、JS 还没跑到时就会显示出来）。真实值由 renderQuote / 账户页数据填充。 -->
@@ -19,7 +19,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="资产看板" />
-<!-- 首屏样式已全量内联：源文件 styles.css，改样式请改 styles.css 后运行 python .workbuddy/tools/sync_css.py 重新注入，勿直接手改本块 -->
+<!-- 首屏样式已全量内联在下方 INLINE_CSS 块：styles.css 已于 2026-10-14 删除，改样式直接编辑本块，勿用 sync_css.py 注入 -->
 <!-- INLINE_CSS:START -->
 <style>
 /* =====================================================================
@@ -1099,6 +1099,17 @@ html, body {
   /* 「入金 1,234.00」小字改成块级，独占一行，不撑宽「当日盈亏」列 */
   .acc-detail .dlg-sub { display: block; margin-left: 0; font-size: 9px; }
 
+  /* 基金历史（订单）表首列「产品名称」收窄（用户 2026-10-14：
+  「移动端基金历史第一列太长了，窄一点，可以两行」）。
+ 根因：基金名 20+ 字（`嘉实纳斯达克100ETF发起联接(QDII)A人民币`），首列只靠
+ 基础规则 `.acc-history[data-hist="fund"] ...:first-child{white-space:normal}` 放开折行，
+  但**没限宽** → 表格本体 `min-width:940px` 的自动布局把整串排成一行 ≈264px，
+  一口吃掉可视区 2/3，后面 6 列全得横滚才看得见。
+ 卡到 150px（与全站「名称列 150px」同口径，`overflow-wrap:anywhere` 已保证可断）后，
+ 最长名折成**两行**，可视区里能多露出「交易类型/状态」「金额/份额」两列。 */
+  .acc-history[data-hist="fund"] .acc-table th:first-child,
+  .acc-history[data-hist="fund"] .acc-table td:first-child { max-width: 150px; }
+
   /* 收益日历：窄屏下 6 列放不下（数字会被裁），降到 3 列；汇总行移到导航下方独占一行
  ⚠️ 选择器必须带 `.ao-cal` 前缀提高特异度 —— 基础规则写在媒体查询之后（940 行 vs 本处），
  同特异度下 `.ao-cal__grid--year` 会被基础规则的 6 列覆盖。 */
@@ -1383,8 +1394,15 @@ html, body {
   display: inline-block; padding: 1px 6px 2px; white-space: nowrap;
   background: rgba(255, 255, 255, 0.88); color: var(--text);
   font-size: 11px; font-weight: 600; border-radius: 0 0 6px 0;
+  /* vertical-align:top：容器行盒按继承字号（12px）撑高，inline-block 的 span 在字号被
+ 缩到 8px 时会**基线对齐**而往下沉 ~4px（实测「Real Estate」offT=4）→ 标签不再贴方块顶部。
+ 钉 top 后任何字号都紧贴方块左上角（用户 2026-10-14：「固定显示在行业的左上角」）。
+ 后三行 = 兜底防溢出：极窄行业方块里 JS 只能把字号压到 7px，仍排不下的就省略号截断，
+ 绝不越出方块边界（blockW 由 JS 按方块实际宽算出，max-width:100% 再兜一层）。 */
+  vertical-align: top; max-width: 100%; overflow: hidden; text-overflow: ellipsis;
 }
-/* 贴右边缘的行业标签：span 自身贴容器右边缘、向左延伸（否则从容器左侧往右长会被画布裁掉） */
+/* ⚠️ 2026-10-14 起 renderUsTopHeatmap **不再生成 .is-r**（行业标签改为一律钉在方块左上角、
+字号按方块实际宽自适应）。规则保留只为兼容旧缓存 HTML，可随时删。 */
 .ust-heat__cat.is-r span { position: absolute; right: 0; top: 0; border-radius: 0 0 0 6px; }
 /* 窄屏专用：图下方一行行业清单（图内不放标签，见 renderUsTopHeatmap 的 narrow 分支） */
 .ust-heat__catlist { display: flex; flex-wrap: wrap; gap: 6px 12px; padding: 6px 2px 0; font-size: 11px; }
@@ -1488,6 +1506,12 @@ html, body {
   .screen-switch button { flex: 0 0 auto; padding: 3px 8px; font-size: 11px; }
   .screen-bar { padding: 7px 12px; gap: 10px; font-size: 11px; }
   .screen-bar__src { margin-left: 0; width: 100%; }
+  /* 移动端：四个指数/个股 tab（screen-bar--src-top）的来源提到第一行，紧挨标题；
+     市场 tab 不加该修饰类，保持「来源」独自成行（用户 ：市场除外） */
+  .screen-bar--src-top > b { order: 1; }
+  .screen-bar--src-top > .screen-bar__src { order: 2; margin-left: 0; width: auto; }
+  .screen-bar--src-top > span:not(.rt-stat):not(.screen-bar__src) { order: 3; }
+  .screen-bar--src-top > .rt-stat { order: 4; }
   .us-top { padding: 0 12px; }
   /* 指数成分股表在手机上「不横滑」：5 列全塞进 ~430px 视口（iPhone 15 Pro Max，用户 ）。
  ⚠️ 必须同时压掉 .us-top 的 min-width:780px（base 里那条是为 7 列市值榜设的），
@@ -1498,6 +1522,18 @@ html, body {
     /* 序号列 ≥24px：18px 会把表头「序号」折成两行（实测），24px 下 3 位数（101/503）也放得下 */
     grid-template-columns: 24px minmax(0, 1fr) 56px 50px 58px;
     gap: 3px; font-size: 11px;
+  }
+  /* 「全部个股」比上面多第 6 列（Finnhub 实时价）→ 桌面 6 列共
+ （44+名称260+108+92+96+88≈688px）在手机视口必然左右拖（用户 截图实测）。
+ 这里补一条**同特异度**（0,3,0）的 6 列紧凑网格：写在桌面那条 `--idx-nm` 之后 → 手机端生效，
+ 桌面端完全不受影响。
+ 三改：名称列 minmax(0,1fr) 吃掉剩余 90~150px，超长自动省略号（用户 ：
+ 「不要左右滚动，名称可以窄一点加省略号」）。
+ 固定列合计 24+54+50+56+52=236，加 5×3px 间距 = 251px：
+ 430px 视口留给名称 ~145px，360px 仍留 ~75px，iPhone SE(320) 也不横滑。 */
+  .idx-const.idx-rt .us-top__hd, .idx-const.idx-rt .us-top__row {
+    grid-template-columns: 24px minmax(0, 1fr) 54px 50px 56px 52px;
+    gap: 3px;
   }
   .idx-const .us-top__hd { font-size: 10px; }
   /* 手机端表头加了排序箭头，字再压 1px 保证「1年回报 ▼」不折行 */
@@ -1641,6 +1677,14 @@ html, body {
 @media (min-width: 681px) {
   .acc-side__card .acc-lbl2 { display: flex; flex-direction: column; align-items: flex-end; }
   .acc-side__card .acc-lbl2__sep { display: none; }
+  /* 桌面端：账户侧栏「盈亏（收益）/ 累计盈亏（收益）」下面的**红绿金额与百分比**比基础字号大一号
+   （用户 2026-10-14：「红色绿色的盈亏额和百分比都大一号，只是桌面端改」）。
+   作用范围 = `.as-line .asl-col--r .asl-vals i`（总资产卡 + 证券/基金两行，现金行无 `<i>` 天然不受影响）。
+   ⚠️ 必须比基础 `.asl-line i{font-size:10px}`(0,2,1) 高 → 用 (0,4,1) 选择器；
+   ⚠️ 且必须**只在 min-width:681px 内** —— 否则同选择器若排在 680px 媒体查询之后，
+   会连带把移动端(14/12)也覆盖掉。 */
+  .as-line .asl-col--r .asl-vals i:first-child { font-size: 13px; }   /* 盈亏额（红/绿） */
+  .as-line .asl-col--r .asl-vals i + i { font-size: 12px; }           /* 盈亏百分比 */
 }
 .asp-col { display: flex; flex-direction: column; gap: 1px; }
 .asp-col span { font-size: 11px; color: var(--text-2); }
@@ -3215,19 +3259,6 @@ html, body {
 
         <div class="me-menu">
           <button class="me-menu__row" type="button">
-            <span class="me-menu__icon" style="color:#4c8dff"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 13v-1a8 8 0 0 1 16 0v1"/><rect x="3" y="13" width="4" height="6" rx="1.8"/><rect x="17" y="13" width="4" height="6" rx="1.8"/><path d="M19 19a4 4 0 0 1-4 3h-2"/></svg></span>
-            <span class="me-menu__label">帮助与客服</span>
-            <span class="me-menu__arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></span>
-          </button>
-          <button class="me-menu__row" type="button">
-            <span class="me-menu__icon" style="color:#4c8dff"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7.5 3v5.5c0 4.5-3 7.8-7.5 9.5-4.5-1.7-7.5-5-7.5-9.5V6L12 3z"/><path d="M9.5 12l2 2 3.5-4"/></svg></span>
-            <span class="me-menu__label">反诈作专区</span>
-            <span class="me-menu__arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></span>
-          </button>
-        </div>
-
-        <div class="me-menu">
-          <button class="me-menu__row" type="button">
             <span class="me-menu__icon" style="color:#4c8dff"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h9l5 5v11H5V4z"/><path d="M14 4v5h5"/><path d="M9 12h6M9 15h4"/></svg></span>
             <span class="me-menu__label">功能建议</span>
             <span class="me-menu__arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></span>
@@ -3245,9 +3276,9 @@ html, body {
     </section>
 
 <!-- 全屏走势图（#aoFs）已整体删除（用户 ）：#aoFsBtn 被 CSS 全尺寸隐藏后浮层
- 就没有任何入口，逻辑（app.js）/样式（styles.css）/本段 HTML 一并移除。别再恢复。 -->
+ 就没有任何入口，逻辑（app.js）/样式（index.html 内联块）/本段 HTML 一并移除。别再恢复。 -->
 </div>
 </div>
-<script defer src="app.js?v=20261014d"></script>
+<script defer src="app.js?v=20261014r"></script>
 </body>
 </html>

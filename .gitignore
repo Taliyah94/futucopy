@@ -12,3 +12,7 @@ anon.json
 # 系统垃圾
 .DS_Store
 Thumbs.db
+
+# 凭据（GitHub PAT / IBKR / Alpaca…）—— 明文密钥，**绝不进仓库**（本仓库是公开的）
+password.txt
+*.password.txt

@@ -1381,7 +1381,7 @@ const TICKER_TTL = 15000;
   const ICON_LIKE = '<svg viewBox="0 0 24 24" class="ic"><path d="M7 10v10H4V10zM7 10l4-7a2 2 0 0 1 3 2v4h5a2 2 0 0 1 2 2.4l-1.3 6A2 2 0 0 1 17.7 19H7"/></svg>';
   const ICON_CMT  = '<svg viewBox="0 0 24 24" class="ic"><path d="M4 5h16v11H9l-5 4z"/></svg>';
 
-  // canvas 绘图配色（与 styles.css 浅色主题保持一致）
+  // canvas 绘图配色（与 index.html 内联样式 浅色主题保持一致）
   const THEME = {
     grid:       'rgba(15,23,42,0.06)',
     axisText:   '#949aab',
@@ -1512,8 +1512,8 @@ const TICKER_TTL = 15000;
         occ: r.h.occ, qty: r.qty, mult: r.mult || 100,
         /* 日内腿取不到时的兜底价：**优先实时 mark**（pTrade，与列表那个 -1,759.96 同源，
  这样曲线末点能和「推算总资产」对齐），退回昨收 prevClose。
- 实测本账号 Alpaca 对期权 1Min/5Min 一律返回空 bars（只有 1Day 有数据），
- 所以这条兜底路径是常态，必须用实时价而不是昨收。 */
+ 现期权腿盘中改走 Alpaca 真实 5Min 棒（见 assetSeries fetchOptMinBars），只有 fetch 失败时
+ 才退回本兜底（实时 mark → 昨收）。 */
         last: (r.livePx > 0 ? r.livePx : (r.pTrade > 0 ? r.pTrade : (r.price > 0 ? r.price : null))),
         prev: r.prevClose,
       })),
@@ -1591,8 +1591,53 @@ const TICKER_TTL = 15000;
   避免静默退化成当日常数导致聚合曲线刷新抖动。 */
   let assetFundCandleCache = null;
 
+  /* ---- Alpaca 期权分钟棒（OPRA）----
+  期权历史腿过去是「平线昨收」；现改为盘中走 Alpaca 真实 5Min 棒（用户 2026-10-14：
+  「期权腿盘中按 5min k」）。免费档未签 OPRA / 未订阅 Alpacer Trader Plus 时，最近 15 分钟
+  会被 403；这里把 end 压到 now-16min → 始终取「15 分钟之前」的真实延迟棒，无论是否签
+  OPRA 都返回 200（实测坐实）。返回 { OCC: [{ts(ms), price}] 升序 }；失败返回 {}。 */
+  const ALPACA_API = 'https://data.alpaca.markets';
+  const ALPACA_HDR = {
+    'APCA-API-KEY-ID': 'PKEUEXIJARHLHWZYLWR6UAOGBS',
+    'APCA-API-SECRET-KEY': '8QmudbfguaxQnFRq13YU1B5GY94F5AEx3Tz7m66LUFyc',
+  };
+  async function fetchOptMinBars(symbols) {
+    const map = {};
+    if (!symbols || !symbols.length) return map;
+    const now = Date.now();
+    const start = new Date(now - 3 * 86400e3).toISOString();   // 回溯 3 天，覆盖上一交易日
+    const end = new Date(now - 16 * 60000).toISOString();        // 压在 15 分钟延迟墙之后
+    let url = ALPACA_API + '/v1beta1/options/bars?symbols=' + encodeURIComponent(symbols.join(','))
+      + '&timeframe=5Min&start=' + start + '&end=' + end + '&limit=1000';
+    try {
+      let token = null, guard = 0;
+      do {
+        const u = token ? url + '&page_token=' + encodeURIComponent(token) : url;
+        const ctrl = new AbortController();
+        const to = setTimeout(() => { try { ctrl.abort(); } catch (e) {} }, 8000);
+        const r = await Promise.race([
+          fetch(u, { headers: ALPACA_HDR, signal: ctrl.signal }),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000)),
+        ]);
+        clearTimeout(to);
+        if (!r.ok) { console.warn('[opt5m] HTTP', r.status); break; }
+        const d = await r.json();
+        const bars = (d && d.bars) || {};
+        for (const sym in bars) {
+          const arr = (bars[sym] || [])
+            .map((b) => ({ ts: +new Date(b.t), price: +b.c }))
+            .filter((p) => p.ts > 0 && p.price > 0);
+          if (arr.length) map[sym] = (map[sym] || []).concat(arr);
+        }
+        token = d ? d.next_page_token : null;
+      } while (token && ++guard < 5);
+      for (const sym in map) map[sym].sort((a, b) => a.ts - b.ts);
+    } catch (e) { console.warn('[opt5m] err', e && e.message); }
+    return map;
+  }
+
   /* 取「该时段内」的持仓总资产分钟序列。
- 返回 null = 数据不足/没持仓，调用方直接画空白。 */
+  返回 null = 数据不足/没持仓，调用方直接画空白。 */
   async function assetSeries(sess) {
     const p = TRADE_POS.parts;
     if (!p || (!p.stocks.length && !(p.opts && p.opts.length))) return null;
@@ -1630,18 +1675,21 @@ const TICKER_TTL = 15000;
       const pts = await fetchLeg(inst2(s.code));
       return { s, pts };
     }));
-    /* 期权腿：历史点=昨收（平线），末点实时=Alpaca mid（用户 2026-10-14 定调：
-    “期权腿历史数据就按昨收来，只有实时价取mid”）。
-    原因：Alpaca 免费档期权**没有任何分钟线**（1Min/5Min 全空，只有 1Day），
-    之前「沿正股 5m 形状回推」属于人造走势，用户明确不要。
-    · 历史段直接取昨收(o.prev) 画平线，时间网格复用正股 5m 序列的时间戳
-      （正股没进场时退回任意一条有数据的正股腿），保证期权在历史段恒为昨收、不凭空消失；
+    /* 期权腿：盘中走 Alpaca 真实 5Min 棒（用户 2026-10-14：「期权腿盘中按 5min k」）；
+    fetch 失败 / 非 RTH 无棒时退回「平线昨收」（与旧行为一致，不凭空消失）。
+    · 真实棒：fetchOptMinBars 给出 OCC→[{ts(ms), price}]（升序，5Min 收盘），合成循环按轴
+      ts 前值填充；首根棒之前由 lastPx=昨收顶上 → 盘前/隔夜期权段恒为昨收常数。
     · 末点的实时值(mid) 不在 leg 层画：曲线整体末点由 syncAssetLastPoint
       用本轮汇总的「推算总资产」(含期权 Alpaca mid，见 1464-1478) 覆盖（见 2314 行），
-      于是历史平线、末点自动对齐 mid，无需在此插值。 */
+      于是历史真实形状 + 末点 mid 自然对齐，无需在此插值。 */
+    const optSyms = (p.opts || []).map((o) => o.occ).filter(Boolean);
+    const optBarMap = await fetchOptMinBars(optSyms);
     const optLegs = (p.opts || []).map((o) => {
-      const prevClose = (o.prev > 0 ? o.prev : o.last);     // 昨收：历史点全用它（平线）
+      const prevClose = (o.prev > 0 ? o.prev : o.last);     // 昨收：首根棒之前 / 兜底顶上
       const s = { code: o.occ, qty: o.qty, mult: o.mult || 100, prev: prevClose };
+      const barPts = (optBarMap && optBarMap[o.occ] && optBarMap[o.occ].length) ? optBarMap[o.occ] : null;
+      if (barPts) return { s, pts: barPts };                // 盘中真实 5Min 棒
+      /* 兜底（fetch 失败 / 该 OCC 无 RTH 棒）：沿用旧逻辑——按底层正股腿时间网格画平线昨收 */
       const undMatch = (o.occ || '').match(/^[A-Z]+/);
       const undCode = undMatch ? undMatch[0] : null;
       const undLeg = undCode ? stockLegs.find((l) => l.s && l.s.code === undCode) : null;
@@ -1893,7 +1941,7 @@ const TICKER_TTL = 15000;
       const __fund = computeFundAt();
       fundAtLast = __fund;                      // 曲线里基金段用的值（末点那个）→ 供 syncAssetFund 对齐
       if (__traceOn) window.__cpTrace.push({
-        ts, equityUsd, fund: __fund, legs: __legP,
+        ts, price: equityUsd * target + __fund + fundConst + cash, equityUsd, fund: __fund, legs: __legP,
         parts: fundFlat.map((fz) => (fz.p ? fz.p._price : fz.r._price)),
       });
       out.push({ ts, price: equityUsd * target + __fund + fundConst + cash });
@@ -2693,6 +2741,9 @@ const TICKER_TTL = 15000;
         // 原来只藏了 accountView，实测「选股 → 资讯」会漏下 #screenView：它被
         // comment-panel 挤成 14px 细条卡在底部 tab bar 上方（用户 截图
         // 反馈的「下面有一块多的东西」，露出的就是选股 tab 排的橙色选中药丸）。
+        // ⚠️ 2026-10-14 同类漏项：同样漏了 #meView（「我的」页）→ 从「我的」切「资讯」时
+        // 头像区被挤到资讯列表下方露出一截（用户 截图「下面会有多的东西」）。
+        // 凡 .workspace 下 flex:1 铺满主区的独立视图，都必须在这份名单里逐个 hidden。
         // 还要移除桌面「默认收起」逻辑加的 .is-collapsed，否则面板被压成 0 宽。
         document.body.classList.remove('is-chart-mode');
         document.body.classList.add('is-comment-mode');
@@ -2700,7 +2751,7 @@ const TICKER_TTL = 15000;
         if (wl) wl.classList.add('is-collapsed');
         const cp = document.querySelector('.comment-panel');
         if (cp) cp.classList.remove('is-collapsed');
-        ['accountView', 'tradeView', 'screenView'].forEach((id) => {
+        ['accountView', 'tradeView', 'screenView', 'meView'].forEach((id) => {
           const el = document.getElementById(id);
           if (el) el.hidden = true;
         });
@@ -2894,6 +2945,7 @@ const TICKER_TTL = 15000;
  没法端到端验证时，可用真实抓到的页面 HTML 单测解析这一段。
  ：社区源已全部移除，jsonAfter（配平花括号 JSON 提取器）随东财股吧一起删。 */
   if (/(?:^|[?&])cpdebug=1/.test(location.search)) {
+    window.__cpDiagOn = true;   // 开资产曲线全轨迹诊断：assetSeries 内 __traceOn 读它（旧代码只挂了 __cp 漏了开关 → 诊断永远是空死代码）
     window.__cp = {
       /* 账户页资产走势曲线：暴露末几点，用于核对「曲线末点 vs 顶部总资产」是否一致
  （ 改成全实时口径后新增）。 */
@@ -2905,6 +2957,25 @@ const TICKER_TTL = 15000;
  （真实情况只在 OKX 限频时偶发），验证曲线是「沿用旧的」而不是「画断崖」。 */
       chart: { refresh: refreshAssetChart, series: assetSeries, data: () => assetChartData,
                sync: () => syncAssetChartState() },
+      /* 曲线用到的全局常数（同一页面加载内恒定；跨加载可能因 FX/现金/基金净值快照变化而整体平移）。
+      用于核对「峰值为什么涨了/跌了」是不是常数项在动。 */
+      parts: () => (typeof TRADE_POS !== 'undefined' && TRADE_POS ? TRADE_POS.parts : null),
+      /* 资产曲线全轨迹诊断：?cpdebug=1 时 assetSeries 已把每个 ts 的逐腿价 + 基金成分价
+      push 进 window.__cpTrace（见 line ~1856），这里直接吐出来。peak 找 max(price)。 */
+      trace: () => {
+        const t = window.__cpTrace || [], lg = window.__cpTraceLegend || [];
+        if (!t.length) return { hint: '曲线尚未重建（切到交易视图 / 调 refreshAssetChart 后才有数据）', legend: lg };
+        let mx = t[0], mn = t[0];
+        t.forEach((r) => { if (r.price > mx.price) mx = r; if (r.price < mn.price) mn = r; });
+        const tsEt = (ms) => { const d = new Date(ms - 4 * 3600e3); return d.toISOString().slice(5, 16).replace('T', ' '); };
+        return {
+          legend: lg,
+          n: t.length,
+          peak: { et: tsEt(mx.ts), price: Math.round(mx.price), equityUsd: Math.round(mx.equityUsd), fund: Math.round(mx.fund), legs: mx.legs.map((x) => +x.toFixed(3)) },
+          low: { et: tsEt(mn.ts), price: Math.round(mn.price) },
+          tail: t.slice(-3).map((r) => ({ et: tsEt(r.ts), price: Math.round(r.price) })),
+        };
+      },
       /* 收益日历 / 侧栏 TWR（）：分段收益率不对时用来看 calIndex 内部状态。 */
       cal: () => {
         try {
@@ -3879,6 +3950,19 @@ const TICKER_TTL = 15000;
     return '其他';
   }
 
+  /* 行业标签**缩写表**（用户 2026-10-14：「热力图行业标签有的太长了显示不开可以缩写」）。
+  只在方块窄到全称必须缩字号时才用缩写 —— 换来的是**更大的字号 + 还能带上涨跌幅**。
+  键 = 分组名全称（FMP 大行业 fs 的英文值；无 FMP 画像时的中文大类兜底同名覆盖）。 */
+  const CAT_ABBR = {
+    'Technology': 'TECH', 'Communication Services': 'COMM', 'Financial Services': 'FIN',
+    'Consumer Cyclical': 'CC', 'Consumer Defensive': 'CD', 'Healthcare': 'HC',
+    'Industrials': 'IND', 'Energy': 'EN', 'Real Estate': 'RE', 'Basic Materials': 'BM',
+    'Utilities': 'U',
+    /* 中文兜底大类（majorCat 返回，FMP 行业缺失时走这条路） */
+    '科技': 'TECH', '金融': 'FIN', '医疗健康': 'HC', '消费': 'CONS', '能源材料': 'BM',
+    '工业': 'IND', '通讯': 'COMM', '房地产': 'RE', '公用事业': 'U', '其他': 'OTH',
+  };
+
   /* 涨跌幅 → 填充色：绿涨红跌；±5% 内线性加深，超 ±5% 封顶。无涨跌幅给灰。 */
   function heatColor(pct, cap) {
     if (pct == null || !isFinite(pct)) return 'rgba(120,128,140,0.22)';
@@ -4065,12 +4149,13 @@ const TICKER_TTL = 15000;
     if (!host || !ALL_ROWS) return;
     const rows = sortAllStocks(ALL_ROWS, ALL_SORT);
     const d = ALL_META || {};
-    const bar = '<div class="screen-bar">'
+    const srcLabel = (d.source || 'fund_holdings.json（每日快照）').replace(/（.*?）/g, '').trim();
+    const bar = '<div class="screen-bar screen-bar--src-top">'
       + '<b>共 ' + rows.length + ' 只</b>'
-      + '<span>S&amp;P 500 ' + (d.nSp || 0) + ' + Nasdaq 100 ' + (d.nNd || 0) + '，按代码去重</span>'
       + (d.asOf ? '<span>数据日期 ' + cpEsc(String(d.asOf).slice(0, 10)) + '</span>' : '')
+      + '<span class="screen-bar__src">来源：' + cpEsc(srcLabel) + '</span>'
       + '<span class="rt-stat" id="rtStat"></span>'
-      + '<span class="screen-bar__src">来源：' + cpEsc(d.source || 'fund_holdings.json（每日快照）') + '</span></div>';
+      + '</div>';
     rtFillBase();    /* 先填基准价 → 实时列初始即显示快照价（等建连节拍期间也有价格看） */
     host.innerHTML = bar + renderIndexTable(rows, { noW: true, sortable: true, sort: ALL_SORT, rt: true, rtSyms: rtTopSet() });
     rtStart();       /* 幂等：首帧才建连接；排序/切 tab 重绘后只补刷已有价格 */
@@ -4087,7 +4172,9 @@ const TICKER_TTL = 15000;
        「整分钟边界 + 组间错峰」；用户任何时刻刷新页面都只是把排程推到下个边界，
        稳态建连 ≤2 次/分钟 → 无论怎么刷都不会超出「5 次/时间窗」的 429。
      · 盘后/无成交时段服务端会掐空闲连接（实测秒级~分钟级不等）→ onclose 按节拍
-       重连；连接活不过 15s 视为被掐 → 周期翻倍到 8 分钟封顶，不跟限速窗口较劲。
+       重连；**仅非盘中时**连接活不过 15s 视为被掐 → 周期翻倍到 8 分钟封顶，不跟限速
+       窗口较劲；**盘中一律 1 分钟节拍（方案A，2026-10-14）：两条连接按整分边界重连，
+       基本稳定 2/2，不被快掐推上长周期**。
      · localStorage 跨标签协调：最近一个周期内已建连 → 顺延一整周期，多开
        标签页也不会叠加超限。
      · key 明文暴露 = 用户确认的方案 B（个人看板；泄露可轮换）。
@@ -4124,7 +4211,7 @@ const TICKER_TTL = 15000;
   }
 
   /* 基准价 = all_stocks.json 快照现价（每日更新）→ 实时价据此算涨跌。
-  ⚠️ 配色沿用项目既定约定「涨绿跌红」（见 styles.css --up/--down 与 heatColor），
+  ⚠️ 配色沿用项目既定约定「涨绿跌红」（见 index.html 内联样式 --up/--down 与 heatColor），
   与全看板一致；不是 A 股习惯的涨红跌绿。 */
   function rtFillBase() {
     if (!ALL_ROWS) return;
@@ -4161,7 +4248,8 @@ const TICKER_TTL = 15000;
   /* 节拍对齐排程：所有建连（初始 + 重连）只发生在「周期边界 + 组间错峰」时刻，
      用户何时刷新页面都只是把排程推到下个边界 → 稳态建连 ≤2 次/分钟，
      永远不碰 Finnhub「5 次连接建立/时间窗」的 429。
-     · gs.tick 初始 RT_TICK_MS；连接活不过 15s（盘后被掐）→ 翻倍到 RT_MAX_TICK_MS 封顶；
+     · gs.tick 初始 RT_TICK_MS；**仅非盘中**时连接活不过 15s（被掐）→ 翻倍到
+       RT_MAX_TICK_MS 封顶；盘中恒 1 分钟节拍（方案A，2026-10-14）；
      · localStorage 跨标签协调：最近一个周期内已建连 → 顺延一整周期，
        多开标签页也不叠加。 */
   function rtSchedule(gs) {
@@ -4248,11 +4336,14 @@ const TICKER_TTL = 15000;
       if (gs.alive) { gs.alive = false; rtInfo.open = Math.max(0, rtInfo.open - 1); rtUpdateStatus(); }
       if (!rtInfo.started) return;
       gs.nextAt = 0;
-      /* 节拍退避：
-       · 活过 15s = 正常掉线（盘中网络抖动）→ 回 1 分钟节拍，下个整分边界恢复；
-       · 活不过 15s = 盘后被掐 → 周期翻倍（2/4/8 分钟封顶），
+      /* 节拍退避（方案A，用户 2026-10-14 定稿）：
+       · 盘中（rtIsMarketOpen）：一律保持 1 分钟节拍、绝不翻倍 → 两条连接都按整分边界
+         重连，基本稳定 2/2（Finnhub 免费档盘中也会快掐连接，但 1 分钟节拍足够续上）；
+       · 非盘中（盘后/周末/假日）：活过 15s = 正常掉线 → 回 1 分钟节拍；
+         活不过 15s = 被服务端掐空闲连接 → 周期翻倍（2/4/8 分钟封顶），
          两组合计建连频率 ≤2 次/分钟，远离「5 次连接建立/时间窗」的 429。 */
-      gs.tick = lived >= 15 ? RT_TICK_MS : Math.min(gs.tick * 2, RT_MAX_TICK_MS);
+      const rtOffHours = !rtIsMarketOpen();
+      gs.tick = (rtOffHours && lived < 15) ? Math.min(gs.tick * 2, RT_MAX_TICK_MS) : RT_TICK_MS;
       rtSchedule(gs);
     };
   }
@@ -4320,7 +4411,12 @@ const TICKER_TTL = 15000;
       const g = byGrp.get(el.dataset.rthc);
       const w = g && g.w > 0 ? g.wsum / g.w : null;
       const span = el.querySelector('span');
-      if (span) span.textContent = el.dataset.rthc + (w == null ? '' : ' ' + (w > 0 ? '+' : '') + w.toFixed(2) + '%');
+      /* data-rthc-only：该行业方块太窄，renderUsTopHeatmap 已定「只放行业名」→
+         这里也不能把涨跌幅塞回来（塞了会溢出方块、压到邻格标签）。
+         ⚠️ 文本前缀用 **data-rthc-lbl**（本格实际字样，可能是缩写）而非 data-rthc
+         （分组键全称）—— 用全称会把缩写格撑爆、溢出方块压到邻格（用户 2026-10-14 定缩写）。 */
+      if (span) span.textContent = (el.dataset.rthcLbl || el.dataset.rthc)
+        + ((el.dataset.rthcOnly || w == null) ? '' : ' ' + (w > 0 ? '+' : '') + w.toFixed(2) + '%');
     });
   }
 
@@ -4331,8 +4427,8 @@ const TICKER_TTL = 15000;
   /* 状态角标（screen-bar 内）：已收到价格只数 / 订阅总数 · 连接数 ·
      未连满时附「下次 Ns」建连倒计时（节拍对齐，整分钟边界）。 */
   function rtUpdateStatus() {
-    /* ⚠️ #rtStat 只存在于「全部个股」tab 的 bar；板块 tab 没有该元素 →
-       角标逻辑整体跳过，但行业加权标签刷新（rtUpdateHeatCats）必须照样跑。 */
+    /* ⚠️ #rtStat 存在于「全部个股」与「板块」两个 tab 的 bar（同屏只渲染一个）；
+       板块 tab 初次渲染后也调用本函数 → 角标照常刷新。 */
     const el = document.getElementById('rtStat');
     if (el) {
       if (!rtInfo.started) { el.textContent = ''; }
@@ -4402,6 +4498,13 @@ const TICKER_TTL = 15000;
  手机竖版（narrowNow）仍固定 560×1000 + 页面滚动，不走这套。 */
     const W = (opts && opts.W) || (narrowNow ? 560 : 1000);
     const H = (opts && opts.H) || (narrowNow ? 1000 : 560);
+    /* 容器实际像素宽：树图坐标是「虚拟画布」单位，1 虚拟单位 = CW/W 像素。
+   桌面端 W 恒 1000 → scale = CW/1000，格子实际像素宽高 = r.w×scale / r.h×scale
+   （高度同理：图高 = 宽×H/1000，故 r.h 也按同一 scale 换算）。
+   ⚠️ 拿到它才能按「文本实际排不排得下」判是否显示代码/涨跌幅（见下方 minCode 那段的说明），
+   以及给行业标签反推不溢出方块的字号。renderSectors / fitUstHeat 都会传实测 CW。 */
+    const CW = (opts && opts.CW) || 1000;
+    const scale = CW / W;
     const map = new Map();
     for (const x of rows) {
       /* 分组键：renderSectors 传 FMP 细行业（x.grp，见该函数内 grp = fi || ind || '其他'）；
@@ -4424,20 +4527,38 @@ const TICKER_TTL = 15000;
     const catRects = squarify(cats.map((c) => c.total), { x: 0, y: 0, w: W, h: H });
     cats.forEach((c, i) => { c.rect = catRects[i]; });
     const cells = [];
-    const placed = [];      // 已放的分类标签矩形（贴边的小行业标签会互相压住 → 撞了就下移一行）
     /* ⚠️ 窄屏（手机）：101 只塞进 ~430px 宽，图内方块只有几像素 ——
  ① 图内**不放行业标签**（白底字必然被裁/糊成一团），改为图下方一行行业清单；
  ② 个股代码/回报的显示阈值抬高，只留最大的十几个「大票」有字，其余纯色块。 */
     const narrow = narrowNow;
-    const minCode = narrow ? 4200 : 1100, minPct = narrow ? 12000 : 3600;
+    /* 窄屏仍用**面积阈值**（竖版画布 560×1000、容器 ~430px，实测口径，别动）。
+   桌面端改为**按格子实际像素宽高判文本能否排下**（用户 2026-10-14：「桌面端股票代码和
+   百分比显示范围可以大一点，有些股票范围明明够显示百分比或代码都没显示」）：
+   旧的 minCode=1100 / minPct=3600 是**虚拟面积**阈值，与实际容器宽脱钩 —— 容器宽
+   1462px 时，一个 40×28px 的格子（实际面积 1120px²）虚拟面积只有 ~524，明明排得下
+   「AMD」，却被面积门槛吞掉。改成像素判据后，只要格子真能排下文本就显示。 */
+    const minCodeN = 4200, minPctN = 12000;
     for (const c of cats) {
       const inner = squarify(c.list.map((s) => Math.max(s.mc || 0, 1)), c.rect);
       c.list.forEach((s, j) => {
         const r = inner[j];
         const area = r.w * r.h;
         const fs = Math.max(9, Math.min(20, Math.sqrt(area) / 7));
-        const showCode = area >= minCode, showPct = area >= minPct;
         const pctTxt = s.pct == null ? '--' : (s.pct > 0 ? '+' : '') + s.pct.toFixed(2) + '%';
+        let showCode, showPct;
+        if (narrow) {
+          showCode = area >= minCodeN; showPct = area >= minPctN;
+        } else {
+          /* 格子实际像素宽/高（.ust-heat__cell 有 padding:0 2px → 内容宽再减 4） */
+          const cw = r.w * scale, chh = r.h * scale;
+          const lineH = fs * 1.2;
+          /* 估文本宽 = 字数 × 字号 × 字宽系数 + 两侧 padding；
+         加粗大写（代码）≈0.70em/字，数字+符号（涨跌幅）≈0.62em/字（含 letter-spacing:-0.2px 的余量）。 */
+          const txtW = (t, k) => (t.length * fs * k) + 6;
+          showCode = (cw - 4) >= txtW(s.c, 0.70) && chh >= lineH + 3;
+          /* 涨跌幅排在代码下方 → 两行高度；代码没显示时它独占一行（等高即可）。 */
+          showPct = (cw - 4) >= txtW(pctTxt, 0.62) && chh >= (showCode ? lineH * 2 : lineH) + 3;
+        }
         const txt = (showCode ? '<b>' + cpEsc(s.c) + '</b>' : '')
           + (showPct ? '<i>' + pctTxt + '</i>' : '');
         /* opts.rt = 盘中实时模式：格子挂 data-rth（Finnhub tick 到达时 rtPaintHeat
@@ -4450,39 +4571,62 @@ const TICKER_TTL = 15000;
       });
       if (narrow) continue;         // 窄屏跳过图内行业标签（见上）
       const cr = c.rect;
-      /* 分类标签：行业名 + 市值加权平均涨跌幅（黑字，便于一眼看板块强弱）
- ⚠️ 贴右边缘的分类（如「公用事业」）若按 cr.x 放标签，白底文字会溢出画布被
- .ust-heat 的 overflow:hidden 裁掉（实测右侧最后一个行业名被切）→
- 按估算宽度把标签 x 夹回画布内（宁可稍微左移，也不让文字被截）。 */
+      /* 行业标签：**固定钉在行业矩形的左上角**（用户 2026-10-14：「桌面端标签固定显示在
+行业的左上角，写不开就缩小字体」）。旧逻辑有两处「躲」：① 贴右边缘的行业把标签
+右对齐（.is-r）、② 与已放标签相撞就往下挪 —— 结果 Real Estate / Utilities 这类
+标签跑到方块中间甚至别处。两处**全部删掉**，一律 left:cr.x / top:cr.y。
+不溢出、不互相压的保证 = **标签宽度永远 ≤ 自己方块的宽度**：按方块实际像素宽
+反推字号（写不开就把字号一档档缩下去，下限 8px）。标签待在自家方块内 →
+既不会被 .ust-heat 的 overflow:hidden 裁掉（贴右边缘的行业也安全），
+也不可能压到相邻行业的标签（各行业矩形互不重叠）。 */
       const wTxt = c.wpct == null ? '' : (' ' + (c.wpct > 0 ? '+' : '') + c.wpct.toFixed(2) + '%');
-      const labTxt = c.name + wTxt;
-      const labW = labTxt.length * 11 + 18;
-      /* ⚠️ 贴右边缘的行业（如「公用事业」）若按 left 放标签，白底文字会溢出画布被
- .ust-heat 的 overflow:hidden 裁掉（手机端尤其明显）→ 这类改成 **right 对齐**
- （标签右边缘贴住本方块的右边缘，向左延伸），任何宽度下都不会被切。 */
-      const nearRight = (cr.x + cr.w) > (W - 140);
-      const lx = nearRight
-        ? Math.max(0, cr.x + cr.w - labW)
-        : Math.max(0, Math.min(cr.x, W - labW));
-      /* 与已放标签相撞 → 往下挪一行（16px），挪不下就退回原位（叠加也强于看不见）。 */
-      const lh = 16;
-      let ly = cr.y, guard = 0;
-      const hit = (yy) => placed.some((p) => !(lx + labW < p.x || lx > p.x + p.w || yy + lh < p.y || yy > p.y + p.h));
-      while (guard++ < 24 && hit(ly) && ly + lh * 2 < cr.y + cr.h) ly += lh;
-      if (ly + lh > H) ly = cr.y;
-      placed.push({ x: lx, y: ly, w: labW, h: lh });
-      const posCss = nearRight
-        ? 'right:' + ((W - (cr.x + cr.w)) / W * 100).toFixed(3) + '%'
-        : 'left:' + (lx / W * 100).toFixed(3) + '%';
-      /* ⚠️ 光把**容器**右对齐没用：里面的 span 是 inline-block，从容器**左**边缘往右长，
- 照样溢出画布被裁（实测「公用事业」只剩一个「公」字）→ 加 .is-r 让 span 自身
- absolute 贴容器右边缘、向左延伸。 */
-      /* opts.rt = 盘中实时模式：行业标签挂 data-rthc=行业名（rtUpdateHeatCats
-         按实时市值加权 pct 节流更新文本）；非盘中不挂。 */
-      const rthc = (opts && opts.rt) ? ' data-rthc="' + cpEsc(c.name) + '"' : '';
-      cells.push('<div class="ust-heat__cat' + (nearRight ? ' is-r' : '') + '"' + rthc + ' style="' + posCss
-        + ';top:' + (ly / H * 100).toFixed(3) + '%;width:' + (cr.w / W * 100).toFixed(3)
-        + '%;height:' + (cr.h / H * 100).toFixed(3) + '%"><span>' + cpEsc(labTxt) + '</span></div>');
+      /* 字号反推 + 两级降级（用户 2026-10-14：「写不开就缩小字体」）：
+   ① 先按「行业名 + ±00.00%（8 字）」估宽，找能排下的最大字号（11 → 7px，步长 0.5）；
+   ② 方块实在太窄、7px 也排不下涨跌幅 → **只留行业名**（并标 data-rthc-only，
+      盘中 rtUpdateHeatCats 刷新时同样只写行业名，不会把涨跌幅再塞回来）；
+   ③ 连行业名都排不下 → 7px + CSS 的 text-overflow:ellipsis 截断，
+      保证**永不越出方块**（也就绝不会压到相邻行业的标签）。
+   估宽公式：span 占宽 ≈ 字数 × 字号 × 0.60 + 12（左右 padding 6+6）。
+   0.60 是实测各行业名字宽系数的上界（Technology / Energy / Consumer Defensive = 0.575~0.577，
+   取 0.60 留余量；估宽偏大只会让字号略小一档，不会溢出）。 */
+      const blockW = Math.max(0, cr.w * scale - 6);
+      const K = 0.60, PAD = 12, FS_MIN = 7;
+      const fits = (len, f) => (len * f * K + PAD) <= blockW;
+      const bestFs = (len) => { let f = 11; while (f > FS_MIN && !fits(len, f)) f -= 0.5; return f; };
+      /* 候选文本 = **[全称, 缩写]**（缩写取不到就只有全称）。逐个候选 × 两档内容
+   （带涨跌幅 / 只留行业名）算「能排下的最大字号」，取**字号最大**的那个：
+   · 方块够宽 → 全称 + 涨跌幅 @11px（信息最全，与旧行为一致）；
+   · 方块窄到全称得缩字号 → 缩写反而能上更大字号，**自动改显示缩写**（用户定调）；
+   · 同字号下「带涨跌幅」优先（多给一个数字，值回票价）；
+   · 全部候选连 7px 都排不下 → 用最短候选（缩写）+ CSS ellipsis 截断兜底。 */
+      const abbr = CAT_ABBR[c.name] || null;
+      const cands = (abbr && abbr !== c.name) ? [c.name, abbr] : [c.name];
+      let pick = null;
+      for (const nm of cands) {
+        /* [内容, 估算长度, 是否只留行业名] —— 涨跌幅固定按「 ±00.00%」= 8 字预留 */
+        const variants = [[nm + wTxt, nm.length + 8, false], [nm, nm.length, true]];
+        for (const [txt, len, only] of variants) {
+          if (!fits(len, FS_MIN)) continue;
+          const f = bestFs(len);
+          /* 评分 = 字号 +（带涨跌幅 +1.5px 偏好）：宁可字号小一点也把涨跌幅留着，
+          只有当「砍掉涨跌幅」能换来 >1.5px 的字号时才真的砍。同分 → 保留涨跌幅。 */
+          const score = f + (only ? 0 : 1.5);
+          if (!pick || score > pick.score) pick = { txt: txt, fs: f, only: only, base: nm, score: score };
+        }
+      }
+      if (!pick) pick = { txt: cands[cands.length - 1], fs: FS_MIN, only: true, base: cands[cands.length - 1] };
+      const labTxt = pick.txt, labFs = pick.fs, labOnly = pick.only;
+      /* opts.rt = 盘中实时模式：行业标签挂 data-rthc=行业名（分组键，rtUpdateHeatCats
+         据此查该行业的实时加权 pct）；data-rthc-lbl = **本格实际显示的字样**（全称或缩写，
+         缩写时不能让刷新把全称写回来 —— 否则又溢出）；data-rthc-only = 只留行业名。 */
+      const rthc = (opts && opts.rt)
+        ? ' data-rthc="' + cpEsc(c.name) + '" data-rthc-lbl="' + cpEsc(pick.base) + '"'
+          + (labOnly ? ' data-rthc-only="1"' : '')
+        : '';
+      cells.push('<div class="ust-heat__cat"' + rthc + ' style="left:' + (cr.x / W * 100).toFixed(3)
+        + '%;top:' + (cr.y / H * 100).toFixed(3) + '%;width:' + (cr.w / W * 100).toFixed(3)
+        + '%;height:' + (cr.h / H * 100).toFixed(3) + '%"><span style="font-size:' + labFs.toFixed(1)
+        + 'px">' + cpEsc(labTxt) + '</span></div>');
     }
     /* 行业黑框（用户 2026-10-13：「热力图不同行业应该用个黑框隔起来，现在分不清」）：
 两级树图里同行业的格子彼此紧贴、行业之间原本只靠底色渐变区分 → 给每个行业矩形描一圈
@@ -4584,20 +4728,23 @@ const TICKER_TTL = 15000;
     /* 口径标签：盘中蓝字「Finnhub 实时涨跌幅（较昨收）」，其他时段灰字「1 年回报」 */
     const modeTag = '<span class="rt-stat' + (rtOn ? '' : ' is-off') + '">'
       + (rtOn ? '盘中 · Finnhub 实时涨跌幅（较昨收）' : '非盘中 · 1 年回报') + '</span>';
-    const bar = '<div class="screen-bar">'
+    const bar = '<div class="screen-bar screen-bar--src-top">'
       + '<b>板块热力图</b>'
       + (asOf ? '<span>数据日期 ' + cpEsc(asOf) + '</span>' : '')
       + modeTag
-      + '<span class="screen-bar__src">来源：' + cpEsc(data.source || 'all_stocks.json（每日抓取时聚合）') + '</span></div>';
+      + '<span class="screen-bar__src">来源：' + cpEsc(data.source || 'all_stocks.json（每日抓取时聚合）') + '</span>'
+      + '<span class="rt-stat" id="rtStat"></span>'
+      + '</div>';
     /* cap：实时涨跌幅 ±5% 饱和（当日波动小）；1 年回报 ±50%（年动不动 ±100%，
        沿用 5% 会整片顶格看不出强弱）。 */
-    const hmOpts = { cap: rtOn ? 5 : 50, rt: rtOn };
+    const hmOpts = { cap: rtOn ? 5 : 50, rt: rtOn, CW: host.clientWidth || 1000 };
     /* 记住本次渲染参数：fitUstHeat 适配容器长宽比时要按同样的 rows/opts 重画
      （只改虚拟画布 W/H；rt 模式下重画前会按最新实时 pct 刷新 rows）。 */
     ustHeatLast = { rows, opts: hmOpts };
     host.innerHTML = bar + '<div class="ust-heat__fit">'
       + renderUsTopHeatmap(rows, hmOpts)
       + '</div>';
+    rtUpdateStatus();   // 板块 tab 也有 #rtStat → 立即刷新 Finnhub 实时角标（连接/只数/下次重连）
     fitUstHeat();
     ensureUstHeatWatch();
   }
@@ -4606,7 +4753,7 @@ const TICKER_TTL = 15000;
   let ustHeatLast = null;
   /* 桌面端热力图「一屏画完、不滚动 + 铺满无白边」（用户 ：「热力图桌面端我不想滚动下拉，
  就用当前的屏幕画热力图就行」；2026-10-13 又提：「左右还夹着一块白边」）。
- .ust-heat__fit 是 flex:1 的容器（见 styles.css 的 @media min-width:721px），
+ .ust-heat__fit 是 flex:1 的容器（见 index.html 内联样式 的 @media min-width:721px），
  这里量出它的可用宽高，让**虚拟画布的长宽比跟随容器**：W 固定 1000、H 按
  availW/availH 反推（floor 保证实际高度 ≤ 可用高，不出滚动条），再用同样的
  rows/opts 以新 W/H 重画树图，最后把 .ust-heat 设为 width:100% + aspect-ratio:W/H
@@ -4645,7 +4792,7 @@ const TICKER_TTL = 15000;
           return p == null ? r : Object.assign({}, r, { pct: p });
         })
         : ustHeatLast.rows;
-      wrap.innerHTML = renderUsTopHeatmap(rows2, Object.assign({}, ustHeatLast.opts, { W: W, H: H }));
+      wrap.innerHTML = renderUsTopHeatmap(rows2, Object.assign({}, ustHeatLast.opts, { W: W, H: H, CW: availW }));
     }
     const h2 = wrap.querySelector('.ust-heat');
     if (!h2) return;
@@ -4888,7 +5035,7 @@ const TICKER_TTL = 15000;
     if (seq !== screenRenderSeq) return;
     const rows = data.rows || [];
     const asOf = data.asOf ? String(data.asOf).slice(0, 10) : '';
-    const bar = '<div class="screen-bar">'
+    const bar = '<div class="screen-bar screen-bar--src-top">'
       + '<b>共 ' + rows.length + ' 只</b>'
       + (asOf ? '<span>数据日期 ' + asOf + '</span>' : '')
       + '<span class="screen-bar__src">来源：' + cpEsc(data.source) + '</span></div>';
@@ -5084,7 +5231,7 @@ const TICKER_TTL = 15000;
 
     // 打开页面时资讯面板默认收起（首帧不播收起动画）。
     // 用户：「桌面版打开默认开着右边的资讯。移动端保持现有逻辑不变」——
-    // 三栏布局里资讯侧栏只在 >1200px 可见（styles.css `@media (max-width:1200px)` 下 display:none），
+    // 三栏布局里资讯侧栏只在 >1200px 可见（index.html 内联样式 `@media (max-width:1200px)` 下 display:none），
     // 所以只有 ≤1200px 才做默认收起初始化：移动端（≤680px）行为原样保留
     // （资讯全屏页由 tab 切换时自行移除 .is-collapsed），681~1200px 面板本就 display:none，无视觉影响。
     if (window.matchMedia('(max-width: 1200px)').matches) {
@@ -7298,11 +7445,7 @@ const applyMode = (mode, skipDraw) => {
   });
 
   async function initAccountData() {
-    const ACC_API = 'https://data.alpaca.markets';
-    const ACC_HDR = {
-      'APCA-API-KEY-ID': 'PKEUEXIJARHLHWZYLWR6UAOGBS',
-      'APCA-API-SECRET-KEY': '8QmudbfguaxQnFRq13YU1B5GY94F5AEx3Tz7m66LUFyc',
-    };
+    const ACC_API = ALPACA_API, ACC_HDR = ALPACA_HDR;   // 复用文件级 Alpaca 凭据（期权 5Min 棒也用）
 
     const $id = (i) => document.getElementById(i);
     const f2 = (v, sign) => {
@@ -7492,43 +7635,54 @@ const applyMode = (mode, skipDraw) => {
       });
     }
 
-    /* ---- 腾讯 fundgz 兜底（实时净值 + 净值日）----
- 主源东财不可达时兜底。fundgz.tencent.com 返回 `var _fundinfo_<code>_={...}`
- （JS 全局，非 JSON），浏览器用 <script> 注入读取（不受 CORS 限制）。
- 字段：dwjz=单位净值(当日官方)、navdate=净值日(YYYY-MM-DD)。
- ⚠️ 腾讯只给「当日净值」，不给前一日净值 → navP 留 null（今日盈亏画 --，绝不编数）。
- 失败（域名不可达/超时 6s/字段异常）→ 返回 [null,null,null] → 上层退本地 json。 */
+    /* ---- 天天基金档案接口（pingzhongdata）兜底：实时净值 + 前一日净值 + 净值日 ----
+ 主源东财 fundmobapi 对**桌面浏览器 UA 拒答**（返回 Datas:null，业务码 61136403；
+ 手机 UA 正常），导致桌面端永远走不到净值，被迫回退本地 json 末条（滞后一天）。
+ 改用天天基金档案 JS：https://fund.eastmoney.com/pingzhongdata/<code>.js
+ （桌面 UA 也 200、不校验 Referer，但无 CORS 头 → 只能 <script> 注入、不能 fetch）。
+ 文件定义全局变量 Data_netWorthTrend=[{x:毫秒戳,y:单位净值,equityReturn:当日%},...] 与 fS_code。
+ 末条=最新净值、倒数第二条=前一日净值、末条 x 转东八区日期=净值日（三要素齐全，
+ 比旧腾讯兜底还强：腾讯只给当日净值、无前一日）。
+ 旧腾讯 fundgz.tencent.com 域名已 NXDOMAIN（死链，从未生效），弃用。
+ ⚠️ 全局变量同名 → 多基金必须**串行**注入，否则后加载会覆盖 window.Data_netWorthTrend；
+ 用模块级 _txQ 串行队列，保证每只 onload 读到自己的数据。超时 8s 失败退本地 json。 */
+    let _txQ = Promise.resolve();
     function accFundNavTx(code) {
-      return new Promise((resolve) => {
-        const gv = '_fundinfo_' + code + '_';
-        const finish = (l, p, d) => { try { delete window[gv]; } catch (e) {} resolve([l, p, d || null]); };
-        const t = setTimeout(() => { cleanup(); finish(null, null); }, 6000);
-        function cleanup() {
-          clearTimeout(t);
-          const s = document.getElementById('tgz_' + code);
-          if (s && s.parentNode) s.parentNode.removeChild(s);
-        }
-        const s = document.createElement('script');
-        s.id = 'tgz_' + code;
-        s.src = 'https://fundgz.tencent.com/fundinfo/' + code + '.js?_var=' + gv + '&_=' + Date.now();
+      const run = () => new Promise((resolve) => {
+        let s;
+        const cleanup = () => { clearTimeout(t); if (s && s.parentNode) s.parentNode.removeChild(s); };
+        const finish = (l, p, d) => { try { cleanup(); } catch (e) {} resolve([l, p, d || null]); };
+        const t = setTimeout(() => finish(null, null), 8000);
+        s = document.createElement('script');
+        s.src = 'https://fund.eastmoney.com/pingzhongdata/' + code + '.js?rt=' + Date.now();
         s.onload = () => {
           try {
-            const j = window[gv];
-            if (j && j.dwjz) {
-              const nav = parseFloat(j.dwjz);
-              const dt = j.navdate || j.gszrq || null;
-              if (nav > 0 && dt) { cleanup(); return finish(nav, null, String(dt)); }
+            const arr = window.Data_netWorthTrend;
+            const fsCode = window.fS_code;
+            if (Array.isArray(arr) && arr.length && String(fsCode) === String(code)) {
+              const last = arr[arr.length - 1];
+              const prev = arr[arr.length - 2];
+              const navL = parseFloat(last.y);
+              const navP = (prev && isFinite(parseFloat(prev.y))) ? parseFloat(prev.y) : navL;
+              const navDate = (function (ms) {
+                const d = new Date(ms + 8 * 3600 * 1000); // 东八区日期（防 UTC 偏差一天）
+                return d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0') + '-' + String(d.getUTCDate()).padStart(2, '0');
+              })(last.x);
+              if (navL > 0 && navDate) return finish(navL, navP, navDate);
             }
           } catch (e) {}
-          cleanup(); finish(null, null);
+          finish(null, null);
         };
-        s.onerror = () => { cleanup(); finish(null, null); };
+        s.onerror = () => finish(null, null);
         (document.head || document.body || document.documentElement).appendChild(s);
       });
+      const p = _txQ.then(() => run());
+      _txQ = p.then(() => {}, () => {});
+      return p;
     }
 
-    /* 基金净值取数链路：东财(主) → 腾讯 fundgz(兜底) → 上层再退本地 json。
- 东财给 [navL, navP(前一日反推), navDate]；腾讯只给 [navL, null, navDate]。 */
+    /* 基金净值取数链路：东财 fundmobapi(主，手机可用) → 天天基金 pingzhongdata(兜底，桌面可用) → 上层再退本地 json。
+ 东财给 [navL, navP(前一日反推), navDate]；pingzhongdata 给 [navL, navP(历史倒数第二条), navDate(东八区)]。 */
     function accFundNav(code) {
       return accFundNavEm(code).then((r) => {
         if (r && r[0] != null) return r;

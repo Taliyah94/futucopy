@@ -1,15 +1,24 @@
-name: 抓取 FMP 行业分类（全部个股）
+name: 抓取 FMP 行业分类（市值前 200）
 
 # 手动触发：Actions 标签页 → 本 workflow → Run workflow。
-# 可选输入：
-#   limit —— 本次最多抓取个数（默认 200；FMP 免费额度 250 次/天，留余量）。
-#            518 只约 3 天抓全，之后每日只补指数调仓新增的 ticker。
-#   apikey —— FMP API Key。**推荐**在仓库 Settings → Secrets and variables →
-#            Actions 添加 FMP_API_KEY（只需配一次，之后输入框留空即可）；
-#            没配 secret 时在输入框粘贴 key 也能跑。
+# 可选输入（一般全部留空用默认值即可）：
+#   scope     —— 维护市值前 N 只（默认 200；前端热力图只取前 100，200 绰绰有余）。
+#   stale-days—— 缓存超过 N 天 → 重抓核对行业是否变类（默认 30；填 0 = 强制全量重核对）。
+#   limit     —— 单轮最多抓取个数（默认 200；FMP 免费额度 250 次/天，留余量）。
+#   apikey    —— FMP API Key。**推荐**在仓库 Settings → Secrets and variables →
+#                Actions 添加 FMP_API_KEY（只需配一次，之后本输入框留空即可）；
+#                没配 secret 时才需要在这里粘贴 key。
 on:
   workflow_dispatch:
     inputs:
+      scope:
+        description: "维护市值前 N 只（默认 200）"
+        required: false
+        default: "200"
+      stale-days:
+        description: "缓存超过 N 天重抓核对（默认 30；0=强制全量）"
+        required: false
+        default: "30"
       limit:
         description: "本次最多抓取个数（默认 200）"
         required: false
@@ -38,15 +47,18 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: 抓取 FMP sector / industry
+      - name: 抓取 FMP sector / industry（市值前 200，核对替换/补缺）
         env:
           FMP_API_KEY: ${{ secrets.FMP_API_KEY || github.event.inputs.apikey }}
         run: |
           if [ -z "$FMP_API_KEY" ]; then
-            echo "::error::未提供 FMP API Key：在运行弹窗的 apikey 输入框粘贴，或在仓库 Settings → Secrets 添加 FMP_API_KEY"
+            echo "::error::未提供 FMP API Key：在仓库 Settings → Secrets and variables → Actions 添加 FMP_API_KEY（配一次以后输入框留空即可），或在运行弹窗的 apikey 输入框粘贴"
             exit 1
           fi
-          python3 fetch_fmp_profiles.py --limit "${{ github.event.inputs.limit || '200' }}"
+          python3 fetch_fmp_profiles.py \
+            --scope "${{ github.event.inputs.scope || '200' }}" \
+            --stale-days "${{ github.event.inputs.stale-days || '30' }}" \
+            --limit "${{ github.event.inputs.limit || '200' }}"
 
       - name: 提交结果（如有变化）
         run: |
@@ -56,6 +68,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "内容无变化，跳过提交"
           else
-            git commit -m "chore: 更新 FMP 行业分类 $(date +'%Y-%m-%d')"
+            git commit -m "chore: 更新 FMP 行业分类（市值前200）$(date +'%Y-%m-%d')"
             git push
           fi

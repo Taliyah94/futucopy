@@ -56,9 +56,12 @@
     }
 
   rows 里的 fmpSector / fmpIndustry（顶层 nFmp = 已回填条数）由 fetch_fmp_profiles.py
-  分批抓取（FMP 免费额度 250/天，默认每日 200 个），缓存落 fmp_profiles.json；
-  本脚本每次生成 all_stocks.json 时会把该缓存合并进行内（见 attach_fmp_cache），
-  防止每日重生成冲掉已抓的字段。与 ind（historyofmarket 口径）是两套分类，并存。
+  抓取（用户 2026-10-14 定稿：只维护**市值前 200**——前端板块热力图只取前 100
+  分组；FMP 免费额度 250/天，日常只补调仓新进 + 月度重核对行业变类），缓存落
+  fmp_profiles.json（只含前 200 的条目）；本脚本每次生成 all_stocks.json 时会把
+  该缓存合并进行内（见 attach_fmp_cache），防止每日重生成冲掉已抓的字段——
+  也因此 200 名以外的旧 fmp 字段会被自然剥掉，与「只维护前 200」一致。
+  与 ind（historyofmarket 口径）是两套分类，并存。
 
   规则（与 app.js loadAllStocks 完全一致，2026-10-11 用户定稿，此处平移到 py）：
     按 ticker（大写）去重；市值/现价/回报取市值更大的那条；**名称 SP500 优先**，
@@ -1285,12 +1288,14 @@ def dump_all_stocks(obj):
 
 
 # ---------------------------------------------------------------------------
-# FMP sector / industry 缓存（fetch_fmp_profiles.py 分批抓，2026-10-12）
+# FMP sector / industry 缓存（fetch_fmp_profiles.py 抓，2026-10-12 起；
+# 2026-10-14 改为只维护市值前 200：日常补指数调仓新进 + asof 超 30 天重核对）
 #
-# FMP 免费额度 250 次/天，518 只个股抓不全 → 拆成每日一批（默认 200）慢慢抓，
-# 已抓记录落 fmp_profiles.json（symbol → {fmpSector, fmpIndustry, asof}）。
+# 缓存只含 all_stocks.json 市值前 200 的条目（symbol → {fmpSector,
+# fmpIndustry, asof}）；掉出前 200 的会被 fetch_fmp_profiles.py 剪掉。
 # 本脚本每日**重生成** all_stocks.json，会把行内 fmp 字段冲掉 → 每次生成后
-# 调用 attach_fmp_cache 把缓存合并进行内，保证「昨天抓的今天还在」。
+# 调用 attach_fmp_cache 把缓存合并进行内，保证「昨天抓的今天还在」；
+# 反过来 200 名以外的行因为没有缓存条目，旧 fmp 字段不会被带回（符合预期）。
 # 缓存文件不存在 = 还没开始抓 = 空操作。
 # ---------------------------------------------------------------------------
 FMP_CACHE_FILE = "fmp_profiles.json"

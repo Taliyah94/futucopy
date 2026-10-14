@@ -346,11 +346,15 @@
  ⚠️ 尾部留 30 分钟余量：窗口是「最近一个该时段起点 → 现在」，跨过整点时按上界算，
  多拉一点只多 1 页，不会画错（裁剪仍在 assetSeries 里做）。 */
   const SESS_SPAN_MIN = { pre: 360, regular: 420, post: 270, night: 510, h24: 1440, all: 1440 };
-  /* 该时段实际需要的 1m K 线根数（向上取整到 50 的整数，便于复用缓存 key）。 */
+  /* 历史点粒度 = ASSET_BAR（5m）。返回「该时段需要的 5m K 线根数」，
+  按 50 桶为步长向上取整（便于复用页缓存 key）。
+  h24/全天 span=1440min → ceil(1440/5)=288 → 向上取整 300 根，
+  300≤单页 300 上限 = 1 页即可覆盖 25h（24h 全天绰绰有余）。
+  用户 2026-10-14：历史点降 5m 省流量，期权/基金成分股腿共用同一 fetchLeg 自动跟随。 */
   function sessNeededBars(sess) {
     const span = SESS_SPAN_MIN[sess] || 420;
-    if (span >= 1440) return 1440;
-    return Math.min(1440, Math.max(150, Math.ceil(span / 50) * 50));
+    const bars = Math.ceil(span / 5);
+    return Math.min(1440, Math.max(40, Math.ceil(bars / 50) * 50));
   }
 
   /* 翻页拉取原始 K 线（最新在前），拼够 total 根或源返回空为止（单页上限 300）。
@@ -1417,7 +1421,7 @@ const TICKER_TTL = 15000;
   const fundOpenCodes = new Set();  // 持仓页展开估值明细的基金 code（列表每 15s 重绘，状态必须存活在外）
 
   /* ---- 交易页持仓数据（由 initAccountData 数据就绪时填充，见 aoState.series 赋值处） ---- */
-  const TRADE_POS = { stock: [], fund: [], fx: 1, totalCny: null, cashCny: 0, ibkrCashCny: 0, ready: false };
+  const TRADE_POS = { stock: [], fund: [], fx: 1, totalCny: null, cashCny: 0, ibkrCashCny: 0, ready: false, allReady: false };
 
   /* 交易页持仓汇总。**推算总资产 = 上面那 8 行的市值之和 + 现金**（用户 要求：
  「推算总资产不应该是交易里市值加起来吗」）—— 所以这里的两项构成必须与**行内所见**完全同口径：
@@ -1435,6 +1439,7 @@ const TICKER_TTL = 15000;
   function renderTradeSum() {
     const box = document.getElementById('tradeSum');
     if (!box) return;
+    TRADE_POS.allReady = false;   // 每轮重新判定「各数据源是否凑齐」（没凑齐时实时末点保持上一值，见 syncAssetLastPoint 闸门）
     if (!TRADE_POS.ready || TRADE_POS.totalCny == null) { box.hidden = true; return; }
     box.hidden = assetSheetOpen;   // 分时图展开时让位（收起后自动恢复）
     /* 金额一律**取整**（用户 ：「都保留到整数」）：几十万量级的小数点没有信息量，
@@ -1453,7 +1458,7 @@ const TICKER_TTL = 15000;
  ibkr 快照兜底，没有意义」）。没有实时价的行现在**不计入**，而不是拿旧快照充数 ——
  充数会让「推算总资产」在 Alpaca 挂掉时显示一个看似正常的数，
  与汇总框第一行的「账户资产」差额巨大却看不出原因。 */
-    let stockNow = 0;
+    let stockNow = 0, stockContrib = 0;
     TRADE_POS.stock.forEach((r) => {
       const isOpt = r.h && r.h.opt;
       /* 期权（用户 定调）：行内「市值」列用 liveValueCny（实时 Alpaca mid），
@@ -1464,13 +1469,25 @@ const TICKER_TTL = 15000;
         ? (r.liveValueCny != null ? r.liveValueCny
            : (r.tradeValueCny != null ? r.tradeValueCny : (r.valueCny != null ? r.valueCny : null)))
         : (r.tradeValueCny != null ? r.tradeValueCny : (r.valueCny != null ? r.valueCny : null));
-      if (v != null) stockNow += v;
+      if (v != null) { stockNow += v; stockContrib++; }
     });
     let fundNow = 0;
     TRADE_POS.fund.forEach((f) => { fundNow += (f.estAmount != null ? f.estAmount : f.amount) || 0; });
     const posSum = stockNow + fundNow;                    // 持仓市值合计（= 8 行求和）
     const cashSum = TRADE_POS.ibkrCashCny + TRADE_POS.cashCny;
     const estCny = posSum + cashSum;                      // 推算总资产
+    /* 「各数据源是否凑齐」闸门（用户 2026-10-14：实时末点只在凑齐时才推进，
+    没凑齐则 syncAssetLastPoint 保持上一值，避免画一根假断崖）。判定：
+      · 每只正股行都贡献了市值（stockContrib === 行数，无行因缺价被静默跳过）；
+      · 每只期权行都有实时 mark（Alpaca 没回就当没凑齐，宁可末点不动）；
+      · 基金段已就绪（每行有估算/官方市值）、现金/FX 已知、本轮船算出了 estCny/stockNow。 */
+    const optsAllLive = !TRADE_POS.stock.some((r) => r.h && r.h.opt
+      && !((r.liveValueCny != null) || (r.pTrade > 0) || (r.price > 0)));
+    const fundAllReady = !TRADE_POS.fund.length
+      || TRADE_POS.fund.every((f) => ((f.estAmount != null ? f.estAmount : f.amount) != null));
+    const cashFxReady = ((TRADE_POS.cashCny != null || TRADE_POS.ibkrCashCny != null) && TRADE_POS.fx);
+    TRADE_POS.allReady = (stockContrib === (TRADE_POS.stock.length || 0))
+      && optsAllLive && fundAllReady && cashFxReady && stockNow > 0 && estCny > 0;
     /* 给「推算总资产分时图」留一份同口径的拆解（见 assetSeries）。
  ⚠️ 必须在 estCny 之后同步存，不能等下一次刷新 —— 绘图是异步的，
  晚一步就会拿到上一轮的股数/基金值，曲线末点会和汇总对不上。 */
@@ -1550,6 +1567,10 @@ const TICKER_TTL = 15000;
  ⚠️ 分钟价取自 **OKX 股票永续 1m**（与全站美股行情主源一致，见 fetchRawCandles）；
  它 7x24 连续，与真实美股盘前/盘后的时段划分靠 `etMinutes` 自己切。 */
   let assetChartData = null;        // 最近一次算出的序列（定时刷新时复用，不重复拉 K 线）
+  /* 历史点 K 线粒度（用户 2026-10-14）：5m —— 比 1m 省约 5 倍流量；
+  基金成分股腿、期权合成形状都走同一个 fetchLeg，分辨率自动跟随。
+  仅资产图用；自选/账户页分时图仍是 1m，不受影响。 */
+  const ASSET_BAR = '5m';
   const ASSET_SESS = {
     pre:     { label: '盘前', icon: '<rect x="1.5" y="4" width="4.6" height="8" rx="1" fill="#c9cedb"/><rect x="7.9" y="4" width="4.6" height="8" rx="1" fill="#2b3245"/>' },
     regular: { label: '盘中', icon: '<rect x="2" y="1.5" width="4" height="13" rx="1" fill="#2b3245"/><rect x="8" y="1.5" width="4" height="13" rx="1" fill="#2b3245"/>' },
@@ -1593,7 +1614,7 @@ const TICKER_TTL = 15000;
     const needBars = sessNeededBars(key);
     const fetchLeg = async (instId) => {
       try {
-        const raw = await fetchRawCandles(instId, needBars, '1m');  // 最新在前
+        const raw = await fetchRawCandles(instId, needBars, ASSET_BAR);  // 最新在前（5m 粒度）
         if (!raw || !raw.length) return [];
         return raw.slice().map((r) => ({ ts: +r[0], price: +r[4] })).sort((a, b) => a.ts - b.ts);
       } catch (e) { return []; }
@@ -1609,37 +1630,28 @@ const TICKER_TTL = 15000;
       const pts = await fetchLeg(inst2(s.code));
       return { s, pts };
     }));
-    /* 期权腿：按「实时直回推」（用户 ：「期权按实时直回推就行了，不用抓取K」）。
- OKX 不挂美股权期权、Alpaca 免费账号 1Min/5Min 又全空 → 原方案依赖 Alpaca options/bars
- 日内序列，几乎永远拿不到，曲线只能退化成「实时 mark 一根平线」，还白白多打一个域的请求。
- 改为**不再请求任何 K 线**，直接按实时 mark 回推期权 intraday 形状：
- · 解析期权 OCC 根符号对应的正股（ORCL260918C00145000 → ORCL），
- 复用同图里已拉好的正股腿 OKX 1m 序列当「形状」（同属 OKX 限频桶，零额外请求）；
- · 起点 = 昨收(o.prev)，末点 = 实时 mark(o.last)，中段沿正股 intraday 轨迹归一化插值
- （正股日内几乎不动时退化成按时间线性，照样保证末点=实时 mark）；
- · 正股腿取不到（非持仓正股）时 pts=[]：合成时按 prevOf(=实时 mark) 兜底成平线。
- 这样期权腿既省掉 Alpaca 抓取，又能跟随正股走势、末点对齐实时 mark。 */
+    /* 期权腿：历史点=昨收（平线），末点实时=Alpaca mid（用户 2026-10-14 定调：
+    “期权腿历史数据就按昨收来，只有实时价取mid”）。
+    原因：Alpaca 免费档期权**没有任何分钟线**（1Min/5Min 全空，只有 1Day），
+    之前「沿正股 5m 形状回推」属于人造走势，用户明确不要。
+    · 历史段直接取昨收(o.prev) 画平线，时间网格复用正股 5m 序列的时间戳
+      （正股没进场时退回任意一条有数据的正股腿），保证期权在历史段恒为昨收、不凭空消失；
+    · 末点的实时值(mid) 不在 leg 层画：曲线整体末点由 syncAssetLastPoint
+      用本轮汇总的「推算总资产」(含期权 Alpaca mid，见 1464-1478) 覆盖（见 2314 行），
+      于是历史平线、末点自动对齐 mid，无需在此插值。 */
     const optLegs = (p.opts || []).map((o) => {
-      const s = { code: o.occ, qty: o.qty, mult: o.mult || 100, prev: (o.last > 0 ? o.last : o.prev) };
-      const liveMark = (o.last > 0 ? o.last : o.prev);     // 实时 mark：曲线末点要对齐它
-      const prevClose = (o.prev > 0 ? o.prev : o.last);     // 昨收：曲线起点基准
+      const prevClose = (o.prev > 0 ? o.prev : o.last);     // 昨收：历史点全用它（平线）
+      const s = { code: o.occ, qty: o.qty, mult: o.mult || 100, prev: prevClose };
       const undMatch = (o.occ || '').match(/^[A-Z]+/);
       const undCode = undMatch ? undMatch[0] : null;
       const undLeg = undCode ? stockLegs.find((l) => l.s && l.s.code === undCode) : null;
-      const undPts = (undLeg && undLeg.pts && undLeg.pts.length) ? undLeg.pts : null;
+      /* 时间网格：优先正股 5m 序列时间戳；正股未进场时退回任意一条有数据的正股腿。 */
+      const gridLeg = (undLeg && undLeg.pts && undLeg.pts.length) ? undLeg
+        : stockLegs.find((l) => l.pts && l.pts.length);
       let pts = [];
-      if (undPts && prevClose > 0 && liveMark > 0) {
-        const u0 = undPts[0].price, uLast = undPts[undPts.length - 1].price;
-        const uRange = uLast - u0;
-        const firstTs = undPts[0].ts, lastTs = undPts[undPts.length - 1].ts;
-        const span = lastTs - firstTs;
-        const useShape = Math.abs(uRange) > 1e-9;           // 正股日内有波动才用形状
-        pts = undPts.map((pt) => {
-          const frac = useShape ? (pt.price - u0) / uRange
-            : (span > 0 ? (pt.ts - firstTs) / span : 1);    // 正股平 → 按时间线性（仍末点=liveMark）
-          return { ts: pt.ts, price: Math.max(0, prevClose + (liveMark - prevClose) * frac) };
-        });
-      }   // 无正股序列 / 无实时价 → pts=[]：合成时按 prevOf(=实时mark) 兜底成平线
+      if (gridLeg && gridLeg.pts && prevClose > 0) {
+        pts = gridLeg.pts.map((pt) => ({ ts: pt.ts, price: prevClose }));  // 历史点 = 昨收（平线）
+      }   // 正股全无序列 / 无昨收 → pts=[]：合成时按 prevOf(=昨收) 兜底，期权段在历史为昨收常数
       return { s, pts };
     });
     /* 基金段的成分股 K 线同样**串行**（走 OKX，与正股腿抢同一个限频桶）。 */
@@ -2166,7 +2178,12 @@ const TICKER_TTL = 15000;
  等 renderTradeSum 那次拿到 parts 时顺势 force 一次（见下方 tradeSum 末尾）——
  否则切视图那一下（parts 尚未就绪）就浪费了，用户要干等到下一个 15s tick。 */
     if (!TRADE_POS.ready || !TRADE_POS.parts) { assetPending = true; return; }
-    const stale = Date.now() - assetChartTs > 60000;
+    /* 历史序列重建节奏（用户 2026-10-14）：对齐**5 分钟边界**而非每 60s 都重拉。
+   同一 5m 桶内只刷新实时末点 + 重绘（走下方 !stale 分支），不重抓 K 线；
+   跨入新 5m 桶才整段重算历史序列 → 抓取频率从每 60s 降到每 5min，配合 _okxPages
+   页缓存，桶内重复刷新零新请求。force（首屏/切时段）仍强制重建。 */
+    const FIVE_MIN = 300000;
+    const stale = Math.floor(Date.now() / FIVE_MIN) > Math.floor(assetChartTs / FIVE_MIN);
     if (!force && !stale) { syncAssetChartState(); paintAssetHead(); drawAssetChart(assetChartData); return; }
     assetChartTs = Date.now();
     /* ⚠️⚠️ 失败/null 时**保留上一条好曲线**（ 用户报「曲线有时候会跳」的修法）：
@@ -2287,6 +2304,9 @@ const TICKER_TTL = 15000;
  「基金+现金」≈80 万）时**不动末点** —— 那会画出一根假断崖，宁可用旧末点。 */
   function syncAssetLastPoint() {
     const estCny = TRADE_POS.estCny, stockNow = TRADE_POS.stockNow;
+    /* 「数据源是否凑齐」闸门（用户 2026-10-14）：没凑齐就**保留上一轮末点**，
+    不更新也不重画，避免某源（如 Alpaca 期权 mid）暂未回包时画出一根假断崖。 */
+    if (!TRADE_POS.allReady) return false;
     if (!(estCny > 0) || !(stockNow > 0)) return false;
     if (!assetChartData || !assetChartData.pts || !assetChartData.pts.length) return false;
     const lastPt = assetChartData.pts[assetChartData.pts.length - 1];
@@ -4049,8 +4069,286 @@ const TICKER_TTL = 15000;
       + '<b>共 ' + rows.length + ' 只</b>'
       + '<span>S&amp;P 500 ' + (d.nSp || 0) + ' + Nasdaq 100 ' + (d.nNd || 0) + '，按代码去重</span>'
       + (d.asOf ? '<span>数据日期 ' + cpEsc(String(d.asOf).slice(0, 10)) + '</span>' : '')
+      + '<span class="rt-stat" id="rtStat"></span>'
       + '<span class="screen-bar__src">来源：' + cpEsc(d.source || 'fund_holdings.json（每日快照）') + '</span></div>';
-    host.innerHTML = bar + renderIndexTable(rows, { noW: true, sortable: true, sort: ALL_SORT });
+    rtFillBase();    /* 先填基准价 → 实时列初始即显示快照价（等建连节拍期间也有价格看） */
+    host.innerHTML = bar + renderIndexTable(rows, { noW: true, sortable: true, sort: ALL_SORT, rt: true, rtSyms: rtTopSet() });
+    rtStart();       /* 幂等：首帧才建连接；排序/切 tab 重绘后只补刷已有价格 */
+    rtRepaintAll();
+    rtUpdateStatus();
+  }
+
+  /* ===================================================================
+     Finnhub WebSocket 实时价列（2026-10-14 用户定稿：「全部个股加一个 finnhub
+     实时价列，前 100 才写」= 只订阅市值前 100）
+     · 免费档实测限制（2026-10-14）：每连接 50 符号（第 51 个报 too many symbols）；
+       连接建立 5 次/时间窗（429 + x-ratelimit-limit:5）→ 2 条连接 × 50。
+     · **节拍对齐建连**（2026-10-14 用户追加）：所有建连（初始 + 重连）只发生在
+       「整分钟边界 + 组间错峰」；用户任何时刻刷新页面都只是把排程推到下个边界，
+       稳态建连 ≤2 次/分钟 → 无论怎么刷都不会超出「5 次/时间窗」的 429。
+     · 盘后/无成交时段服务端会掐空闲连接（实测秒级~分钟级不等）→ onclose 按节拍
+       重连；连接活不过 15s 视为被掐 → 周期翻倍到 8 分钟封顶，不跟限速窗口较劲。
+     · localStorage 跨标签协调：最近一个周期内已建连 → 顺延一整周期，多开
+       标签页也不会叠加超限。
+     · key 明文暴露 = 用户确认的方案 B（个人看板；泄露可轮换）。
+     · 价格只进 rtInfo.latest + [data-rt] 单元格，不碰任何其它模块状态。
+     =================================================================== */
+  const FH_TOKEN = 'db55oq1r01qv1n8sqv90db55oq1r01qv1n8sqv9g';
+  const FH_TOP_N = 100;        // 只订市值前 100
+  const FH_PER_CONN = 50;      // 免费档每连接符号上限 → 100 只 = 2 条连接
+  const RT_TICK_MS = 60000;    // 建连节拍 = 整分钟边界（想更保守可改 120000 = 2 分钟）
+  const RT_MAX_TICK_MS = 480000; // 盘后短命时周期翻倍封顶 8 分钟
+  const RT_STAGGER_MS = 3000;  // 组间错峰：边界后 +3s，避免同 tick 双握手
+  const RT_LS_KEY = 'rtLastConn'; // localStorage：跨标签建连时刻协调键
+  const RT_MODE_CHECK_MS = 30000; // 盘中/收盘状态翻转检查间隔
+  /* 2026 年 NYSE 假期（每年初需更新；过期年份不判假期 → 当天按盘中处理，
+     但假日无成交 → 实时格显示 --，影响仅限当天） */
+  const RT_MKT_HOLIDAYS_2026 = [
+    '2026-01-01', '2026-01-19', '2026-02-16', '2026-04-03', '2026-05-25',
+    '2026-06-19', '2026-07-03', '2026-09-07', '2026-11-26', '2026-12-25',
+  ];
+  const rtInfo = { started: false, groups: [], latest: {}, base: {}, open: 0, syms: [], topSet: null, timer: 0, modeTimer: 0 };
+  let rtOpenState = null;   // 当前盘中判定（rtCheckMode 检测翻转用；null = 未初始化）
+  let rtHeatDirty = false;  // 有待更新实时 pct 的热力图格子（rtUpdateHeatCats 消费）
+
+  /* 市值前 N 名集合：ALL_ROWS 载入后算一次并缓存（去重在 loadAllStocks 已做，
+ 这里按 mc 再排一次兜底，保证「前 100」与当前展示排序无关）。 */
+  function rtTopSet() {
+    if (rtInfo.topSet) return rtInfo.topSet;
+    if (!ALL_ROWS) return new Set();
+    const top = ALL_ROWS.filter((r) => r && r.c)
+      .slice().sort((a, b) => (b.mc || 0) - (a.mc || 0))
+      .slice(0, FH_TOP_N);
+    rtInfo.topSet = new Set(top.map((r) => r.c));
+    return rtInfo.topSet;
+  }
+
+  /* 基准价 = all_stocks.json 快照现价（每日更新）→ 实时价据此算涨跌。
+  ⚠️ 配色沿用项目既定约定「涨绿跌红」（见 styles.css --up/--down 与 heatColor），
+  与全看板一致；不是 A 股习惯的涨红跌绿。 */
+  function rtFillBase() {
+    if (!ALL_ROWS) return;
+    for (const r of ALL_ROWS) if (r && r.c && r.p != null) rtInfo.base[r.c] = r.p;
+  }
+
+  /* 美股盘中判定（美东时区；Intl 自动处理 EDT/EST 夏令时）：
+     周一~周五 9:30-16:00 ET 且不在 2026 假期表 → true。
+     用途（用户 2026-10-14 定稿）：板块热力图**盘中用 Finnhub 实时涨跌幅**，
+     其他时段（盘后/夜盘/周末/假日）用 1 年回报。 */
+  function rtIsMarketOpen() {
+    try {
+      const f = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+        weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false,
+      });
+      const p = {};
+      for (const x of f.formatToParts(new Date())) p[x.type] = x.value;
+      if (RT_MKT_HOLIDAYS_2026.indexOf(p.year + '-' + p.month + '-' + p.day) >= 0) return false;
+      if (p.weekday === 'Sat' || p.weekday === 'Sun') return false;
+      const mins = (+p.hour % 24) * 60 + (+p.minute);
+      return mins >= 9 * 60 + 30 && mins < 16 * 60;
+    } catch (e) { return false; }
+  }
+
+  /* 单只实时涨跌幅（%）：rtInfo.latest（Finnhub 实时价） vs rtInfo.base（json 现价=昨收）。
+     两侧齐备才算得出；否则 null（热力图格子/表格副行显示 --）。 */
+  function rtPctOf(sym) {
+    const p = rtInfo.latest[sym], b = rtInfo.base[sym];
+    if (p == null || b == null || b <= 0) return null;
+    return (p - b) / b * 100;
+  }
+
+  /* 节拍对齐排程：所有建连（初始 + 重连）只发生在「周期边界 + 组间错峰」时刻，
+     用户何时刷新页面都只是把排程推到下个边界 → 稳态建连 ≤2 次/分钟，
+     永远不碰 Finnhub「5 次连接建立/时间窗」的 429。
+     · gs.tick 初始 RT_TICK_MS；连接活不过 15s（盘后被掐）→ 翻倍到 RT_MAX_TICK_MS 封顶；
+     · localStorage 跨标签协调：最近一个周期内已建连 → 顺延一整周期，
+       多开标签页也不叠加。 */
+  function rtSchedule(gs) {
+    if (!rtInfo.started) return;
+    const now = Date.now();
+    const period = gs.tick;
+    let wait = period - (now % period) + gs.idx * RT_STAGGER_MS;
+    try {
+      const last = +(localStorage.getItem(RT_LS_KEY) || 0);
+      if (last > 0 && now - last < period) wait += period - (now - last);
+    } catch (e) { /* 隐私模式等 localStorage 不可用 → 单标签节拍仍成立 */ }
+    gs.nextAt = now + wait;
+    setTimeout(() => rtConnect(gs), wait);
+  }
+
+  /* 各组里最早的待建连时刻（角标倒计时用；0 = 都已连上或在重连路上） */
+  function rtEarliest() {
+    let m = 0;
+    for (const gs of rtInfo.groups) if (gs.nextAt && (!m || gs.nextAt < m)) m = gs.nextAt;
+    return m;
+  }
+
+  function rtStart() {
+    if (rtInfo.started || !ALL_ROWS) return;
+    const syms = Array.from(rtTopSet());
+    if (!syms.length) return;
+    rtInfo.started = true;
+    rtInfo.syms = syms;
+    rtFillBase();
+    /* 每组一个持久状态（tick/nextAt 跨重连保留）；两组在「整分钟边界 + 错峰」建连
+     （同 tick 双握手实测也能成，但错峰 + localStorage 协调对 Finnhub 的
+     「5 次连接/时间窗」更友好）。 */
+    let gi = 0;
+    for (let i = 0; i < syms.length; i += FH_PER_CONN) {
+      const gs = { syms: syms.slice(i, i + FH_PER_CONN), idx: gi++, tick: RT_TICK_MS, born: 0, alive: false, nextAt: 0 };
+      rtInfo.groups.push(gs);
+      rtSchedule(gs);
+    }
+    /* 盘后无成交时也要让状态角标显示「已订阅 N 只 / 下次连接倒计时」→ 1s 一跳 */
+    if (!rtInfo.timer) rtInfo.timer = setInterval(rtUpdateStatus, 1000);
+    /* 盘中/收盘翻转检查（用户 2026-10-14：热力图盘中用实时、其他用年回报）：
+       跨过 9:30/16:00 边界时若正显示板块热力图 → 按新口径重绘 */
+    if (!rtInfo.modeTimer) rtInfo.modeTimer = setInterval(rtCheckMode, RT_MODE_CHECK_MS);
+  }
+
+  /* 盘中状态翻转 → 重绘板块热力图（实时口径 ↔ 年回报口径）。
+     ALL_ROWS 已缓存 → 重绘零网络；非板块 tab 不动作。 */
+  function rtCheckMode() {
+    const o = rtIsMarketOpen();
+    if (o === rtOpenState) return;
+    rtOpenState = o;
+    if (document.querySelector('#screenBody .ust-heat__fit')) renderSectors();
+  }
+
+  function rtConnect(gs) {
+    if (!rtInfo.started) return;
+    let ws;
+    try {
+      ws = new WebSocket('wss://ws.finnhub.io?token=' + encodeURIComponent(FH_TOKEN));
+    } catch (e) { return; }
+    ws.onopen = () => {
+      gs.alive = true;
+      gs.born = Date.now();
+      gs.nextAt = 0;
+      for (const s of gs.syms) ws.send(JSON.stringify({ type: 'subscribe', symbol: s }));
+      rtInfo.open++;
+      try { localStorage.setItem(RT_LS_KEY, String(Date.now())); } catch (e) {}
+      rtUpdateStatus();
+    };
+    ws.onmessage = (ev) => {
+      let d;
+      try { d = JSON.parse(ev.data); } catch (e) { return; }
+      if (!d || d.type !== 'trade' || !Array.isArray(d.data)) return;
+      for (const tr of d.data) {
+        const s = tr && tr.s;
+        if (!s || tr.p == null) continue;
+        rtInfo.latest[s] = tr.p;
+        rtPaint(s);
+      }
+    };
+    ws.onerror = () => { /* 浏览器拿不到 429 响应头；退避逻辑在 onclose */ };
+    ws.onclose = () => {
+      const lived = gs.born ? (Date.now() - gs.born) / 1000 : 0;
+      if (gs.alive) { gs.alive = false; rtInfo.open = Math.max(0, rtInfo.open - 1); rtUpdateStatus(); }
+      if (!rtInfo.started) return;
+      gs.nextAt = 0;
+      /* 节拍退避：
+       · 活过 15s = 正常掉线（盘中网络抖动）→ 回 1 分钟节拍，下个整分边界恢复；
+       · 活不过 15s = 盘后被掐 → 周期翻倍（2/4/8 分钟封顶），
+         两组合计建连频率 ≤2 次/分钟，远离「5 次连接建立/时间窗」的 429。 */
+      gs.tick = lived >= 15 ? RT_TICK_MS : Math.min(gs.tick * 2, RT_MAX_TICK_MS);
+      rtSchedule(gs);
+    };
+  }
+
+  /* 单只刷新：全部个股表格单元格（价格行+涨跌幅副行）+ 板块热力图格子（背景+pct 文本）。
+     · 元素上缓存 _rtPx/_rtPct 字符串做早退，避免每笔 trade 都碰 DOM；
+     · 板块 tab 激活时表格单元格 el 为 null —— 不能早退，热力图格子照常更新；
+     · 涨跌着色沿用项目约定「涨绿跌红」（--up 绿 / --down 红）。 */
+  function rtPaint(sym) {
+    const p = rtInfo.latest[sym];
+    if (p == null) return;
+    const txt = fmt(p, 2);
+    const base = rtInfo.base[sym];
+    let pct = null, pctTxt = '--';
+    if (base != null && base > 0) {
+      pct = (p - base) / base * 100;
+      pctTxt = (pct > 0 ? '+' : '') + pct.toFixed(2) + '%';
+    }
+    const el = document.querySelector('#screenBody [data-rt="' + sym + '"]');
+    if (el && (el._rtPx !== txt || el._rtPct !== pctTxt)) {
+      el._rtPx = txt; el._rtPct = pctTxt;
+      const px = el.querySelector('.us-top__rt-px');
+      const pc = el.querySelector('.us-top__rt-pct');
+      if (px) px.textContent = txt;
+      if (pc) pc.textContent = pctTxt;
+      el.classList.remove('up', 'down', 'flat');
+      el.classList.add(pct == null ? 'flat' : cls(pct));
+      el.title = sym + ' · Finnhub 实时 ' + txt
+        + (pct != null ? '（较昨收 ' + (pct > 0 ? '+' : '') + pct.toFixed(2) + '%）' : '');
+    }
+    rtPaintHeat(sym, pct);
+  }
+
+  /* 热力图格子刷新（板块 tab 盘中模式）：格子挂 data-rth，背景按实时 pct 重算
+     （盘中 cap=5），格内 <i> 涨跌幅文本同步；小格子无 <i> 只更新背景。 */
+  function rtPaintHeat(sym, pct) {
+    const cell = document.querySelector('#screenBody [data-rth="' + sym + '"]');
+    if (!cell) return;
+    if (pct != null) {
+      const bg = heatColor(pct, 5);
+      if (cell._rthBg !== bg) { cell.style.background = bg; cell._rthBg = bg; }
+      const i = cell.querySelector('i');
+      if (i) {
+        const t = (pct > 0 ? '+' : '') + pct.toFixed(2) + '%';
+        if (i.textContent !== t) i.textContent = t;
+      }
+    }
+    rtHeatDirty = true;   // 行业加权标签由 rtUpdateHeatCats 节流重算
+  }
+
+  /* 行业标签的实时市值加权涨跌幅（节流：rtUpdateStatus 1s  tick 内最多一次）。
+     标签挂 data-rthc=行业名；只更新文本，不动布局。 */
+  function rtUpdateHeatCats() {
+    if (!rtHeatDirty || !ustHeatLast || !ustHeatLast.opts || !ustHeatLast.opts.rt) { rtHeatDirty = false; return; }
+    rtHeatDirty = false;
+    const byGrp = new Map();
+    for (const r of ustHeatLast.rows) {
+      const p = rtPctOf(r.c);
+      if (p == null || !isFinite(p) || (r.mc || 0) <= 0) continue;
+      let g = byGrp.get(r.grp);
+      if (!g) { g = { wsum: 0, w: 0 }; byGrp.set(r.grp, g); }
+      g.wsum += p * r.mc; g.w += r.mc;
+    }
+    document.querySelectorAll('#screenBody [data-rthc]').forEach((el) => {
+      const g = byGrp.get(el.dataset.rthc);
+      const w = g && g.w > 0 ? g.wsum / g.w : null;
+      const span = el.querySelector('span');
+      if (span) span.textContent = el.dataset.rthc + (w == null ? '' : ' ' + (w > 0 ? '+' : '') + w.toFixed(2) + '%');
+    });
+  }
+
+  function rtRepaintAll() {
+    for (const s in rtInfo.latest) rtPaint(s);
+  }
+
+  /* 状态角标（screen-bar 内）：已收到价格只数 / 订阅总数 · 连接数 ·
+     未连满时附「下次 Ns」建连倒计时（节拍对齐，整分钟边界）。 */
+  function rtUpdateStatus() {
+    /* ⚠️ #rtStat 只存在于「全部个股」tab 的 bar；板块 tab 没有该元素 →
+       角标逻辑整体跳过，但行业加权标签刷新（rtUpdateHeatCats）必须照样跑。 */
+    const el = document.getElementById('rtStat');
+    if (el) {
+      if (!rtInfo.started) { el.textContent = ''; }
+      else {
+        const got = Object.keys(rtInfo.latest).length;
+        const need = Math.ceil(rtInfo.syms.length / FH_PER_CONN);
+        let txt = 'Finnhub实时 ' + got + '/' + rtInfo.syms.length + ' · 连接 ' + rtInfo.open + '/' + need;
+        if (rtInfo.open < need) {
+          const nxt = rtEarliest();
+          if (nxt > Date.now()) txt += ' · 下次' + Math.ceil((nxt - Date.now()) / 1000) + 's';
+        }
+        el.textContent = txt;
+        el.classList.toggle('is-off', rtInfo.open === 0);
+      }
+    }
+    if (rtHeatDirty) rtUpdateHeatCats();   // 行业加权标签节流刷新（1s 一跳）
   }
   async function renderAllStocks() {
     const host = $('#screenBody');
@@ -4142,7 +4440,10 @@ const TICKER_TTL = 15000;
         const pctTxt = s.pct == null ? '--' : (s.pct > 0 ? '+' : '') + s.pct.toFixed(2) + '%';
         const txt = (showCode ? '<b>' + cpEsc(s.c) + '</b>' : '')
           + (showPct ? '<i>' + pctTxt + '</i>' : '');
-        cells.push('<div class="ust-heat__cell" style="left:' + (r.x / W * 100).toFixed(3)
+        /* opts.rt = 盘中实时模式：格子挂 data-rth（Finnhub tick 到达时 rtPaintHeat
+        按实时 pct 重算背景与文本，见 rtPaint）；非盘中（年回报口径）不挂。 */
+        const rth = (opts && opts.rt) ? ' data-rth="' + cpEsc(s.c) + '"' : '';
+        cells.push('<div class="ust-heat__cell"' + rth + ' style="left:' + (r.x / W * 100).toFixed(3)
           + '%;top:' + (r.y / H * 100).toFixed(3) + '%;width:' + (r.w / W * 100).toFixed(3)
           + '%;height:' + (r.h / H * 100).toFixed(3) + '%;background:' + heatColor(s.pct, cap)
           + ';font-size:' + fs.toFixed(1) + 'px">' + txt + '</div>');
@@ -4176,7 +4477,10 @@ const TICKER_TTL = 15000;
       /* ⚠️ 光把**容器**右对齐没用：里面的 span 是 inline-block，从容器**左**边缘往右长，
  照样溢出画布被裁（实测「公用事业」只剩一个「公」字）→ 加 .is-r 让 span 自身
  absolute 贴容器右边缘、向左延伸。 */
-      cells.push('<div class="ust-heat__cat' + (nearRight ? ' is-r' : '') + '" style="' + posCss
+      /* opts.rt = 盘中实时模式：行业标签挂 data-rthc=行业名（rtUpdateHeatCats
+         按实时市值加权 pct 节流更新文本）；非盘中不挂。 */
+      const rthc = (opts && opts.rt) ? ' data-rthc="' + cpEsc(c.name) + '"' : '';
+      cells.push('<div class="ust-heat__cat' + (nearRight ? ' is-r' : '') + '"' + rthc + ' style="' + posCss
         + ';top:' + (ly / H * 100).toFixed(3) + '%;width:' + (cr.w / W * 100).toFixed(3)
         + '%;height:' + (cr.h / H * 100).toFixed(3) + '%"><span>' + cpEsc(labTxt) + '</span></div>');
     }
@@ -4220,14 +4524,16 @@ const TICKER_TTL = 15000;
 
   /* 板块（行业）热力图 —— 2026-10-13 用户定稿：「用那个全部个股的 JSON，取市值前 100 名
   画热力图（谷歌算一个），只分大行业就行」。
-  · 数据源 = **all_stocks.json**（S&P 500 + Nasdaq 100 合并去重，518 只）→ 取市值前 100；
-  · 分组 = **FMP 大行业 fmpSector**（11 类，实测市值占比：Technology 46% /
-    Communication Services 12% / Financial Services 10% / Consumer Cyclical 9% /
-    Healthcare 8% / Industrials 7% / Consumer Defensive 5% / Energy 2% /
-    Real Estate 0.5% / Basic Materials 0.4% / Utilities 0.3%）；
-  · 谷歌双股权 GOOGL/GOOG 由 loadAllStocks 内的 dedupGoogleShareClass 去重 → 只算一只；
-  · 行业之间描**黑框**分隔（renderUsTopHeatmap 末尾整批 push 的 .ust-heat__frame）。
-  着色口径 = **1 年回报**（快照没有当日涨跌幅）→ heatColor cap=50；面积 ∝ 市值。 */
+   · 数据源 = **all_stocks.json**（S&P 500 + Nasdaq 100 合并去重，518 只）→ 取市值前 100；
+   · 分组 = **FMP 大行业 fmpSector**（11 类，实测市值占比：Technology 46% /
+     Communication Services 12% / Financial Services 10% / Consumer Cyclical 9% /
+     Healthcare 8% / Industrials 7% / Consumer Defensive 5% / Energy 2% /
+     Real Estate 0.5% / Basic Materials 0.4% / Utilities 0.3%）；
+   · 谷歌双股权 GOOGL/GOOG 由 loadAllStocks 内的 dedupGoogleShareClass 去重 → 只算一只；
+   · 行业之间描**黑框**分隔（renderUsTopHeatmap 末尾整批 push 的 .ust-heat__frame）。
+   · 着色口径（用户 2026-10-14 定稿）：**盘中**（美东 9:30-16:00 交易日）用 Finnhub
+     实时涨跌幅（较昨收，cap=5，tick 到达即刷新格子/行业标签）；**其他时段**用
+     1 年回报（cap=50）；跨边界由 rtCheckMode 每 30s 检查并重绘。 */
   async function renderSectors() {
     const host = $('#screenBody');
     if (!host) return;
@@ -4236,10 +4542,11 @@ const TICKER_TTL = 15000;
     host.innerHTML = '<div class="screen-empty">正在读取板块数据（全部个股 · 市值前 100）…</div>';
     let data;
     try {
-      /* ⚠️ 2026-10-13 用户定稿：「用那个全部个股的 JSON，取市值前 100 名画热力图（谷歌算一个），
-       只分大行业就行」—— 数据源从 Nasdaq 100 快照（101 只）换成 all_stocks.json 的
-       **全市场合并表**（518 只），取市值前 100；分组只到 FMP 大行业（fs）。 */
-      data = await loadAllStocks();
+      /* ALL_ROWS 已缓存（全部个股 tab 或本 tab 早先加载过）→ 直接用，零网络；
+         否则走 loadAllStocks（优先 all_stocks.json，兜底浏览器端合并）。 */
+      data = ALL_ROWS
+        ? { rows: ALL_ROWS, asOf: (ALL_META || {}).asOf, source: (ALL_META || {}).source }
+        : await loadAllStocks();
     } catch (e) {
       if (seq !== screenRenderSeq) return;
       host.innerHTML = '<div class="screen-empty">板块数据读取失败：' + cpEsc(String(e.message || e))
@@ -4247,6 +4554,16 @@ const TICKER_TTL = 15000;
       return;
     }
     if (seq !== screenRenderSeq) return;
+    /* 与 renderAllStocks 共享 ALL_ROWS 缓存（同源数据）：本 tab 首个到达时也写缓存，
+       后续 rtCheckMode 翻转重绘 / 全部个股 tab 都零网络命中。 */
+    if (!ALL_ROWS && data && Array.isArray(data.rows)) {
+      ALL_ROWS = data.rows;
+      ALL_META = { nSp: data.nSp, nNd: data.nNd, asOf: data.asOf, source: data.source };
+    }
+    /* 盘中判定：决定着色口径 + 是否订阅 Finnhub 实时（板块 tab 也可能首个到达） */
+    const rtOn = rtIsMarketOpen();
+    rtOpenState = rtOn;
+    rtStart();   /* 幂等：确保 Finnhub 连接已启动（base 填好，rtPctOf 才算得出） */
     /* ret 是小数（0.2548 = +25.48%）→ 乘 100 交给热力图；无市值的行直接剔除
     （面积为 0 会让树图失真，宁缺勿错）。**取市值前 100**（用户定稿）；
     谷歌已在 loadAllStocks 里去重（GOOGL/GOOG 只留市值大的一只）→ 只算一个。 */
@@ -4258,18 +4575,25 @@ const TICKER_TTL = 15000;
         c: x.c, n: x.n,
         /* 分组键 = FMP 大行业（fs）；缺 FMP 画像的老数据退回 majorCat 中文大类 */
         grp: x.fs || majorCat(x.ind, x.n),
-        ind: x.ind, mc: x.mc, pct: (x.ret == null ? null : x.ret * 100),
+        ind: x.ind, mc: x.mc,
+        /* 盘中 = Finnhub 实时涨跌幅（较昨收；实时未到 → null → 格子灰 --）；
+           其他时段 = 1 年回报（ret×100） */
+        pct: rtOn ? rtPctOf(x.c) : (x.ret == null ? null : x.ret * 100),
       }));
     const asOf = data.asOf ? String(data.asOf).slice(0, 10) : '';
-    /* 用户 2026-10-13：「全部个股 · 市值前 100 · 11 个大行业 · 面积 ∝ 市值 / 着色 = 1 年回报
-    （±50% 饱和）」两行说明删了 —— 头部只留标题 + 数据日期 + 来源。 */
+    /* 口径标签：盘中蓝字「Finnhub 实时涨跌幅（较昨收）」，其他时段灰字「1 年回报」 */
+    const modeTag = '<span class="rt-stat' + (rtOn ? '' : ' is-off') + '">'
+      + (rtOn ? '盘中 · Finnhub 实时涨跌幅（较昨收）' : '非盘中 · 1 年回报') + '</span>';
     const bar = '<div class="screen-bar">'
       + '<b>板块热力图</b>'
       + (asOf ? '<span>数据日期 ' + cpEsc(asOf) + '</span>' : '')
+      + modeTag
       + '<span class="screen-bar__src">来源：' + cpEsc(data.source || 'all_stocks.json（每日抓取时聚合）') + '</span></div>';
-    const hmOpts = { cap: 50 };
+    /* cap：实时涨跌幅 ±5% 饱和（当日波动小）；1 年回报 ±50%（年动不动 ±100%，
+       沿用 5% 会整片顶格看不出强弱）。 */
+    const hmOpts = { cap: rtOn ? 5 : 50, rt: rtOn };
     /* 记住本次渲染参数：fitUstHeat 适配容器长宽比时要按同样的 rows/opts 重画
- （只改虚拟画布 W/H，数据 / 配色 / 图例文案都不变）。 */
+     （只改虚拟画布 W/H；rt 模式下重画前会按最新实时 pct 刷新 rows）。 */
     ustHeatLast = { rows, opts: hmOpts };
     host.innerHTML = bar + '<div class="ust-heat__fit">'
       + renderUsTopHeatmap(rows, hmOpts)
@@ -4313,7 +4637,15 @@ const TICKER_TTL = 15000;
     const H = Math.max(240, Math.min(1000, Math.floor(1000 * availH / availW)));
     const curH = heat.style.aspectRatio ? +(heat.style.aspectRatio.split('/')[1] || 0) : 560;
     if (ustHeatLast && Math.abs(curH - H) >= 1) {
-      wrap.innerHTML = renderUsTopHeatmap(ustHeatLast.rows, Object.assign({}, ustHeatLast.opts, { W: W, H: H }));
+      /* rt（盘中）模式：重画前把 rows 的 pct 刷新成最新实时涨跌幅（resize 可能
+         发生在多笔 tick 之后，否则会用渲染时的旧 pct 画）；年回报模式不动。 */
+      const rows2 = ustHeatLast.opts && ustHeatLast.opts.rt
+        ? ustHeatLast.rows.map((r) => {
+          const p = rtPctOf(r.c);
+          return p == null ? r : Object.assign({}, r, { pct: p });
+        })
+        : ustHeatLast.rows;
+      wrap.innerHTML = renderUsTopHeatmap(rows2, Object.assign({}, ustHeatLast.opts, { W: W, H: H }));
     }
     const h2 = wrap.querySelector('.ust-heat');
     if (!h2) return;
@@ -4463,6 +4795,12 @@ const TICKER_TTL = 15000;
  （每次重绘都替换 innerHTML，逐个 rebind 会漏）。 */
     const sortable = !!(opts && opts.sortable);
     const sort = (opts && opts.sort) || null;
+    /* opts.rt + opts.rtSyms → 第 6 列「Finnhub 实时价」（2026-10-14 用户定稿：
+ 「全部个股加一个 finnhub 实时价列，前 100 才写」= 只给全部个股表加这一列，
+ 且只订市值前 100 → rtSyms 内的行挂 data-rt 供 WS 刷新，其余行灰色占位 '--'）。
+ ⚠️ 成分股单表（renderIndexTable(rows) 无 opts）不传 rt → 列数不变。 */
+    const rt = !!(opts && opts.rt);
+    const rtSyms = (opts && opts.rtSyms) || null;
     const SORT_COLS = [
       { k: 'idx', t: '序号', tip: '恢复默认（市值降序）' },
       { k: 'code', t: '名称', tip: '按代码排序' },
@@ -4470,7 +4808,7 @@ const TICKER_TTL = 15000;
       { k: 'p', t: '现价', tip: '按现价排序' },
       { k: 'ret', t: '1年回报', tip: '按 1 年回报排序' },
     ];
-    const headHtml = sortable
+    let headHtml = sortable
       ? SORT_COLS.map((c) => {
         const on = sort && sort.k === c.k;
         const arrow = on ? (sort.dir < 0 ? ' ▼' : ' ▲') : '';
@@ -4478,6 +4816,7 @@ const TICKER_TTL = 15000;
           + (on ? ' class="is-sorted"' : '') + '>' + c.t + arrow + '</span>';
       }).join('')
       : '<span>序号</span><span>名称</span><span>市值</span><span>现价</span><span>1年回报</span>';
+    if (rt) headHtml += '<span class="us-top__rt-h" title="Finnhub WebSocket 实时价（仅市值前 100，盘中推送）">实时价</span>';
     /* 名称列宽：按本表**最长公司名**实测（canvas 量 13px 字），再留 18px 余量，夹在 150~340px。
  ⚠️ 必须算成**固定 px**：每条 `.us-top__row` 各自是独立 grid，写成 `1fr/auto/max-content`
  会逐行算出不同列宽 → 名称、市值、现价全部错位。（用户 ：「名称列太宽了」）
@@ -4495,7 +4834,7 @@ const TICKER_TTL = 15000;
       nmW = mx > 0 ? Math.round(mx) + 18 : 240;
     } catch (e) { nmW = 240; }
     nmW = Math.max(150, Math.min(340, nmW));
-    return '<div class="us-top idx-const" style="--idx-nm:' + nmW + 'px">'
+    return '<div class="us-top idx-const' + (rt ? ' idx-rt' : '') + '" style="--idx-nm:' + nmW + 'px">'
       + '<div class="us-top__hd">' + headHtml + '</div>'
       + rows.map((x, i) => {
         const cRet = (x.ret == null) ? 'flat' : cls(x.ret * 100);
@@ -4509,9 +4848,26 @@ const TICKER_TTL = 15000;
           + '</span>'
           + '<span class="us-top__p num">' + fmt(x.p, 2) + '</span>'
           + '<span class="us-top__x num ' + cRet + '">' + retTxt + '</span>'
+          + (rt ? rtCellHtml(x.c, rtSyms) : '')
           + '</div>';
       }).join('')
       + '</div>';
+  }
+
+  /* 实时列单元格：前 100 挂 data-rt（WS 消息的刷新目标）= 价格行 + 涨跌幅副行
+ （基准 = all_stocks.json 现价/昨收；等建连节拍期间显示快照价，实时到达后
+ 覆盖并着色）；其余 '--' 灰色占位。
+ ⚠️ 带点代码（BRK.B/BF.B）走属性选择器 [data-rt="BRK.B"]，引号内圆点无需转义。 */
+  function rtCellHtml(code, rtSyms) {
+    const on = !!(rtSyms && rtSyms.has(code));
+    const b = on ? rtInfo.base[code] : null;
+    const txt = b != null ? fmt(b, 2) : '--';
+    const tip = b != null ? ' title="' + cpEsc(code) + ' · 快照价 ' + txt + '（Finnhub 实时连接后刷新）"' : '';
+    return '<span class="us-top__rt num' + (on ? '' : ' rt-off') + '"'
+      + (on ? ' data-rt="' + cpEsc(code) + '"' + tip : '') + '>'
+      + '<span class="us-top__rt-px">' + txt + '</span>'
+      + (on ? '<span class="us-top__rt-pct">--</span>' : '')
+      + '</span>';
   }
   async function renderIndexConstituents(key) {
     const host = $('#screenBody');

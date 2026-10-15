@@ -7,6 +7,7 @@
   "nTotal": 518,
   "source": "S&P 500 + Nasdaq 100 合并去重（fund_holdings.py 每日抓取时生成）",
   "nFmp": 120,
+  "nFmpPrice": 0,
   "rows": [
     {"c":"NVDA","n":"英伟达","ind":"Technology","mc":5343730991104,"p":221.3,"ret":0.2336,"fmpSector":"Technology","fmpIndustry":"Semiconductors"},
     {"c":"AAPL","n":"苹果","ind":"Technology","mc":5005219972800,"p":342.96,"ret":0.3806,"fmpSector":"Technology","fmpIndustry":"Consumer Electronics"},

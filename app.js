@@ -3608,8 +3608,13 @@ const TICKER_TTL = 15000;
           document.body.classList.remove('is-chart-mode');   // 账户/交易/选股页不显示图表
           const wl = document.querySelector('.watchlist');
           if (wl) wl.classList.add('is-collapsed');          // 也不显示自选列表
-        } else if (drawChart) {
-          drawChart();
+        } else {
+          // 移动端 market 视图 = 列表页（图表由点行单独开启）。兜底清掉可能残留的
+          // 收起/图表态，避免桌面态 .watchlist.is-collapsed 跨界后把列表藏成白屏。
+          document.body.classList.remove('is-chart-mode');
+          const wl = document.querySelector('.watchlist');
+          if (wl) wl.classList.remove('is-collapsed');
+          if (drawChart) drawChart();
         }
         return;
       }
@@ -3658,6 +3663,55 @@ const TICKER_TTL = 15000;
       if (isMobile() && btn.dataset.view === 'comment') return;
       switchView(btn.dataset.view);
     }));
+
+    /* 680px 断点跨界同步器（治本修复「移动端偶尔白屏 / 偶尔桌面混合布局」）：
+    移动端（≤680）与桌面端（>680）是两套互不兼容的「显示哪块」状态机 ——
+    移动端靠 body.is-chart-mode / is-comment-mode + .watchlist.is-collapsed；
+    桌面端靠 .is-hidden-by-view。宽度跨过断点时若不清残留，桌面态残留的
+    .watchlist.is-collapsed 会让移动端整片白屏（列表 display:none、图表区没开），
+    移动态残留的 body class 会让桌面变成「图表+选股并排」混合布局。
+    这里在跨界时清掉两端残留状态类，再按当前高亮的 rail 视图重跑对应入口，
+    让两边语义重新一致。matchMedia 只在跨断点触发一次，不会循环。 */
+    function reconcileLayout() {
+      const active = document.querySelector('.rail__item.is-active');
+      const view = active ? active.dataset.view : 'market';
+      // 1) 清掉两端可能残留的状态类（is-chart-mode/is-comment-mode 是移动态语义，
+      //    is-hidden-by-view 是桌面态语义，跨界后都作废）
+      document.body.classList.remove('is-chart-mode', 'is-comment-mode', 'is-comment-full');
+      const wl = document.querySelector('.watchlist');
+      const chart = document.querySelector('.chart-area');
+      const cp = document.querySelector('.comment-panel');
+      [wl, chart, cp].forEach((el) => {
+        if (el) el.classList.remove('is-hidden-by-view', 'is-collapsed', 'wl-collapsed', 'cp-collapsed');
+      });
+      // 2) 按当前侧重跑对应入口，重建当前侧的布局
+      if (isMobile()) {
+        if (view === 'market') {
+          showMobileList();                       // 列表页
+        } else if (view === 'comment') {
+          // 复刻移动端「资讯」旁路：撤图表态、标资讯态、藏其余独立视图
+          document.body.classList.remove('is-chart-mode');
+          document.body.classList.add('is-comment-mode');
+          if (wl) wl.classList.add('is-collapsed');
+          if (cp) cp.classList.remove('is-collapsed');
+          ['accountView', 'tradeView', 'screenView', 'meView'].forEach((id) => {
+            const el = document.getElementById(id);
+            if (el) el.hidden = true;
+          });
+          redrawAfterLayout();
+        } else {
+          switchView(view);   // 移动分支：非 market → 撤 is-chart-mode + 收起 wl
+        }
+      } else {
+        switchView(view);     // 桌面分支：按 is-hidden-by-view 重排三栏
+      }
+    }
+    if (window.matchMedia) {
+      const mq = window.matchMedia(MOBILE_MQ);
+      const onMq = () => reconcileLayout();
+      if (mq.addEventListener) mq.addEventListener('change', onMq);
+      else if (mq.addListener) mq.addListener(onMq);   // 老 Safari 兜底
+    }
 
   /* 选股器：原 TickerTiles 热力图，已于 按用户要求**整体清空**。
  一并删掉的东西：跨域 iframe（tickertiles.com）、HM_CHROME 四组裁剪几何参数、

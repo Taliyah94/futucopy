@@ -24,7 +24,7 @@ FMP（Financial Modeling Prep）的行业分类 + 最新收盘价，与 historyo
 
 范围（用户 2026-10-14 定稿：只维护市值前 100）
 ----
-· 只抓市值前 N 只（--scope，默认 100；all_stocks.json 行序即市值降序，
+· 只抓市值前 N 只（--scope，默认 120；all_stocks.json 行序即市值降序，
   防御性再按 mc 排一次）；
 · 前端「板块」热力图与「全部个股」排序都只看头部 → 前 100 覆盖足够；
 · 掉出前 N 的票：缓存条目删除、all_stocks.json 行内 fmp 字段剥掉
@@ -37,7 +37,7 @@ FMP（Financial Modeling Prep）的行业分类 + 最新收盘价，与 historyo
 **收盘价必须每天刷新**（--refresh-days，默认 1），行业只需月度核对
 （--stale-days，默认 30）。两者来自**同一次请求**，故取更严格的那个：
     待抓 = 没抓过 + asof 早于 min(refresh-days, stale-days) 天前
-→ 日常实际是**每天全量重抓前 100**（价格要新鲜；行业顺带核对，无额外成本）。
+→ 日常实际是**每天全量重抓前 120**（价格要新鲜；行业顺带核对，无额外成本）。
 --stale-days 0 或 --refresh-days 0 = 强制全量重抓。
 
 核对 / 替换 / 补缺（写回规则）
@@ -71,7 +71,7 @@ FMP 确实没数据的 symbol（空数组）也会入缓存（空串），避免
 ----
   python3 fetch_fmp_profiles.py                    # 日常：前 100，行业 + 收盘价
   python3 fetch_fmp_profiles.py --refresh-days 0   # 强制全量重抓（默认 100 个）
-  python3 fetch_fmp_profiles.py --scope 200        # 改维护范围（默认 100）
+  python3 fetch_fmp_profiles.py --scope 200        # 改维护范围（默认 120）
   python3 fetch_fmp_profiles.py --limit 5          # 单轮最多抓 5 个（试跑）
   python3 fetch_fmp_profiles.py --limit 0          # 不抓，只做缓存剪枝/回写
   python3 fetch_fmp_profiles.py --apikey XXXX      # 或设环境变量 FMP_API_KEY
@@ -212,7 +212,7 @@ def main(argv=None):
                     help="FMP 缓存路径（默认 <all-stocks 同目录>/fmp_profiles.json）")
     ap.add_argument("--apikey", default=None,
                     help="FMP API Key（或环境变量 FMP_API_KEY）")
-    ap.add_argument("--scope", type=int, default=100,
+    ap.add_argument("--scope", type=int, default=120,
                     help="只维护市值前 N 只（默认 100）")
     ap.add_argument("--refresh-days", type=int, default=1,
                     help="收盘价：缓存超过 N 天 → 重抓（默认 1 = 每天）")

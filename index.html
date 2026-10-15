@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<link rel="preload" href="app.js?v=20261015a" as="script" />
+<link rel="preload" href="app.js?v=20261015b" as="script" />
 <!-- ⚠️ 用户要求「没读到数据就显示 --，别产生误导」：
  报价头/账户汇总的初始值一律 --（原来是硬编码的 137.790 / +5.190 / +3.91% 等假数字，
  页面刚加载、JS 还没跑到时就会显示出来）。真实值由 renderQuote / 账户页数据填充。 -->
@@ -917,6 +917,14 @@ html, body {
   }
   .watchlist > * { width: 100% !important; }   /* 同上，解除 302px 固定宽 */
   .watchlist.is-collapsed { display: none; }   /* 图表态：藏列表 */
+
+  /* 兜底网：移动端在「自选」视图（market 高亮、且非图表/资讯态）下，
+  无论如何都要让自选列表可见，杜绝 680px 跨界后残留 is-collapsed 导致的整片白屏。
+  （治本在 app.js 的 matchMedia 跨界同步器；这条是 belt-and-suspenders。）
+  body:has() 特异度高于裸 .watchlist.is-collapsed，确保覆盖。 */
+  body:has(.rail__item[data-view="market"].is-active):not(.is-chart-mode):not(.is-comment-mode) .watchlist.is-collapsed {
+    display: flex !important;
+  }
 
   /* 交易页那份持仓列表：移动端是**单栏**（主区已隐藏），所以让它直接占满整屏高度 ——
  列表可滚动、汇总块钉在底部，中间不再留空白。
@@ -3279,6 +3287,6 @@ html, body {
  就没有任何入口，逻辑（app.js）/样式（index.html 内联块）/本段 HTML 一并移除。别再恢复。 -->
 </div>
 </div>
-<script defer src="app.js?v=20261015a"></script>
+<script defer src="app.js?v=20261015b"></script>
 </body>
 </html>

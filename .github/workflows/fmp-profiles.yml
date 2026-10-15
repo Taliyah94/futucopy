@@ -28,9 +28,9 @@ on:
   workflow_dispatch:
     inputs:
       scope:
-        description: "维护市值前 N 只（默认 100）"
+        description: "维护市值前 N 只（默认 120）"
         required: false
-        default: "100"
+        default: "120"
       refresh-days:
         description: "收盘价超过 N 天重抓（默认 1 = 每天）"
         required: false
@@ -76,7 +76,7 @@ jobs:
             exit 1
           fi
           python3 fetch_fmp_profiles.py \
-            --scope "${{ github.event.inputs.scope || '100' }}" \
+            --scope "${{ github.event.inputs.scope || '120' }}" \
             --refresh-days "${{ github.event.inputs.refresh-days || '1' }}" \
             --stale-days "${{ github.event.inputs.stale-days || '30' }}" \
             --limit "${{ github.event.inputs.limit || '200' }}"

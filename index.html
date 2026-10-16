@@ -1337,6 +1337,13 @@ html, body {
 }
 .screen-bar b { color: var(--text); font-weight: 500; }
 .screen-bar__src { margin-left: auto; color: var(--text-3); font-size: 11px; }
+/* 双源数据栏：HOM（历史行情收盘）/ FMP（收盘价+涨跌幅）/ 当前采用徽标 */
+.dsrc { padding: 1px 8px; border-radius: 999px; font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.dsrc--hom { color: #8a93a6; background: rgba(138, 147, 166, 0.14); border: 1px solid rgba(138, 147, 166, 0.30); }
+.dsrc--fmp { color: #6ea8fe; background: rgba(110, 168, 254, 0.14); border: 1px solid rgba(110, 168, 254, 0.35); }
+.dsrc-badge { padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+.dsrc-badge--fmp { color: #fff; background: #2f7d32; }
+.dsrc-badge--hom { color: #fff; background: #6b7280; }
 .screen-empty {
   padding: 40px 20px; text-align: center;
   font-size: 13px; line-height: 1.9; color: var(--text-3);
@@ -1471,6 +1478,22 @@ html, body {
   font-style: normal; font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* 现价单元格两行：主行价格 / 副行 FMP 当日涨跌幅（仅采用 FMP 时显示，见 renderIndexTable opts.fmpActive）。
+   副行涨跌幅绿涨红跌（cls 输出 up/down → --up 绿 / --down 红），flat（0%）走灰色。 */
+.idx-const .us-top__p {
+  display: flex; flex-direction: column; align-items: flex-end; justify-content: center;
+  line-height: 1.25; min-width: 0;
+}
+.idx-const .us-top__p b {
+  font-weight: 500; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.idx-const .us-top__p i {
+  font-style: normal; font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.idx-const .us-top__p i.up { color: var(--up); }
+.idx-const .us-top__p i.down { color: var(--down); }
 /* 「全部个股」表头可点排序（ 用户：「可以按代码、市值、现价、1年回报排序」）。
  箭头 ▼/▲ 直接拼在表头文案后面（不另起 DOM，避免 grid 列数变化错位）。
  ⚠️ white-space:nowrap：窄列（手机端 50~58px）加箭头后不能折行。 */

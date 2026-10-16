@@ -1239,6 +1239,11 @@ def build_all_stocks(result):
     nd_asof = str(result.get("nasdaq100_asof") or "")
     # JS: [sp_asof, nd_asof].filter(Boolean).sort().pop() || '' —— 字典序最大
     asof = max([a for a in (sp_asof, nd_asof) if a], default="")
+    # 记录「历史行情收盘（HOM）」：来自指数快照的 price/mc，作为对比 FMP 的基线。
+    # 行内 p/mc 后续会被 apply_fmp_to_row 改成「活动值」（FMP 已刷新→FMP，否则 HOM）。
+    for _r in rows:
+        if isinstance(_r, dict) and "mc" in _r:
+            _r["hom"] = {"price": _r.get("p"), "mc": _r.get("mc"), "asof": asof}
     return {
         "asof": asof,
         "sp500_asof": sp_asof,
@@ -1383,6 +1388,7 @@ def attach_fmp_cache(rows, cache):
     """
     if not cache:
         return 0
+    run_date = _dt.date.today().isoformat()
     n = 0
     for r in rows:
         e = cache.get((r.get("c") or "").strip().upper())
@@ -1390,11 +1396,52 @@ def attach_fmp_cache(rows, cache):
             continue
         r["fmpSector"] = e.get("fmpSector") if e.get("fmpSector") is not None else None
         r["fmpIndustry"] = e.get("fmpIndustry") if e.get("fmpIndustry") is not None else None
-        px = e.get("price")
-        if isinstance(px, (int, float)) and px > 0:
-            r["p"] = round(float(px), 2)
+        apply_fmp_to_row(r, e, run_date)
         n += 1
     return n
+
+
+def apply_fmp_to_row(r, e, run_date):
+    """把 FMP 缓存条目 e 应用到 all_stocks 行 r，落地「双源并存、互不覆盖」：
+
+    - 保留 r["hom"] = {price, mc, asof}（HOM 历史行情收盘，来自指数快照）
+    - 写   r["fmp"] = {price, mc(按 HOM×涨跌幅预估), asof, chgPct, source}（仅市值前 120 有）
+    - 活动值 r["p"] / r["mc"]：
+        若 FMP asof == 今日(run_date) → 视为「今日已刷新」，用 FMP（含预估市值）
+        否则 → 回退 HOM（刷新前 / 还没抓到，前端市值与名次按 HOM 算）
+    排名（attach_rank_changes）和前端序号都读活动 mc，因此这套逻辑天然满足：
+    「FMP 刷新前用 HOM 算前进/后退位次，FMP 刷新后改用 FMP 预估市值算」。
+    """
+    hom = r.get("hom") or {}
+    hom_mc = hom.get("mc") if hom.get("mc") is not None else r.get("mc")
+    hom_price = hom.get("price") if hom.get("price") is not None else r.get("p")
+    px = e.get("price")
+    chg = e.get("chgPct")
+    if isinstance(px, (int, float)) and px > 0:
+        try:
+            chg_f = float(chg) if chg is not None else None
+        except (TypeError, ValueError):
+            chg_f = None
+        if hom_mc is not None and chg_f is not None:
+            est_mc = int(round(hom_mc * (1 + chg_f / 100.0)))
+        else:
+            est_mc = hom_mc
+        r["fmp"] = {
+            "price": round(float(px), 2),
+            "mc": est_mc,
+            "asof": str(e.get("asof") or ""),
+            "chgPct": chg_f,
+            "source": "fmp",
+        }
+        if str(e.get("asof") or "") == str(run_date):
+            r["p"], r["mc"] = round(float(px), 2), est_mc
+        else:
+            r["p"], r["mc"] = hom_price, hom_mc
+    else:
+        # FMP 无价（拿不到）→ 一个字都不动，活动值回退 HOM，剥掉 stale fmp
+        r["p"], r["mc"] = hom_price, hom_mc
+        r.pop("fmp", None)
+    return r
 
 
 def dump_holdings(result):
@@ -1983,6 +2030,15 @@ def main(argv=None):
             all_obj["nFmp"] = n_fmp
             if n_fmp and not args.quiet:
                 sys.stderr.write("  [全部个股] 合并 FMP 行业分类缓存 %d 只\n" % n_fmp)
+            # 顶部数据栏元数据：HOM / FMP 双源 asof + 当前采用（FMP asof==今日则 FMP）
+            fmp_asof = ""
+            for _rr in all_obj["rows"]:
+                _fa = (_rr.get("fmp") or {}).get("asof")
+                if _fa and (not fmp_asof or _fa > fmp_asof):
+                    fmp_asof = _fa
+            all_obj["homAsOf"] = all_obj.get("asof") or ""
+            all_obj["fmpAsOf"] = fmp_asof
+            all_obj["fmpActive"] = (fmp_asof == _dt.date.today().isoformat())
             # 「名次变动」内联到每行 rk 字段（对比「昨日」已存盘 all_stocks.json，
             # 即本次覆盖前读出的 prev_rows）：cur=今日名次、prev=昨日名次、chg=prev-cur
             # （>0 名次上升=绿▲）、isNew=昨日不在榜。随 all_stocks.json 一起写盘。

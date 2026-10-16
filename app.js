@@ -4134,10 +4134,23 @@ const TICKER_TTL = 15000;
             /* 名次变动：fund_holdings.py 每日抓取时对比昨日快照算出、内联在每行 rk
             字段；缺失/非对象 → null（renderIndexTable 里标「—」）。 */
             rk: (x.rk && typeof x.rk === 'object') ? x.rk : null,
+            /* 双源：HOM（历史行情收盘，来自指数快照）/ FMP（收盘价+涨跌幅，前 120 有）。
+            看板顶栏数据来源栏用，名次/市值用活动 mc（后端已按 FMP 是否今日刷新算好）。 */
+            hom: (x.hom && typeof x.hom === 'object') ? x.hom : null,
+            fmp: (x.fmp && typeof x.fmp === 'object') ? x.fmp : null,
           }));
           const asOf = String((aj && (aj.asof || aj.sp500_asof || aj.nasdaq100_asof)) || '').slice(0, 10);
+          /* 双源数据栏元数据：HOM/FMP 各自的收盘日 + 当前采用（FMP 已刷新则 FMP）+ 前 120 平均涨跌幅 */
+          const homAsOf = String(aj.homAsOf || aj.asof || '').slice(0, 10);
+          const fmpAsOf = String(aj.fmpAsOf || '').slice(0, 10);
+          const fmpActive = !!aj.fmpActive;
+          let _cs = 0, _cn = 0;
+          for (const _x of rows0) { if (_x.fmp && typeof _x.fmp.chgPct === 'number') { _cs += _x.fmp.chgPct; _cn++; } }
+          const fmpChg = _cn ? (_cs / _cn) : null;
           /* ⚠️ 谷歌双股权特例（与板块热力图一致）：GOOGL/GOOG 只留市值最大的一只。 */
-          return { rows: dedupGoogleShareClass(rows), asOf, source: 'all_stocks.json（每日抓取时聚合）', nSp: (aj && aj.nSp) || 0, nNd: (aj && aj.nNd) || 0 };
+          return { rows: dedupGoogleShareClass(rows), asOf, source: 'all_stocks.json（每日抓取时聚合）',
+                   nSp: (aj && aj.nSp) || 0, nNd: (aj && aj.nNd) || 0,
+                   homAsOf, fmpAsOf, fmpActive, fmpChg };
         }
       }
     } catch (_) { /* all_stocks.json 不可用 → 走下方 fund_holdings.json 实时合并 */ }
@@ -4198,7 +4211,8 @@ const TICKER_TTL = 15000;
     } catch (_) { /* 无 FMP 画像 → 热力图分组退回指数行业 ind */ }
     const asOf = [fj.sp500_asof, fj.nasdaq100_asof].filter(Boolean).sort().pop() || '';
     /* ⚠️ 谷歌双股权特例（与板块热力图一致）：GOOGL/GOOG 只留市值最大的一只。 */
-    return { rows: dedupGoogleShareClass(rows), asOf, source: 'fund_holdings.json（每日快照）', nSp: sp.length, nNd: nd.length };
+    return { rows: dedupGoogleShareClass(rows), asOf, source: 'fund_holdings.json（每日快照）',
+             nSp: sp.length, nNd: nd.length, homAsOf: asOf, fmpAsOf: '', fmpActive: false, fmpChg: null };
   }
   /* 只重画表格（用缓存的行），点表头排序走这条，不重新拉 json */
   async function drawAllStocks() {
@@ -4211,10 +4225,15 @@ const TICKER_TTL = 15000;
       + '<b>共 ' + rows.length + ' 只</b>'
       + (d.asOf ? '<span>数据日期 ' + cpEsc(String(d.asOf).slice(0, 10)) + '</span>' : '')
       + '<span class="screen-bar__src">来源：' + cpEsc(srcLabel) + '</span>'
+      + (d.homAsOf || d.fmpAsOf
+          ? '<span class="dsrc dsrc--hom" title="HOM：历史行情收盘（指数快照）">HOM 收盘 ' + cpEsc(d.homAsOf || '-') + '</span>'
+            + '<span class="dsrc dsrc--fmp" title="FMP：收盘价（前 120 只）">FMP 收盘 ' + cpEsc(d.fmpAsOf || '-') + '</span>'
+            + '<span class="dsrc-badge ' + (d.fmpActive ? 'dsrc-badge--fmp' : 'dsrc-badge--hom') + '" title="名次/市值当前采用的数据源">当前采用：' + (d.fmpActive ? 'FMP' : 'HOM') + '</span>'
+          : '')
       + '<span class="rt-stat" id="rtStat"></span>'
       + '</div>';
     rtFillBase();    /* 先填基准价 → 实时列初始即显示快照价（等建连节拍期间也有价格看） */
-    host.innerHTML = bar + renderIndexTable(rows, { noW: true, sortable: true, sort: ALL_SORT, rt: true, rtSyms: rtTopSet(), rank: true });
+    host.innerHTML = bar + renderIndexTable(rows, { noW: true, sortable: true, sort: ALL_SORT, rt: true, rtSyms: rtTopSet(), rank: true, fmpActive: d.fmpActive });
     rtStart();       /* 幂等：首帧才建连接；排序/切 tab 重绘后只补刷已有价格 */
     rtRepaintAll();
     rtUpdateStatus();
@@ -4237,13 +4256,20 @@ const TICKER_TTL = 15000;
      · key 明文暴露 = 用户确认的方案 B（个人看板；泄露可轮换）。
      · 价格只进 rtInfo.latest + [data-rt] 单元格，不碰任何其它模块状态。
      =================================================================== */
-  const FH_TOKEN = 'db55oq1r01qv1n8sqv90db55oq1r01qv1n8sqv9g';
+  /* 两个 Finnhub 免费 token：finnhub1 订市值 0–50、finnhub2 订 51–100，
+     每组各 1 条 WS 连接并行 —— 符合免费档「每 token 仅 1 连接」限制（2026-10-16 定稿）。
+     rtConnect 按组序号 gs.idx 取对应 token。 */
+  const FH_TOKENS = [
+    'db55oq1r01qv1n8sqv90db55oq1r01qv1n8sqv9g',   // finnhub1 (taliyah)：市值 0–50
+    'db8u9uhr01qm8f434ihgdb8u9uhr01qm8f434ii0',   // finnhub2 (stoneweaver)：市值 51–100
+  ];
   const FH_TOP_N = 100;        // 只订市值前 100
   const FH_PER_CONN = 50;      // 免费档每连接符号上限 → 100 只 = 2 条连接
   const RT_TICK_MS = 60000;    // 建连节拍 = 整分钟边界（想更保守可改 120000 = 2 分钟）
   const RT_MAX_TICK_MS = 480000; // 盘后短命时周期翻倍封顶 8 分钟
   const RT_STAGGER_MS = 3000;  // 组间错峰：边界后 +3s，避免同 tick 双握手
   const RT_LS_KEY = 'rtLastConn'; // localStorage：跨标签建连时刻协调键
+  const RT_CACHE_KEY = 'rtLatest'; // localStorage：实时价缓存（PWA 冷启/切后台回填，避免 WS 重连前空白）
   const RT_MODE_CHECK_MS = 30000; // 盘中/收盘状态翻转检查间隔
   /* 2026 年 NYSE 假期（每年初需更新；过期年份不判假期 → 当天按盘中处理，
      但假日无成交 → 实时格显示 --，影响仅限当天） */
@@ -4251,9 +4277,18 @@ const TICKER_TTL = 15000;
     '2026-01-01', '2026-01-19', '2026-02-16', '2026-04-03', '2026-05-25',
     '2026-06-19', '2026-07-03', '2026-09-07', '2026-11-26', '2026-12-25',
   ];
-  const rtInfo = { started: false, groups: [], latest: {}, base: {}, open: 0, syms: [], topSet: null, timer: 0, modeTimer: 0 };
+  const rtInfo = { started: false, groups: [], latest: {}, base: {}, open: 0, syms: [], topSet: null, timer: 0, modeTimer: 0, cacheBound: false };
   let rtOpenState = null;   // 当前盘中判定（rtCheckMode 检测翻转用；null = 未初始化）
   let rtHeatDirty = false;  // 有待更新实时 pct 的热力图格子（rtUpdateHeatCats 消费）
+  let rtCacheTimer = 0;     // 实时价落盘节流计时器（避免每笔 trade 都写 localStorage）
+  /* 节流落盘实时价：累计更新后每 ~8s 写一次 localStorage；PWA 冷启/切后台回来时用它回填。 */
+  function rtCacheFlushSoon() {
+    if (rtCacheTimer) return;
+    rtCacheTimer = setTimeout(() => {
+      rtCacheTimer = 0;
+      try { localStorage.setItem(RT_CACHE_KEY, JSON.stringify(rtInfo.latest)); } catch (e) { /* 隐私模式忽略 */ }
+    }, 8000);
+  }
 
   /* 市值前 N 名集合：ALL_ROWS 载入后算一次并缓存（去重在 loadAllStocks 已做，
  这里按 mc 再排一次兜底，保证「前 100」与当前展示排序无关）。 */
@@ -4336,6 +4371,17 @@ const TICKER_TTL = 15000;
     rtInfo.started = true;
     rtInfo.syms = syms;
     rtFillBase();
+    /* PWA 冷启/切后台回来：先读 localStorage 上次实时价回填，WS 重连前不空白（仅首次 started 走） */
+    try {
+      const cached = JSON.parse(localStorage.getItem(RT_CACHE_KEY) || '{}');
+      for (const s in cached) if (rtInfo.topSet.has(s) && cached[s] != null) rtInfo.latest[s] = cached[s];
+    } catch (e) { /* 损坏缓存忽略 */ }
+    if (!rtInfo.cacheBound) {
+      rtInfo.cacheBound = true;
+      window.addEventListener('beforeunload', () => {
+        try { localStorage.setItem(RT_CACHE_KEY, JSON.stringify(rtInfo.latest)); } catch (e) { /* 忽略 */ }
+      });
+    }
     /* 每组一个持久状态（tick/nextAt 跨重连保留）；两组在「整分钟边界 + 错峰」建连
      （同 tick 双握手实测也能成，但错峰 + localStorage 协调对 Finnhub 的
      「5 次连接/时间窗」更友好）。 */
@@ -4365,7 +4411,7 @@ const TICKER_TTL = 15000;
     if (!rtInfo.started) return;
     let ws;
     try {
-      ws = new WebSocket('wss://ws.finnhub.io?token=' + encodeURIComponent(FH_TOKEN));
+      ws = new WebSocket('wss://ws.finnhub.io?token=' + encodeURIComponent(FH_TOKENS[gs.idx % FH_TOKENS.length]));
     } catch (e) { return; }
     ws.onopen = () => {
       gs.alive = true;
@@ -4385,6 +4431,7 @@ const TICKER_TTL = 15000;
         if (!s || tr.p == null) continue;
         rtInfo.latest[s] = tr.p;
         rtPaint(s);
+        rtCacheFlushSoon();
       }
     };
     ws.onerror = () => { /* 浏览器拿不到 429 响应头；退避逻辑在 onclose */ };
@@ -4521,7 +4568,8 @@ const TICKER_TTL = 15000;
     }
     if (seq !== screenRenderSeq) return;
     ALL_ROWS = data.rows || [];
-    ALL_META = { nSp: data.nSp, nNd: data.nNd, asOf: data.asOf, source: data.source };
+    ALL_META = { nSp: data.nSp, nNd: data.nNd, asOf: data.asOf, source: data.source,
+                 homAsOf: data.homAsOf, fmpAsOf: data.fmpAsOf, fmpActive: data.fmpActive, fmpChg: data.fmpChg };
     drawAllStocks();
   }
   /* 表头排序：**委托**到 #screenBody（表格每次重绘都换 innerHTML，逐个绑定会丢）。
@@ -4759,7 +4807,8 @@ const TICKER_TTL = 15000;
        后续 rtCheckMode 翻转重绘 / 全部个股 tab 都零网络命中。 */
     if (!ALL_ROWS && data && Array.isArray(data.rows)) {
       ALL_ROWS = data.rows;
-      ALL_META = { nSp: data.nSp, nNd: data.nNd, asOf: data.asOf, source: data.source };
+      ALL_META = { nSp: data.nSp, nNd: data.nNd, asOf: data.asOf, source: data.source,
+                   homAsOf: data.homAsOf, fmpAsOf: data.fmpAsOf, fmpActive: data.fmpActive, fmpChg: data.fmpChg };
     }
     /* 盘中判定：决定着色口径 + 是否订阅 Finnhub 实时（板块 tab 也可能首个到达） */
     const rtOn = rtIsMarketOpen();
@@ -5021,6 +5070,9 @@ const TICKER_TTL = 15000;
  ⚠️ 成分股单表（renderIndexTable(rows) 无 opts）不传 rt → 列数不变。 */
     const rt = !!(opts && opts.rt);
     const rtSyms = (opts && opts.rtSyms) || null;
+    /* opts.fmpActive → 现价列副行显示 FMP 当日涨跌幅（前 120 有）：现价用 FMP 数据时
+    才带涨跌幅；回退 HOM（FMP 未刷新/断了）则不显示（用户 2026-10-16 定稿）。 */
+    const fmpActive = !!(opts && opts.fmpActive);
     const SORT_COLS = [
       { k: 'idx', t: '序号', tip: '恢复默认（市值降序）' },
       { k: 'code', t: '名称', tip: '按代码排序' },
@@ -5070,7 +5122,12 @@ const TICKER_TTL = 15000;
           + '<span class="us-top__m num">'
           + (noW ? cpEsc(fmtCap(x.mc)) : ('<b>' + fmtCap(x.mc) + '</b><i>' + wTxt + '</i>'))
           + '</span>'
-          + '<span class="us-top__p num">' + fmt(x.p, 2) + '</span>'
+          + '<span class="us-top__p num">'
+          + '<b>' + fmt(x.p, 2) + '</b>'
+          + (fmpActive && x.fmp && typeof x.fmp.chgPct === 'number'
+              ? '<i class="' + cls(x.fmp.chgPct) + '">' + (x.fmp.chgPct >= 0 ? '+' : '') + x.fmp.chgPct.toFixed(2) + '%</i>'
+              : '')
+          + '</span>'
           + '<span class="us-top__x num ' + cRet + '">' + retTxt + '</span>'
           + (rt ? rtCellHtml(x.c, rtSyms) : '')
           + '</div>';

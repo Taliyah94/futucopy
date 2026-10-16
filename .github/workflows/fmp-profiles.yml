@@ -1,10 +1,9 @@
-name: 抓取 FMP 行业与收盘价（市值前 100）
+name: 抓取 FMP 行业与收盘价（市值前 120）
 
-# 每日自动：北京时间 05:00（= UTC 21:00，前一天晚上）。
-#   ⚠️ 选这个时刻是因为美股 16:00 ET 收盘 = 北京 04:00（夏令时）/ 05:00（冬令时），
-#      所以夏令时下 05:00 拿到的是**收盘后 1 小时**的 FMP price = 当日收盘价；
-#      冬令时（11 月第一个周日起）UTC 21:00 恰好等于美东 16:00 收盘那一刻，
-#      若发现偶尔取到盘中价，把 cron 往后挪一小时即可（"0 22 * * *" = 北京 06:00）。
+# 每日自动：北京时间 09:00（= UTC 01:00，cron 用 UTC，GitHub 定时不保证准点，通常有几分钟延迟）。
+#   ⚠️ 北京 09:00 = 美东前一日 21:00（夏令时 EDT, UTC-4）/ 20:00（冬令时 EST, UTC-5），
+#      美股 16:00 ET 收盘后约 4~5 小时，FMP 的 EOD 收盘数据通常已入库，
+#      此时抓到的 profile price 就是**当日（美东前一交易日）收盘价**，不会再差一天。
 #      另一个 workflow（抓取基金持仓与净值）在北京 23:00 跑，会重新生成
 #      all_stocks.json —— 它调用的 attach_fmp_cache 已同步改成「命中缓存就
 #      一并覆盖 p」，所以 FMP 收盘价全天都在，不会被冲掉。
@@ -20,10 +19,10 @@ name: 抓取 FMP 行业与收盘价（市值前 100）
 #                  Actions 添加 FMP_API_KEY（只需配一次，之后本输入框留空即可）；
 #                  没配 secret 时才需要在这里粘贴 key。
 on:
-  # 北京 05:00 = UTC 21:00（前一天晚上；cron 用 UTC；GitHub 定时不保证准点，通常有几分钟延迟）
-  # 此时美股已收盘（对应美东 17:00 前一交易日）→ FMP profile 的 price 就是当日收盘价。
+  # 北京 09:00 = UTC 01:00（cron 用 UTC；GitHub 定时不保证准点，通常有几分钟延迟）
+  # 此时美东为前一日 20:00~21:00（收盘后数小时）→ FMP profile 的 price 已是当日收盘价。
   schedule:
-    - cron: "0 21 * * *"
+    - cron: "0 1 * * *"
 
   workflow_dispatch:
     inputs:
@@ -67,7 +66,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: 抓取 FMP 行业 + 收盘价（市值前 100，收盘价覆盖 all_stocks.json 的 p）
+      - name: 抓取 FMP 行业 + 收盘价（市值前 120，收盘价覆盖 all_stocks.json 的 p）
         env:
           FMP_API_KEY: ${{ secrets.FMP_API_KEY || github.event.inputs.apikey }}
         run: |
@@ -89,6 +88,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "内容无变化，跳过提交"
           else
-            git commit -m "chore: 更新 FMP 行业与收盘价（市值前100）$(date +'%Y-%m-%d')"
+            git commit -m "chore: 更新 FMP 行业与收盘价（市值前120）$(date +'%Y-%m-%d')"
             git push
           fi

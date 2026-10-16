@@ -158,12 +158,13 @@ def _to_price(v):
 
 
 def fetch_fmp_profile(symbol, apikey, retries=2, timeout=20):
-    """抓单个 symbol 的 (sector, industry, price)。
+    """抓单个 symbol 的 (sector, industry, price, chgPct)。
 
     返回：
-      (s, i, px) 成功（s/i 可能为空串 —— FMP 有这条记录但没填行业；
-                      px 可能是 None —— 没给价格，此时**不要**动行内 p）；
-      ("", "", None) FMP 确实没这个票的数据（空数组）→ 入缓存，避免每日重抓；
+      (s, i, px, chg) 成功（s/i 可能为空串；px 可能 None；chg = 当日涨跌幅%，
+                         优先 changesPercentage，缺失时由 change/price 推算；
+                         px 为 None 时 chg 也应为 None，此时**不要**动行内 p/mc）；
+      ("", "", None, None) FMP 确实没这个票的数据（空数组）→ 入缓存，避免每日重抓；
       None           网络/服务端问题 → 不入缓存，次日再试。
     抛出 FmpFatal：额度/key 问题，调用方应熔断整轮。
     """
@@ -185,15 +186,21 @@ def fetch_fmp_profile(symbol, apikey, retries=2, timeout=20):
                 obj = None
             if isinstance(obj, list) and obj and isinstance(obj[0], dict):
                 d = obj[0]
+                chg = d.get("changesPercentage")
+                if chg is None and d.get("change") is not None and d.get("price") is not None:
+                    try:
+                        chg = round(float(d["change"]) / (float(d["price"]) - float(d["change"])) * 100, 4)
+                    except (TypeError, ValueError, ZeroDivisionError):
+                        chg = None
                 return (str(d.get("sector") or ""), str(d.get("industry") or ""),
-                        _to_price(d.get("price")))
+                        _to_price(d.get("price")), chg)
             if isinstance(obj, list) and not obj:
                 saw_empty = True
                 break                         # 该变体无数据 → 换下一个变体，不必重试
             # 其余（超时 / 5xx / 非 JSON）→ 退避后重试同一变体
             if attempt < retries:
                 time.sleep(1.5 * attempt)
-    return ("", "", None) if saw_empty else None
+    return ("", "", None, None) if saw_empty else None
 
 
 def _mc_of(r):
@@ -339,6 +346,8 @@ def main(argv=None):
                 # 并把 asof 仍记为今天（避免次日把它当"缺价"反复重抓同一只）。
                 # ⚠️ 若连旧价都没有 → 写 None，上层写回时**不动**行内 p（不编造）。
                 "price": res[2] if res[2] is not None else e_old.get("price"),
+                # 当日涨跌幅%：本轮拿到就更新，否则沿用缓存旧值 → 用于预估今日市值
+                "chgPct": res[3] if res[3] is not None else e_old.get("chgPct"),
                 "asof": _dt.date.today().isoformat(),
             }
             if res[2] is not None:
@@ -352,31 +361,44 @@ def main(argv=None):
         if i < len(todo):
             time.sleep(args.sleep)
 
-    # ④ 写回 all_stocks.json：前 N 行用缓存（核对后的值）替换行业 + **收盘价覆盖 p**；
-    #    范围外剥掉 fmp 字段（p 保持 historyofmarket 源值，不还原也不覆盖）
+    # ④ 写回 all_stocks.json：前 N 行用缓存（核对后的值）替换行业 + **落地 fmp 对象与活动值**；
+    #    范围外剥掉 fmp 字段与行业，活动值回退 HOM（保证不含前 120 以外的 stale fmp）。
+    #    fmp 对象 / 活动 p、mc 由 fh.apply_fmp_to_row 统一生成（与 fund_holdings.py 同逻辑）。
     n_attached, n_price = 0, 0
     price_lines = []
+    run_date = _dt.date.today().isoformat()
+    hom_asof_aj = (doc.get("asof") or "") if isinstance(doc, dict) else ""
     for r in rows:
         c = str((r or {}).get("c") or "").strip().upper()
         if c in in_scope:
             e = cache.get(c)
             if e:
+                # 锚定 HOM（历史行情收盘基线）：覆盖前的活动值即 HOM；缺则补（asof 用 JSON 顶层 asof）
+                if not r.get("hom"):
+                    r["hom"] = {"price": r.get("p"), "mc": r.get("mc"), "asof": hom_asof_aj}
                 r["fmpSector"] = e.get("fmpSector") if e.get("fmpSector") is not None else None
                 r["fmpIndustry"] = e.get("fmpIndustry") if e.get("fmpIndustry") is not None else None
+                fh.apply_fmp_to_row(r, e, run_date)
                 n_attached += 1
                 px = e.get("price")
                 if isinstance(px, (int, float)) and px > 0:
+                    old_p = (r.get("hom") or {}).get("price")
                     new_p = round(float(px), 2)
-                    old_p = r.get("p")
-                    if old_p != new_p:
-                        if len(price_lines) < 12:
-                            price_lines.append("    %s: %s → %.2f" % (c, old_p, new_p))
-                        n_price += 1
-                    r["p"] = new_p
-                # px 缺失 / ≤0 → 一个字都不动（铁律：没数据就留着，不写 0）
+                    if (old_p is None or old_p != new_p) and len(price_lines) < 12:
+                        price_lines.append("    %s: HOM %s → FMP %.2f (Δ%s%%)"
+                                           % (c, ("%.2f" % old_p) if isinstance(old_p, (int, float)) else "?",
+                                              new_p, e.get("chgPct")))
+                    n_price += 1
         else:
+            # 范围外：剥掉 fmp 字段与行业，活动值回退 HOM（不还原也不编造）
             r.pop("fmpSector", None)
             r.pop("fmpIndustry", None)
+            r.pop("fmp", None)
+            hom = r.get("hom") or {}
+            if hom.get("mc") is not None:
+                r["mc"] = hom["mc"]
+            if hom.get("price") is not None:
+                r["p"] = hom["price"]
     doc["rows"] = rows
     doc["nFmp"] = n_attached
     doc["nFmpPrice"] = n_price
@@ -398,7 +420,7 @@ def main(argv=None):
         left_stale = len([c for c in codes
                           if cache.get(c) and str(cache[c].get("asof") or "") <= cutoff])
     sys.stderr.write("完成：新抓 %d（补缺 %d、替换 %d、未变 %d、拿到收盘价 %d），失败 %d，缓存共 %d；"
-                     "已回填 all_stocks.json 行业 %d/%d 只、**收盘价覆盖 p %d 只**（范围外剥掉旧 fmp 字段）；"
+                     "已回填 all_stocks.json 行业 %d/%d 只、**落地 fmp 对象 %d 只**（范围外剥掉 fmp 字段、活动值回退 HOM）；"
                      "还剩 新进 %d + 待重核 %d，耗时 %.0fs\n"
                      % (done, stat["filled"], stat["changed"], stat["same"],
                         stat.get("price", 0), len(failed),
@@ -407,8 +429,8 @@ def main(argv=None):
     if changed_lines:
         sys.stderr.write("行业替换名单（JSON 旧值 → FMP 新值）：\n%s\n" % "\n".join(changed_lines))
     if price_lines:
-        sys.stderr.write("收盘价覆盖名单（historyofmarket 旧 p → FMP 收盘价，"
-                         "仅列前 %d 条）：\n%s\n" % (len(price_lines), "\n".join(price_lines)))
+        sys.stderr.write("HOM→FMP 价格名单（仅列前 %d 条）：\n%s\n"
+                         % (len(price_lines), "\n".join(price_lines)))
     if failed:
         sys.stderr.write("失败名单：%s\n" % ", ".join(failed[:50]))
     # 有待抓且一个都没成功 → 非零退出，方便 CI/手动运行看出问题

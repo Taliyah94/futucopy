@@ -7238,6 +7238,7 @@ const applyMode = (mode, skipDraw) => {
     }
     const today = ymdLocal(new Date());
     const label = document.getElementById('aoCalLabel');
+    const labelBtn = document.getElementById('aoCalLabelBtn');
     const sumLbl = document.getElementById('aoCalSumLabel');
     const sumEl = document.getElementById('aoCalSum');
     const pctEl = document.getElementById('aoCalPct');
@@ -7247,6 +7248,7 @@ const applyMode = (mode, skipDraw) => {
     const first = idx.days[0].date, lastDate = idx.days[idx.days.length - 1].date;
     const isYear = calState.mode === 'year';
     label.textContent = isYear ? String(calState.y) : calState.y + '/' + String(calState.m + 1).padStart(2, '0');
+    if (labelBtn) labelBtn.title = isYear ? '选择年份' : '选择月份';
     const months = idx.months.filter((x) => x.y === calState.y && (isYear || x.m === calState.m));
     /* 区间合计 = 各月 own 之和（own = 该月每日「证券+基金」盈亏之和）。
  新口径下逐日与汇总已经是同一套算法，不需要再借侧栏的值 ——
@@ -7273,7 +7275,9 @@ const applyMode = (mode, skipDraw) => {
       body.innerHTML = '<div class="ao-cal__grid--year">' + Array.from({ length: 12 }, (_, m) => {
         const rec = idx.months.find((x) => x.y === calState.y && x.m === m);
         const isCur = calState.y === +today.slice(0, 4) && m === +today.slice(5, 7) - 1;
-        return '<div class="ao-cal__cell' + (rec ? '' : ' is-empty') + (isCur ? ' is-today' : '') + '">' +
+        /* 有数据的月格子可点击 → 跳到当月（用户 ）；空格子（无数据/未来月）不挂事件 */
+        return '<div class="ao-cal__cell' + (rec ? ' is-jump' : ' is-empty') + (isCur ? ' is-today' : '') + '"' +
+          (rec ? ' data-cal-jump="' + m + '" title="查看' + (m + 1) + '月"' : '') + '>' +
           '<h5>' + (m + 1) + '月</h5>' +
           (rec
             ? '<b class="n num ' + calCls(rec.own) + '">' + (rec.own > 0 ? '+' : '') + calFmt(rec.own) + '</b>' +
@@ -7303,11 +7307,35 @@ const applyMode = (mode, skipDraw) => {
     }
   }
 
-  /* 日历交互：月/年切换、上一期、下一期 */
+  /* 日历交互：月/年切换、上一期/下一期、时间选择下拉、年视图点月格子跳档 */
   (function initAoCal() {
     const root = document.getElementById('aoCal');
     if (!root) return;
     const sw = document.getElementById('aoCalSwitch');
+    const body = document.getElementById('aoCalBody');
+    const pick = document.getElementById('aoCalPick');
+    const pickTitle = document.getElementById('aoCalPickTitle');
+    const pickGrid = document.getElementById('aoCalPickGrid');
+    const pickPrev = document.getElementById('aoCalPickPrev');
+    const pickNext = document.getElementById('aoCalPickNext');
+    const labelBtn = document.getElementById('aoCalLabelBtn');
+    let pickY = 0;        // 月选择器：当前展示的年
+    let pickWin = 0;      // 年选择器：12 年窗口的起始年
+
+    /* 切模式（月/年）并同步左上角开关高亮；顺手关下拉 */
+    const setMode = (mode) => {
+      calState.mode = mode;
+      sw.querySelectorAll('button').forEach((x) => x.classList.toggle('is-active', x.dataset.aoCal === mode));
+      pick.hidden = true;
+    };
+    /* 数据年份范围 = calIndex 首末日（跨年积累后多年份自动生效） */
+    const yRange = () => {
+      const idx = calIndex();
+      return { minY: +idx.days[0].date.slice(0, 4), maxY: +idx.days[idx.days.length - 1].date.slice(0, 4) };
+    };
+    /* 年选择器窗口起始年上限：窗口右沿搭到 maxY 即可，再往右全是无数据年 */
+    const yCap = (minY, maxY) => Math.max(minY, maxY - 11);
+
     const step = (delta) => {
       if (calState.mode === 'year') calState.y += delta;
       else {
@@ -7317,15 +7345,109 @@ const applyMode = (mode, skipDraw) => {
       }
       drawAoCal();
     };
+
+    /* ---- 时间选择下拉 ---- */
+    function renderPick() {
+      const { minY, maxY } = yRange();
+      const today = ymdLocal(new Date());
+      const curY = +today.slice(0, 4), curM = +today.slice(5, 7) - 1;
+      if (calState.mode === 'year') {
+        pickTitle.textContent = pickWin + ' – ' + (pickWin + 11);
+        pickPrev.disabled = pickWin <= minY;
+        pickNext.disabled = pickWin >= yCap(minY, maxY);
+        pickPrev.title = '上十二年'; pickNext.title = '下十二年';
+        pickGrid.className = 'ao-cal__pick-grid ao-cal__pick-grid--year';
+        pickGrid.innerHTML = Array.from({ length: 12 }, (_, i) => {
+          const y = pickWin + i;
+          const has = y >= minY && y <= maxY;            // 无数据年灰掉、不可点
+          return '<button class="ao-cal__pick-cell' + (y === calState.y ? ' is-active' : '') + '"' +
+            ' data-cal-year="' + y + '"' + (has ? '' : ' disabled') + '>' + y + '</button>';
+        }).join('');
+      } else {
+        const idx = calIndex();
+        pickTitle.textContent = pickY + '年';
+        pickPrev.disabled = pickY <= minY;
+        pickNext.disabled = pickY >= maxY;
+        pickPrev.title = '上一年'; pickNext.title = '下一年';
+        pickGrid.className = 'ao-cal__pick-grid';
+        pickGrid.innerHTML = Array.from({ length: 12 }, (_, m) => {
+          const has = idx.months.some((x) => x.y === pickY && x.m === m);
+          const future = pickY === curY && m > curM;      // 当年未来月无数据
+          const cls = 'ao-cal__pick-cell' +
+            (pickY === calState.y && m === calState.m ? ' is-active' : '') +
+            (pickY === curY && m === curM ? ' is-today' : '');
+          return '<button class="' + cls + '" data-cal-month="' + m + '"' +
+            (has && !future ? '' : ' disabled') + '>' + (m + 1) + '月</button>';
+        }).join('');
+      }
+    }
+    function openPick() {
+      if (!calState.y) {                                  // 与 drawAoCal 一致的懒初始化
+        const idx = calIndex();
+        const last = idx.days[idx.days.length - 1].date;
+        calState.y = +last.slice(0, 4); calState.m = +last.slice(5, 7) - 1;
+      }
+      const { minY, maxY } = yRange();
+      pickY = calState.y;
+      pickWin = Math.max(minY, Math.min(yCap(minY, maxY), calState.y - 2));
+      renderPick();
+      pick.hidden = false;
+    }
+
     sw.addEventListener('click', (e) => {
       const b = e.target.closest('[data-ao-cal]');
       if (!b) return;
-      sw.querySelectorAll('button').forEach((x) => x.classList.toggle('is-active', x === b));
-      calState.mode = b.dataset.aoCal;
+      setMode(b.dataset.aoCal);
       drawAoCal();
     });
     document.getElementById('aoCalPrev').addEventListener('click', () => step(-1));
     document.getElementById('aoCalNext').addEventListener('click', () => step(1));
+
+    /* 点日期标签 → 开/关下拉（无数据时不开） */
+    labelBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!aoState.series || !aoState.series.length) return;
+      if (pick.hidden) openPick(); else pick.hidden = true;
+    });
+    pickPrev.addEventListener('click', () => {
+      const { minY, maxY } = yRange();
+      if (calState.mode === 'year') pickWin = Math.max(minY, pickWin - 12);
+      else pickY = Math.max(minY, pickY - 1);
+      renderPick();
+    });
+    pickNext.addEventListener('click', () => {
+      const { minY, maxY } = yRange();
+      if (calState.mode === 'year') pickWin = Math.min(yCap(minY, maxY), pickWin + 12);
+      else pickY = Math.min(maxY, pickY + 1);
+      renderPick();
+    });
+    pickGrid.addEventListener('click', (e) => {
+      const b = e.target.closest('button');
+      if (!b || b.disabled) return;
+      if (b.dataset.calYear != null) {
+        calState.y = +b.dataset.calYear;                  // 年视图：选年（模式不变）
+      } else {
+        calState.y = pickY; calState.m = +b.dataset.calMonth;
+        setMode('month');                                 // 月视图：选月即跳档
+      }
+      pick.hidden = true;
+      drawAoCal();
+    });
+    /* 年视图：点有数据的月格子 → 跳到当月（用户 ） */
+    body.addEventListener('click', (e) => {
+      const cell = e.target.closest('[data-cal-jump]');
+      if (!cell) return;
+      calState.m = +cell.dataset.calJump;
+      setMode('month');
+      drawAoCal();
+    });
+    /* 点下拉外面 / Esc → 关 */
+    document.addEventListener('click', (e) => {
+      if (pick.hidden) return;
+      if (e.target.closest('#aoCalPick') || e.target.closest('#aoCalLabelBtn')) return;
+      pick.hidden = true;
+    });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') pick.hidden = true; });
   })();
 
   /* ===================== 账户表头排序（双三角图标，点击升/降切换） ===================== */
@@ -9194,7 +9316,8 @@ fundAmount += f.amount;
           const c = (v) => v == null ? '--' : v * FX;
           const pf = (v) => v == null ? '--' : (r.mult === 100 ? v.toFixed(3) : f2(v));
           const cls = (v) => v > 0 ? 'up' : v < 0 ? 'down' : '';
-          return `<tr><td>${r.code}</td><td class="td-name"><div class="td-clamp">${r.name}</div></td>` +
+          // 名称在第一列且固定（sticky，用户 ）；代码退到第二列
+          return `<tr><td class="td-name"><div class="td-clamp">${r.name}</div></td><td>${r.code}</td>` +
             `<td class="num">${r.qty}</td>` +
             `<td class="num">${pf(r.price)}</td><td class="num">${pf(r.cost)}</td>` +
             `<td class="num">${f2(c(r.value))}</td>` +

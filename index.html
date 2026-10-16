@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<link rel="preload" href="app.js?v=20261015b" as="script" />
+<link rel="preload" href="app.js?v=20261015e" as="script" />
 <!-- ⚠️ 用户要求「没读到数据就显示 --，别产生误导」：
  报价头/账户汇总的初始值一律 --（原来是硬编码的 137.790 / +5.190 / +3.91% 等假数字，
  页面刚加载、JS 还没跑到时就会显示出来）。真实值由 renderQuote / 账户页数据填充。 -->
@@ -1738,6 +1738,13 @@ html, body {
    会连带把移动端(14/12)也覆盖掉。 */
   .as-line .asl-col--r .asl-vals i:first-child { font-size: 13px; }   /* 盈亏额（红/绿） */
   .as-line .asl-col--r .asl-vals i + i { font-size: 12px; }           /* 盈亏百分比 */
+  /* 桌面端：证券/基金/现金三行的「总额」主数字大一号（用户 2026-10-16：
+   「245053,540430,232563 这几个数在桌面端大一号字体」）。
+   桌面原来塌到 12px —— 基础规则 `.as-group .as-line b{font-size:12px}` 后写胜出，
+   把 `.asl-col b` 的 14px 也一并吃掉。这里用 (0,3,1) 三段类名压过它，
+   **与移动端 16px 保持同号**（见 680 媒体块那条同名规则），两端不割裂。
+   只作用于 `.as-group` 内的分类行；总资产卡（`.acc-side__card`）不受影响，仍是 20px。 */
+  .as-group .as-line .asl-col b { font-size: 16px; }
 }
 .asp-col { display: flex; flex-direction: column; gap: 1px; }
 .asp-col span { font-size: 11px; color: var(--text-2); }
@@ -1957,9 +1964,10 @@ html, body {
  账户页主区表格字号是 11px（弹窗内的 `.acc-detail` 才是 10px），11 字 ≈ 121px，
  再加 td 左右 padding 6px 与余量 → 132px 刚好卡在折行临界（用户反馈它折成两行），
  放到 150px 后 12 字以内都能单行，超出再换行、**最多两行**（第 3 行起省略）。
- ⚠️ `-webkit-box` 不能直接写在 td 上（会让单元格脱离表格布局算法，列宽失控），
- 必须在 td 内套一层 div（渲染时给名称单元格加 `.td-name` + 内层 `.td-clamp`）。
- 证券表首列是代码、名称在第 2 列；基金/现金表首列就是名称 —— 统一按「名称列 150px」处理。 */
+⚠️ `-webkit-box` 不能直接写在 td 上（会让单元格脱离表格布局算法，列宽失控），
+必须在 td 内套一层 div（渲染时给名称单元格加 `.td-name` + 内层 `.td-clamp`）。
+证券表名称也在第一列且固定（用户 ：「名称和代码互换，名称在第一列且固定」，
+2026-10-16；首列 sticky 由上面的 `td:first-child` 规则统一接管，不必另写）。 */
 .acc-table .td-name { width: 150px; min-width: 150px; max-width: 150px; }
 .acc-table .td-clamp {
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
@@ -2157,6 +2165,47 @@ html, body {
 .ao-cal__sum { display: flex; gap: 32px; margin-left: auto; }
 .ao-cal__sum span { display: block; font-size: 11px; color: var(--text-3); margin-bottom: 2px; }
 .ao-cal__sum b { font-size: 17px; font-weight: 700; }
+
+/* --- 时间选择下拉（点日期标签弹出；月视图选月、年视图选年） --- */
+.ao-cal__nav { position: relative; }
+.ao-cal__label {
+  display: inline-flex; align-items: center; gap: 4px;
+  border: 0; background: none; font-family: inherit; color: var(--text);
+  padding: 4px 6px; margin: 0 -6px; border-radius: 5px; cursor: pointer;
+}
+.ao-cal__label:hover { background: var(--panel-2); }
+.ao-cal__caret { width: 10px; height: 10px; fill: currentColor; color: var(--text-3); flex: none; }
+.ao-cal__pick {
+  position: absolute; top: calc(100% + 8px); left: 0; z-index: 60;
+  min-width: 238px; padding: 12px 14px 14px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.16);
+}
+.ao-cal__pick[hidden] { display: none !important; }
+/* ⚠️ 标题 b 必须带 `.ao-cal` 前缀：窄屏媒体查询里有 `.ao-cal .ao-cal__nav b`(0,2,1)
+ （min-width:56px; font-size:13px），同特异度压不过（下拉骨架在 nav 内部，会被它命中）。 */
+.ao-cal .ao-cal__pick-hd { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.ao-cal .ao-cal__pick-hd b { font-size: 14px; font-weight: 700; min-width: 0; }
+.ao-cal__pick-nav {
+  width: 26px; height: 26px; padding: 0; border: none; border-radius: 5px;
+  background: none; color: var(--text-2); cursor: pointer; display: flex; align-items: center; justify-content: center;
+}
+.ao-cal__pick-nav svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.ao-cal__pick-nav:hover:not(:disabled) { background: var(--panel-2); color: var(--text); }
+.ao-cal__pick-nav:disabled { color: #c9cfda; cursor: default; }
+.ao-cal__pick-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.ao-cal__pick-grid--year { grid-template-columns: repeat(3, 1fr); }
+.ao-cal__pick-cell {
+  border: 0; background: none; font-family: inherit; cursor: pointer;
+  padding: 8px 0; border-radius: 6px; font-size: 13px; color: var(--text-2);
+}
+.ao-cal__pick-cell:hover:not(:disabled):not(.is-active) { background: var(--panel-2); color: var(--text); }
+.ao-cal__pick-cell.is-today { color: var(--accent); font-weight: 700; }
+.ao-cal__pick-cell.is-active { background: var(--text); color: var(--panel); font-weight: 700; }
+.ao-cal__pick-cell:disabled { color: #c9cfda; cursor: default; }
+/* 年视图：有数据的月格子可点击 → 跳到当月（用户 ） */
+.ao-cal__cell.is-jump { cursor: pointer; }
+.ao-cal__cell.is-jump:hover h5 { color: var(--accent); }
 
 /* --- 年视图：12 个月格子 --- */
 .ao-cal__grid--year { display: grid; grid-template-columns: repeat(6, 1fr); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
@@ -2746,8 +2795,21 @@ html, body {
                 </div>
                 <div class="ao-cal__nav">
                   <button class="ao-cal__step" id="aoCalPrev" title="上一"><svg viewBox="0 0 24 24" class="ic"><path d="M15 6l-6 6 6 6"/></svg></button>
-                  <b id="aoCalLabel">2026/10</b>
+                  <!-- 日期标签 = 时间选择下拉入口（用户 ：点数字弹出下拉选时间；年视图下选年份） -->
+                  <button class="ao-cal__label" id="aoCalLabelBtn" title="选择月份" aria-haspopup="true">
+                    <b id="aoCalLabel">2026/10</b>
+                    <svg class="ao-cal__caret" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.5l6.2 7H5.8z"/></svg>
+                  </button>
                   <button class="ao-cal__step" id="aoCalNext" title="下一"><svg viewBox="0 0 24 24" class="ic"><path d="M9 6l6 6-6 6"/></svg></button>
+                  <!-- 下拉：月视图 = 12 个月格子（«/» 换年）；年视图 = 12 年格子（«/» 换窗口） -->
+                  <div class="ao-cal__pick" id="aoCalPick" hidden>
+                    <div class="ao-cal__pick-hd">
+                      <button class="ao-cal__pick-nav" id="aoCalPickPrev" title="上一年"><svg viewBox="0 0 24 24"><path d="M11 6l-6 6 6 6M19 6l-6 6 6 6"/></svg></button>
+                      <b id="aoCalPickTitle">2026年</b>
+                      <button class="ao-cal__pick-nav" id="aoCalPickNext" title="下一年"><svg viewBox="0 0 24 24"><path d="M13 6l6 6-6 6M5 6l6 6-6 6"/></svg></button>
+                    </div>
+                    <div class="ao-cal__pick-grid" id="aoCalPickGrid"></div>
+                  </div>
                 </div>
                 <div class="ao-cal__sum">
                   <div><span id="aoCalSumLabel">10月收益 · CNY</span><b class="num" id="aoCalSum">--</b></div>
@@ -2778,10 +2840,10 @@ html, body {
 
         <div class="acc-table-wrap">
           <table class="acc-table" data-sort-table="stock">
-            <thead>
-              <tr>
-                <th data-sort="code">代码<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
-                <th data-sort="name">名称<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+              <thead>
+                <tr>
+                  <th data-sort="name">名称<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
+                  <th data-sort="code">代码<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
                 <th data-sort="qty">持有数量<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
                 <th data-sort="price">现价<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
                 <th data-sort="cost">摊薄成本价<svg class="ic th-sort__ic" viewBox="0 0 24 24"><path class="tri-up" d="M8 10l4-4 4 4"/><path class="tri-dn" d="M8 14l4 4 4-4"/></svg></th>
@@ -3332,6 +3394,6 @@ html, body {
  就没有任何入口，逻辑（app.js）/样式（index.html 内联块）/本段 HTML 一并移除。别再恢复。 -->
 </div>
 </div>
-<script defer src="app.js?v=20261015b"></script>
+<script defer src="app.js?v=20261015e"></script>
 </body>
 </html>

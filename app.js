@@ -4131,6 +4131,9 @@ const TICKER_TTL = 15000;
             mc: (x.mc != null && isFinite(x.mc)) ? x.mc : null,
             p: (x.p != null && isFinite(x.p)) ? x.p : null,
             ret: (x.ret != null && isFinite(x.ret)) ? x.ret : null,
+            /* 名次变动：fund_holdings.py 每日抓取时对比昨日快照算出、内联在每行 rk
+            字段；缺失/非对象 → null（renderIndexTable 里标「—」）。 */
+            rk: (x.rk && typeof x.rk === 'object') ? x.rk : null,
           }));
           const asOf = String((aj && (aj.asof || aj.sp500_asof || aj.nasdaq100_asof)) || '').slice(0, 10);
           /* ⚠️ 谷歌双股权特例（与板块热力图一致）：GOOGL/GOOG 只留市值最大的一只。 */
@@ -4198,7 +4201,7 @@ const TICKER_TTL = 15000;
     return { rows: dedupGoogleShareClass(rows), asOf, source: 'fund_holdings.json（每日快照）', nSp: sp.length, nNd: nd.length };
   }
   /* 只重画表格（用缓存的行），点表头排序走这条，不重新拉 json */
-  function drawAllStocks() {
+  async function drawAllStocks() {
     const host = $('#screenBody');
     if (!host || !ALL_ROWS) return;
     const rows = sortAllStocks(ALL_ROWS, ALL_SORT);
@@ -4211,7 +4214,7 @@ const TICKER_TTL = 15000;
       + '<span class="rt-stat" id="rtStat"></span>'
       + '</div>';
     rtFillBase();    /* 先填基准价 → 实时列初始即显示快照价（等建连节拍期间也有价格看） */
-    host.innerHTML = bar + renderIndexTable(rows, { noW: true, sortable: true, sort: ALL_SORT, rt: true, rtSyms: rtTopSet() });
+    host.innerHTML = bar + renderIndexTable(rows, { noW: true, sortable: true, sort: ALL_SORT, rt: true, rtSyms: rtTopSet(), rank: true });
     rtStart();       /* 幂等：首帧才建连接；排序/切 tab 重绘后只补刷已有价格 */
     rtRepaintAll();
     rtUpdateStatus();
@@ -4986,6 +4989,19 @@ const TICKER_TTL = 15000;
     const source = 'fund_holdings.json（每日快照）';
     return { asOf, source, rows: data };
   }
+  /* 「全部个股」市值名次变动箭头：数据内联在 all_stocks.json 每行的 rk 字段
+   （fund_holdings.py 每日抓取时对比昨日快照算出），前端直接读 x.rk，
+   绿涨红跌 —— 名次上升=绿▲、下降=红▼、新入榜=绿「新进」。仅「全部个股」表开启（opts.rank）。 */
+  function rankArrowHtml(rk) {
+    if (!rk) return '<span class="us-top__rk rk-flat">—</span>';
+    if (rk.isNew) return '<span class="us-top__rk rk-new" title="新入榜（昨日不在榜）">新进</span>';
+    const chg = rk.chg;
+    if (chg == null) return '<span class="us-top__rk rk-flat">—</span>';
+    if (chg > 0) return '<span class="us-top__rk rk-up" title="较昨日市值名次 +' + chg + '">▲' + chg + '</span>';
+    if (chg < 0) return '<span class="us-top__rk rk-down" title="较昨日市值名次 ' + chg + '">▼' + (-chg) + '</span>';
+    return '<span class="us-top__rk rk-flat" title="名次不变">—</span>';
+  }
+
   function renderIndexTable(rows, opts) {
     /* opts.noW = true → 市值**不挂权重副行**（「全部个股」合并表专用：合并后
  S&P 权重与 Nasdaq 的 qqqWeight 口径不同、不可比，展示就是假数 → 直接不显示）。 */
@@ -4996,6 +5012,9 @@ const TICKER_TTL = 15000;
  （每次重绘都替换 innerHTML，逐个 rebind 会漏）。 */
     const sortable = !!(opts && opts.sortable);
     const sort = (opts && opts.sort) || null;
+    /* opts.rank → 序号前加「市值名次变动」列（仅「全部个股」表开启）：
+     ＞ 昨日名次 ↑=绿▲ N / ↓=红▼ N；新入榜=绿「新进」；无变动/无数据=灰「—」。 */
+    const rank = !!(opts && opts.rank);
     /* opts.rt + opts.rtSyms → 第 6 列「Finnhub 实时价」（2026-10-14 用户定稿：
  「全部个股加一个 finnhub 实时价列，前 100 才写」= 只给全部个股表加这一列，
  且只订市值前 100 → rtSyms 内的行挂 data-rt 供 WS 刷新，其余行灰色占位 '--'）。
@@ -5009,14 +5028,17 @@ const TICKER_TTL = 15000;
       { k: 'p', t: '现价', tip: '按现价排序' },
       { k: 'ret', t: '1年回报', tip: '按 1 年回报排序' },
     ];
-    let headHtml = sortable
+    const rankHead = rank
+      ? '<span class="us-top__rk-h" title="较昨日市值名次变动（绿涨红跌：▲名次升 / ▼名次降 / 新进=新入榜）">名次</span>'
+      : '';
+    let headHtml = rankHead + (sortable
       ? SORT_COLS.map((c) => {
         const on = sort && sort.k === c.k;
         const arrow = on ? (sort.dir < 0 ? ' ▼' : ' ▲') : '';
         return '<span data-sort-k="' + c.k + '" title="' + cpEsc(c.tip) + '"'
           + (on ? ' class="is-sorted"' : '') + '>' + c.t + arrow + '</span>';
       }).join('')
-      : '<span>序号</span><span>名称</span><span>市值</span><span>现价</span><span>1年回报</span>';
+      : '<span>序号</span><span>名称</span><span>市值</span><span>现价</span><span>1年回报</span>');
     if (rt) headHtml += '<span class="us-top__rt-h" title="Finnhub WebSocket 实时价（仅市值前 100，盘中推送）">实时价</span>';
     /* 名称列宽：按本表**最长公司名**实测（canvas 量 13px 字），再留 18px 余量，夹在 150~340px。
  ⚠️ 必须算成**固定 px**：每条 `.us-top__row` 各自是独立 grid，写成 `1fr/auto/max-content`
@@ -5035,13 +5057,14 @@ const TICKER_TTL = 15000;
       nmW = mx > 0 ? Math.round(mx) + 18 : 240;
     } catch (e) { nmW = 240; }
     nmW = Math.max(150, Math.min(340, nmW));
-    return '<div class="us-top idx-const' + (rt ? ' idx-rt' : '') + '" style="--idx-nm:' + nmW + 'px">'
+    return '<div class="us-top idx-const' + (rt ? ' idx-rt' : '') + (rank ? ' idx-rank' : '') + '" style="--idx-nm:' + nmW + 'px">'
       + '<div class="us-top__hd">' + headHtml + '</div>'
       + rows.map((x, i) => {
         const cRet = (x.ret == null) ? 'flat' : cls(x.ret * 100);
         const retTxt = (x.ret == null) ? '--' : (x.ret > 0 ? '+' : '') + (x.ret * 100).toFixed(2) + '%';
         const wTxt = (x.w != null) ? x.w.toFixed(2) + '%' : '--';
         return '<div class="us-top__row">'
+          + (rank ? rankArrowHtml(x.rk) : '')
           + '<span class="us-top__i">' + (i + 1) + '</span>'
           + '<span class="us-top__n"><b>' + cpEsc(x.n) + '</b><i>' + cpEsc(x.c) + '</i></span>'
           + '<span class="us-top__m num">'

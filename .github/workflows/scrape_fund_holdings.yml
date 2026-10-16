@@ -54,6 +54,7 @@ jobs:
           OUT="${{ github.event.inputs.output || 'fund_holdings.json' }}"
           git add "$OUT"
           # 「全部个股」聚合结果（fund_holdings.py 每次抓取顺带生成；文件不存在时忽略）
+          # 名次变动已内联进 all_stocks.json 每行的 rk 字段，不再单独生成文件。
           git add all_stocks.json 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "内容无变化，跳过提交"

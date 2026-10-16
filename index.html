@@ -1492,6 +1492,21 @@ html, body {
 .us-top__rt { display: inline-flex; flex-direction: column; align-items: flex-end; justify-content: center; gap: 1px; line-height: 1.25; text-align: right; font-variant-numeric: tabular-nums; color: var(--text); }
 .us-top__rt-px { font-weight: 600; }
 .us-top__rt-pct { font-size: 11px; font-weight: 400; color: var(--text-3); }
+
+/* 「全部个股」序号前的「市值名次变动」列（绿涨红跌：名次上升=绿▲ / 下降=红▼ / 新进=绿） */
+.us-top__rk { font-size: 11px; text-align: right; font-variant-numeric: tabular-nums; line-height: 1; white-space: nowrap; color: var(--text-3); }
+.us-top__rk.rk-up   { color: #16a34a; font-weight: 600; }   /* 名次上升 = 绿 */
+.us-top__rk.rk-down { color: #dc2626; font-weight: 600; }   /* 名次下降 = 红 */
+.us-top__rk.rk-new  { color: #16a34a; font-weight: 700; }
+.us-top__rk.rk-flat { color: var(--text-3); }
+.us-top__rk-h { white-space: nowrap; color: var(--text-2); }
+/* 仅在「全部个股」表（idx-rank）多开一列：桌面序号前 36px，含实时价共 7 列 */
+.idx-const.idx-rank .us-top__hd, .idx-const.idx-rank .us-top__row {
+  grid-template-columns: 36px 44px var(--idx-nm, 260px) 108px 92px 96px;
+}
+.idx-const.idx-rank.idx-rt .us-top__hd, .idx-const.idx-rank.idx-rt .us-top__row {
+  grid-template-columns: 36px 44px var(--idx-nm, 260px) 108px 92px 96px 88px;
+}
 .us-top__rt.rt-off { color: var(--text-3); }
 .us-top__rt.up { color: var(--up); }
 .us-top__rt.down { color: var(--down); }
@@ -1542,6 +1557,13 @@ html, body {
   .idx-const.idx-rt .us-top__hd, .idx-const.idx-rt .us-top__row {
     grid-template-columns: 24px minmax(0, 1fr) 54px 50px 56px 52px;
     gap: 3px;
+  }
+  /* 手机端：「全部个股」名次变动列也多开一列（26px） */
+  .idx-const.idx-rank .us-top__hd, .idx-const.idx-rank .us-top__row {
+    grid-template-columns: 26px 24px minmax(0, 1fr) 56px 50px 58px;
+  }
+  .idx-const.idx-rank.idx-rt .us-top__hd, .idx-const.idx-rank.idx-rt .us-top__row {
+    grid-template-columns: 26px 24px minmax(0, 1fr) 54px 50px 56px 52px;
   }
   .idx-const .us-top__hd { font-size: 10px; }
   /* 手机端表头加了排序箭头，字再压 1px 保证「1年回报 ▼」不折行 */

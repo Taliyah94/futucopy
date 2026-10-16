@@ -1287,6 +1287,57 @@ def dump_all_stocks(obj):
     return "{\n" + body + ",\n  \"rows\": [\n" + lines + "\n  ]\n}"
 
 
+def attach_rank_changes(rows, prev_rows):
+    """对比今日/昨日「全部个股」行，给每个今日 row **就地**加 `rk` 字段：
+    {"cur": 今日名次(1-based), "prev": 昨日名次或 None,
+     "chg": prev-cur(>0 名次上升=绿▲), "isNew": bool}。
+    昨日不在榜 → isNew=True，prev/chg 为 None（前端标「新进」）。
+    无昨日（首次/无旧文件）→ prev/chg 为 None、isNew=False（无对照，标「—」）。
+    名次按 mc 降序计算（mc 缺失排最后）。结果随 all_stocks.json 一起写盘，
+    前端「全部个股」表直接读 x.rk，不再单独生成 stock_rank_changes.json。
+    ⚠️ 谷歌双股权特例（GOOGL/GOOG）只算一只：与前端 loadAllStocks 的
+    dedupGoogleShareClass 对齐 —— 排名时两只共用一个名次（保留市值最大那只的位置），
+    另一只不占新名次，保证后端名次与前端去重后的「序号」一致（否则甲骨文等会被多算一名）。
+    """
+    def rank_map(rs):
+        order = sorted(
+            [r for r in (rs or []) if isinstance(r, dict) and r.get("c")],
+            key=lambda x: (x.get("mc") if x.get("mc") is not None else -1),
+            reverse=True,
+        )
+        rank = {}
+        google_rank = None
+        idx = 0
+        for r in order:
+            code = str(r.get("c", "")).strip().upper()
+            is_google = code in ("GOOGL", "GOOG")
+            if is_google and google_rank is not None:
+                rank[code] = google_rank  # 第二只谷歌沿用名次，不占新位
+                continue
+            idx += 1
+            rank[code] = idx
+            if is_google:
+                google_rank = idx
+        return rank
+    today = rank_map(rows)
+    prev = rank_map(prev_rows)
+    for r in rows:
+        if not isinstance(r, dict) or not r.get("c"):
+            continue
+        c = str(r["c"]).strip().upper()
+        cur = today.get(c)
+        if cur is None:
+            continue
+        p = prev.get(c)
+        r["rk"] = {
+            "cur": cur,
+            "prev": p,
+            "chg": (p - cur) if p is not None else None,
+            "isNew": p is None,
+        }
+    return rows
+
+
 # ---------------------------------------------------------------------------
 # FMP 行业 + 收盘价缓存（fetch_fmp_profiles.py 抓，2026-10-12 起；
 # 2026-10-15 改为「市值前 120 · 每天抓行业 + 收盘价」（scope 默认 120，原 100 时
@@ -1920,6 +1971,9 @@ def main(argv=None):
     if not args.no_all_stocks:
         all_obj = build_all_stocks(result)
         if all_obj:
+            # 名次变动：先读「昨日」已存盘 all_stocks.json（本次覆盖前），再写今日
+            prev_rows, prev_meta = load_existing_all_stocks(args.all_stocks_output)
+            prev_asof = (prev_meta or {}).get("asof")
             # 合并 FMP 行业分类缓存（fetch_fmp_profiles.py 每日分批抓的）——
             # 本文件每日重生成会冲掉行内 fmp 字段，这里每次生成后回填，保证不丢
             fmp_cache = load_fmp_cache(
@@ -1929,17 +1983,28 @@ def main(argv=None):
             all_obj["nFmp"] = n_fmp
             if n_fmp and not args.quiet:
                 sys.stderr.write("  [全部个股] 合并 FMP 行业分类缓存 %d 只\n" % n_fmp)
+            # 「名次变动」内联到每行 rk 字段（对比「昨日」已存盘 all_stocks.json，
+            # 即本次覆盖前读出的 prev_rows）：cur=今日名次、prev=昨日名次、chg=prev-cur
+            # （>0 名次上升=绿▲）、isNew=昨日不在榜。随 all_stocks.json 一起写盘。
+            attach_rank_changes(all_obj["rows"], prev_rows)
             if args.no_write:
                 sys.stderr.write("  [全部个股] %d 只（S&P %d + Nasdaq %d，按代码去重，不写文件）\n"
                                  % (all_obj["nTotal"], all_obj["nSp"], all_obj["nNd"]))
+                sys.stderr.write("  [名次变动] 算好内联 rk（不写文件）\n")
             else:
                 try:
                     with open(args.all_stocks_output, "w", encoding="utf-8") as f:
                         f.write(dump_all_stocks(all_obj))
                     if not args.quiet:
+                        n_new = sum(1 for r in all_obj["rows"] if isinstance(r, dict) and r.get("rk", {}).get("isNew"))
+                        n_up = sum(1 for r in all_obj["rows"] if (isinstance(r, dict) and (r.get("rk") or {}).get("chg") or 0) > 0)
+                        n_down = sum(1 for r in all_obj["rows"] if (isinstance(r, dict) and (r.get("rk") or {}).get("chg") or 0) < 0)
                         sys.stderr.write("  [全部个股] %d 只（S&P %d + Nasdaq %d，按代码去重）→ %s\n"
                                          % (all_obj["nTotal"], all_obj["nSp"], all_obj["nNd"],
                                             args.all_stocks_output))
+                        sys.stderr.write("  [名次变动] 内联 rk %d 只（↑%d ↓%d 新进%d，昨日=%s）\n"
+                                         % (len(all_obj["rows"]), n_up, n_down, n_new,
+                                            prev_asof or "无"))
                 except Exception as e:  # noqa: BLE001
                     sys.stderr.write("  [全部个股] 写 %s 失败：%s\n" % (args.all_stocks_output, e))
         else:

@@ -1292,6 +1292,43 @@ def dump_all_stocks(obj):
     return "{\n" + body + ",\n  \"rows\": [\n" + lines + "\n  ]\n}"
 
 
+def rank_map_by_mc(rows):
+    """按活动 mc 降序算 1-based 名次字典 {code: 名次}；mc 缺失垫底。
+
+    ⚠️ 谷歌双股权特例（GOOGL/GOOG）只算一只：与前端 loadAllStocks 的
+    dedupGoogleShareClass 对齐 —— 排名时两只共用一个名次（保留市值最大那只的位置），
+    另一只不占新名次，保证后端名次与前端去重后的「序号」一致（否则甲骨文等会被多算一名）。
+    """
+    order = sorted(
+        [r for r in (rows or []) if isinstance(r, dict) and r.get("c")],
+        key=lambda x: (x.get("mc") if x.get("mc") is not None else -1),
+        reverse=True,
+    )
+    rank = {}
+    google_rank = None
+    idx = 0
+    for r in order:
+        code = str(r.get("c", "")).strip().upper()
+        is_google = code in ("GOOGL", "GOOG")
+        if is_google and google_rank is not None:
+            rank[code] = google_rank  # 第二只谷歌沿用名次，不占新位
+            continue
+        idx += 1
+        rank[code] = idx
+        if is_google:
+            google_rank = idx
+    return rank
+
+
+def _write_rk(r, cur, prev):
+    r["rk"] = {
+        "cur": cur,
+        "prev": prev,
+        "chg": (prev - cur) if prev is not None else None,
+        "isNew": prev is None,
+    }
+
+
 def attach_rank_changes(rows, prev_rows):
     """对比今日/昨日「全部个股」行，给每个今日 row **就地**加 `rk` 字段：
     {"cur": 今日名次(1-based), "prev": 昨日名次或 None,
@@ -1300,32 +1337,11 @@ def attach_rank_changes(rows, prev_rows):
     无昨日（首次/无旧文件）→ prev/chg 为 None、isNew=False（无对照，标「—」）。
     名次按 mc 降序计算（mc 缺失排最后）。结果随 all_stocks.json 一起写盘，
     前端「全部个股」表直接读 x.rk，不再单独生成 stock_rank_changes.json。
-    ⚠️ 谷歌双股权特例（GOOGL/GOOG）只算一只：与前端 loadAllStocks 的
-    dedupGoogleShareClass 对齐 —— 排名时两只共用一个名次（保留市值最大那只的位置），
-    另一只不占新名次，保证后端名次与前端去重后的「序号」一致（否则甲骨文等会被多算一名）。
+    ⚠️ 名次基准必须是**活动 mc**（apply_fmp_to_row 落地后的值），与前端
+    sortAllStocks 的排序键一致，否则箭头与序号/市值列错位。
     """
-    def rank_map(rs):
-        order = sorted(
-            [r for r in (rs or []) if isinstance(r, dict) and r.get("c")],
-            key=lambda x: (x.get("mc") if x.get("mc") is not None else -1),
-            reverse=True,
-        )
-        rank = {}
-        google_rank = None
-        idx = 0
-        for r in order:
-            code = str(r.get("c", "")).strip().upper()
-            is_google = code in ("GOOGL", "GOOG")
-            if is_google and google_rank is not None:
-                rank[code] = google_rank  # 第二只谷歌沿用名次，不占新位
-                continue
-            idx += 1
-            rank[code] = idx
-            if is_google:
-                google_rank = idx
-        return rank
-    today = rank_map(rows)
-    prev = rank_map(prev_rows)
+    today = rank_map_by_mc(rows)
+    prev = rank_map_by_mc(prev_rows)
     for r in rows:
         if not isinstance(r, dict) or not r.get("c"):
             continue
@@ -1333,13 +1349,26 @@ def attach_rank_changes(rows, prev_rows):
         cur = today.get(c)
         if cur is None:
             continue
-        p = prev.get(c)
-        r["rk"] = {
-            "cur": cur,
-            "prev": p,
-            "chg": (p - cur) if p is not None else None,
-            "isNew": p is None,
-        }
+        _write_rk(r, cur, prev.get(c))
+    return rows
+
+
+def refresh_rank_changes(rows, prev_rank):
+    """FMP 收盘价/市值覆盖活动 mc 后**重算**名次（fetch_fmp_profiles.py 写回前调用）：
+    cur = 按覆盖后活动 mc 的新名次；prev 由调用方给 {code: 名次} 字典
+    （= 覆盖前各行 rk.cur 快照，即上一次 scrape 后的名次基准）。
+    不重算的后果：活动市值被 FMP 改写、名次还停在旧基准 → 箭头与前端
+    序号/市值排序错位（2026-10-17 实测 94 只票漂移，CVX/ORCL/CSCO 等）。
+    """
+    today = rank_map_by_mc(rows)
+    for r in rows:
+        if not isinstance(r, dict) or not r.get("c"):
+            continue
+        c = str(r["c"]).strip().upper()
+        cur = today.get(c)
+        if cur is None:
+            continue
+        _write_rk(r, cur, (prev_rank or {}).get(c))
     return rows
 
 
@@ -1405,12 +1434,22 @@ def apply_fmp_to_row(r, e, run_date):
     """把 FMP 缓存条目 e 应用到 all_stocks 行 r，落地「双源并存、互不覆盖」：
 
     - 保留 r["hom"] = {price, mc, asof}（HOM 历史行情收盘，来自指数快照）
-    - 写   r["fmp"] = {price, mc(按 HOM×涨跌幅预估), asof, chgPct, source}（仅市值前 120 有）
+    - 写   r["fmp"] = {price, mc, asof, chgPct, source}（仅市值前 120 有）
     - 活动值 r["p"] / r["mc"]：
-        若 FMP asof == 今日(run_date) → 视为「今日已刷新」，用 FMP（含预估市值）
+        若 FMP asof == 今日(run_date) → 视为「今日已刷新」，用 FMP（含市值）
         否则 → 回退 HOM（刷新前 / 还没抓到，前端市值与名次按 HOM 算）
     排名（attach_rank_changes）和前端序号都读活动 mc，因此这套逻辑天然满足：
-    「FMP 刷新前用 HOM 算前进/后退位次，FMP 刷新后改用 FMP 预估市值算」。
+    「FMP 刷新前用 HOM 算前进/后退位次，FMP 刷新后改用 FMP 市值算」。
+
+    ⚠️ 市值口径（2026-10-17 修双算 bug）：
+    ① FMP profile 直接返回 marketCap 时**原样用**，绝不乘涨跌幅——乘了会把当日
+       涨跌算两遍（21:00 scrape 时 HOM 已追上同一收盘，hom.mc 已是当日市值，
+       再 ×(1+chgPct) 就错了；实测旧文件 120/120 行命中该式）。
+    ② 仅当缓存条目缺 marketCap（老条目，下次抓取自动补上）才走预估，且先判
+       「同一收盘」：|fmp.price/hom.price-1| < 0.3%（两源同收差异实测中位
+       0.0000%、最大 0.14%）→ HOM 已是当日市值 → est = hom.mc，不乘涨跌；
+       只有确认 HOM 落后一天（fetch 刚刷新、scrape 还没跑）时
+       hom.mc×(1+chgPct) 才是当日市值的正确近似。
     """
     hom = r.get("hom") or {}
     hom_mc = hom.get("mc") if hom.get("mc") is not None else r.get("mc")
@@ -1422,10 +1461,26 @@ def apply_fmp_to_row(r, e, run_date):
             chg_f = float(chg) if chg is not None else None
         except (TypeError, ValueError):
             chg_f = None
-        if hom_mc is not None and chg_f is not None:
-            est_mc = int(round(hom_mc * (1 + chg_f / 100.0)))
-        else:
-            est_mc = hom_mc
+        # ① FMP 直接给了当日收盘市值 → 原样采用（结构上杜绝双算）
+        fmp_mc = e.get("marketCap")
+        est_mc = None
+        if isinstance(fmp_mc, (int, float)) and fmp_mc > 0:
+            est_mc = int(round(float(fmp_mc)))
+        elif hom_mc is not None:
+            # ② 老条目缺 marketCap：先判断 FMP 与 HOM 是否同一收盘
+            same_close = False
+            try:
+                hp = float(hom_price)
+                fp = float(px)
+                same_close = hp > 0 and fp > 0 and abs(fp / hp - 1.0) < 0.003
+            except (TypeError, ValueError, ZeroDivisionError):
+                same_close = False
+            if same_close:
+                est_mc = int(round(float(hom_mc)))   # HOM 已是当日市值，直接锚定
+            elif chg_f is not None:
+                est_mc = int(round(hom_mc * (1 + chg_f / 100.0)))
+            else:
+                est_mc = hom_mc
         r["fmp"] = {
             "price": round(float(px), 2),
             "mc": est_mc,

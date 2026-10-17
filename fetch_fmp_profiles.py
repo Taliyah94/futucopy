@@ -157,14 +157,30 @@ def _to_price(v):
     return f
 
 
+def _to_mcap(v):
+    """把 FMP 的 marketCap 字段转成 int（美元）；缺失/非数字/非正 → None。
+
+    拿到当日收盘市值 → apply_fmp_to_row 原样采用、**绝不乘涨跌幅**
+    （乘了会把当日涨跌算两遍，2026-10-17 修复的双算 bug）。
+    """
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    if not (f > 0) or f != f:      # 排除 0 / 负数 / NaN
+        return None
+    return int(round(f))
+
+
 def fetch_fmp_profile(symbol, apikey, retries=2, timeout=20):
-    """抓单个 symbol 的 (sector, industry, price, chgPct)。
+    """抓单个 symbol 的 (sector, industry, price, chgPct, marketCap)。
 
     返回：
-      (s, i, px, chg) 成功（s/i 可能为空串；px 可能 None；chg = 当日涨跌幅%，
+      (s, i, px, chg, mcap) 成功（s/i 可能为空串；px 可能 None；chg = 当日涨跌幅%，
                          优先 changesPercentage，缺失时由 change/price 推算；
-                         px 为 None 时 chg 也应为 None，此时**不要**动行内 p/mc）；
-      ("", "", None, None) FMP 确实没这个票的数据（空数组）→ 入缓存，避免每日重抓；
+                         px 为 None 时 chg 也应为 None，此时**不要**动行内 p/mc；
+                         mcap = FMP 当日收盘市值（美元，int），正数才收，否则 None）
+      ("", "", None, None, None) FMP 确实没这个票的数据（空数组）→ 入缓存，避免每日重抓；
       None           网络/服务端问题 → 不入缓存，次日再试。
     抛出 FmpFatal：额度/key 问题，调用方应熔断整轮。
     """
@@ -193,14 +209,14 @@ def fetch_fmp_profile(symbol, apikey, retries=2, timeout=20):
                     except (TypeError, ValueError, ZeroDivisionError):
                         chg = None
                 return (str(d.get("sector") or ""), str(d.get("industry") or ""),
-                        _to_price(d.get("price")), chg)
+                        _to_price(d.get("price")), chg, _to_mcap(d.get("marketCap")))
             if isinstance(obj, list) and not obj:
                 saw_empty = True
                 break                         # 该变体无数据 → 换下一个变体，不必重试
             # 其余（超时 / 5xx / 非 JSON）→ 退避后重试同一变体
             if attempt < retries:
                 time.sleep(1.5 * attempt)
-    return ("", "", None, None) if saw_empty else None
+    return ("", "", None, None, None) if saw_empty else None
 
 
 def _mc_of(r):
@@ -362,6 +378,10 @@ def main(argv=None):
                 "price": res[2] if res[2] is not None else e_old.get("price"),
                 # 当日涨跌幅%：本轮拿到就更新，否则沿用缓存旧值 → 用于预估今日市值
                 "chgPct": res[3] if res[3] is not None else e_old.get("chgPct"),
+                # 当日收盘市值（美元）：FMP profile 直接给 → 原样落地，
+                # 上层 apply_fmp_to_row 不再用 hom.mc×(1+chgPct) 预估（双算 bug）。
+                # 拿不到 → None，上层回退「同一收盘守卫 + 预估」逻辑。
+                "marketCap": res[4] if res[4] is not None else e_old.get("marketCap"),
                 "asof": _dt.date.today().isoformat(),
             }
             if res[2] is not None:
@@ -378,6 +398,15 @@ def main(argv=None):
     # ④ 写回 all_stocks.json：前 N 行用缓存（核对后的值）替换行业 + **落地 fmp 对象与活动值**；
     #    范围外剥掉 fmp 字段与行业，活动值回退 HOM（保证不含前 120 以外的 stale fmp）。
     #    fmp 对象 / 活动 p、mc 由 fh.apply_fmp_to_row 统一生成（与 fund_holdings.py 同逻辑）。
+    # ⚠️ 覆盖前先快照各行 rk.cur：FMP 收盘价/市值会改写活动 mc，名次必须按**覆盖后**的
+    #    活动 mc 重排 + 重算（2026-10-17 修复：此前从不重算，94 只票箭头与前端
+    #    序号/市值排序错位，CVX/ORCL/CSCO/LLY/BRK.B 等成对漂移）。
+    prev_rank = {}
+    for r in rows:
+        c0 = str((r or {}).get("c") or "").strip().upper()
+        rk0 = r.get("rk") if isinstance(r.get("rk"), dict) else None
+        if c0 and rk0 and isinstance(rk0.get("cur"), (int, float)):
+            prev_rank[c0] = int(rk0["cur"])
     n_attached, n_price = 0, 0
     price_lines = []
     run_date = _dt.date.today().isoformat()
@@ -413,9 +442,22 @@ def main(argv=None):
                 r["mc"] = hom["mc"]
             if hom.get("price") is not None:
                 r["p"] = hom["price"]
+    # FMP 市值落地后：按**新活动 mc** 重排 + 重算名次（prev = 覆盖前 rk.cur 快照），
+    # 与 fund_holdings.py 的 attach_rank_changes 同规则（GOOGL/GOOG 共享名次）。
+    rows = sorted(rows, key=_mc_of, reverse=True)
+    fh.refresh_rank_changes(rows, prev_rank)
     doc["rows"] = rows
     doc["nFmp"] = n_attached
     doc["nFmpPrice"] = n_price
+    # 顶部数据栏元数据同步（此前 fetch 从不更新，顶栏一直显示 scrape 时的旧日期）：
+    # fmpAsOf = 行内 fmp.asof 最大值（抓取日），fmpActive = 是否等于今日
+    fmp_asof_aj = ""
+    for _rr in rows:
+        _fa = (_rr.get("fmp") or {}).get("asof")
+        if _fa and (not fmp_asof_aj or _fa > fmp_asof_aj):
+            fmp_asof_aj = _fa
+    doc["fmpAsOf"] = fmp_asof_aj
+    doc["fmpActive"] = (fmp_asof_aj == run_date)
     if not args.no_write:
         try:
             with open(cache_path, "w", encoding="utf-8") as f:

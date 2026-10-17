@@ -29,6 +29,49 @@
     || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
   const jsonUrl = (f) => (JSON_NOCACHE ? f + '?_t=' + Date.now() : f);
 
+  /* 两个 Finnhub 免费 token：finnhub1 (taliyah) / finnhub2 (stoneweaver)。
+     免费档限制：WS 每 token 只允许 1 条连接；REST 每 token 60 次/分钟。
+     ⚠️ 放**主作用域**：WS 实时列（RT 嵌套 IIFE）与「基本面」REST（另一个嵌套 IIFE）
+     共用这一对，别在各自 IIFE 里再定义一份（重复定义会让某个 IIFE 悄悄用自己的）。 */
+  const FH_TOKENS = [
+    'db55oq1r01qv1n8sqv90db55oq1r01qv1n8sqv9g',   // finnhub1 (taliyah)：WS 市值 0–50
+    'db8u9uhr01qm8f434ihgdb8u9uhr01qm8f434ii0',   // finnhub2 (stoneweaver)：WS 市值 51–100
+  ];
+
+  /* ===================================================================
+     美股交易时段判定（主作用域：所有嵌套 IIFE 都可见）
+     · 因 app.js 内多个嵌套 IIFE 互不共享作用域，rtIsTradingDay /
+       rtIsMarketOpen 必须放在主作用域，否则 renderBrandClock /
+       rtCellHtml 等 UI 层函数调用会抛 ReferenceError。
+     · rtIsMarketOpen（盘中）与顶栏「休市」标签共用同一判据，别各写一份。
+     =================================================================== */
+  /* 2026 年 NYSE 假期（每年初需更新；过期年份不判假期 → 当天按盘中处理，
+     但假日无成交 → 实时格显示 --，影响仅限当天） */
+  const RT_MKT_HOLIDAYS_2026 = [
+    '2026-01-01', '2026-01-19', '2026-02-16', '2026-04-03', '2026-05-25',
+    '2026-06-19', '2026-07-03', '2026-09-07', '2026-11-26', '2026-12-25',
+  ];
+  function rtIsTradingDay() {
+    try {
+      const f = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+        weekday: 'short',
+      });
+      const p = {};
+      for (const x of f.formatToParts(new Date())) p[x.type] = x.value;
+      if (RT_MKT_HOLIDAYS_2026.indexOf(p.year + '-' + p.month + '-' + p.day) >= 0) return false;
+      return p.weekday !== 'Sat' && p.weekday !== 'Sun';
+    } catch (e) { return false; }
+  }
+  function rtIsMarketOpen() {
+    try {
+      if (!rtIsTradingDay()) return false;
+      const et = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+      const mins = et.getHours() * 60 + et.getMinutes();
+      return mins >= 9 * 60 + 30 && mins < 16 * 60;
+    } catch (e) { return false; }
+  }
+
   /* ===================================================================
  1. 数据层（占位）
  =================================================================== */
@@ -3469,7 +3512,10 @@ const TICKER_TTL = 15000;
       const ss = String(et.getSeconds()).padStart(2, '0');
       timeEl.textContent = '美东 ' + MM + '/' + dd + ' ' + hh + ':' + mm + ':' + ss;
       if (tagEl) {
-        tagEl.textContent = usSession() || '盘中';   // 盘中 = usSession() 返回 null
+        /* ⚠️ usSession() 返回值语义不能动（自选行 ext 昨收快照依赖 null=盘中）；
+           「休市」只在渲染层兜底：非交易日（周末/假日）显示休市，其余走原时段口径。 */
+        if (!rtIsTradingDay()) tagEl.textContent = '休市';
+        else tagEl.textContent = usSession() || '盘中';
         tagEl.hidden = false;
       }
     } catch (e) { /* 时区不可用时保持占位 */ }
@@ -4255,14 +4301,13 @@ const TICKER_TTL = 15000;
        标签页也不会叠加超限。
      · key 明文暴露 = 用户确认的方案 B（个人看板；泄露可轮换）。
      · 价格只进 rtInfo.latest + [data-rt] 单元格，不碰任何其它模块状态。
+     · **盘中才建连（2026-10-17 定稿「时段只有盘中 websocket」）**：周末/盘后/夜盘/
+       假日 rtStart 直接 return，不建连、不读 localStorage 陈价（避免回填成假实时）；
+       状态翻转由 rtCheckMode 侦测 —— 开盘回调 rtStart、收盘回调 rtStop（关 ws +
+       实时列回落快照价）。缓存键 RT_CACHE_KEY 非盘中期主动 removeItem 清脏数据。
      =================================================================== */
-  /* 两个 Finnhub 免费 token：finnhub1 订市值 0–50、finnhub2 订 51–100，
-     每组各 1 条 WS 连接并行 —— 符合免费档「每 token 仅 1 连接」限制（2026-10-16 定稿）。
-     rtConnect 按组序号 gs.idx 取对应 token。 */
-  const FH_TOKENS = [
-    'db55oq1r01qv1n8sqv90db55oq1r01qv1n8sqv9g',   // finnhub1 (taliyah)：市值 0–50
-    'db8u9uhr01qm8f434ihgdb8u9uhr01qm8f434ii0',   // finnhub2 (stoneweaver)：市值 51–100
-  ];
+  /* FH_TOKENS 已提到**主作用域**（见文件开头的「美股交易时段判定」上方）：
+     WS 实时列按 gs.idx 取，基本面 REST 按轮换取，同一对 token 共用。 */
   const FH_TOP_N = 100;        // 只订市值前 100
   const FH_PER_CONN = 50;      // 免费档每连接符号上限 → 100 只 = 2 条连接
   const RT_TICK_MS = 60000;    // 建连节拍 = 整分钟边界（想更保守可改 120000 = 2 分钟）
@@ -4271,12 +4316,6 @@ const TICKER_TTL = 15000;
   const RT_LS_KEY = 'rtLastConn'; // localStorage：跨标签建连时刻协调键
   const RT_CACHE_KEY = 'rtLatest'; // localStorage：实时价缓存（PWA 冷启/切后台回填，避免 WS 重连前空白）
   const RT_MODE_CHECK_MS = 30000; // 盘中/收盘状态翻转检查间隔
-  /* 2026 年 NYSE 假期（每年初需更新；过期年份不判假期 → 当天按盘中处理，
-     但假日无成交 → 实时格显示 --，影响仅限当天） */
-  const RT_MKT_HOLIDAYS_2026 = [
-    '2026-01-01', '2026-01-19', '2026-02-16', '2026-04-03', '2026-05-25',
-    '2026-06-19', '2026-07-03', '2026-09-07', '2026-11-26', '2026-12-25',
-  ];
   const rtInfo = { started: false, groups: [], latest: {}, base: {}, open: 0, syms: [], topSet: null, timer: 0, modeTimer: 0, cacheBound: false };
   let rtOpenState = null;   // 当前盘中判定（rtCheckMode 检测翻转用；null = 未初始化）
   let rtHeatDirty = false;  // 有待更新实时 pct 的热力图格子（rtUpdateHeatCats 消费）
@@ -4308,25 +4347,6 @@ const TICKER_TTL = 15000;
   function rtFillBase() {
     if (!ALL_ROWS) return;
     for (const r of ALL_ROWS) if (r && r.c && r.p != null) rtInfo.base[r.c] = r.p;
-  }
-
-  /* 美股盘中判定（美东时区；Intl 自动处理 EDT/EST 夏令时）：
-     周一~周五 9:30-16:00 ET 且不在 2026 假期表 → true。
-     用途（用户 2026-10-14 定稿）：板块热力图**盘中用 Finnhub 实时涨跌幅**，
-     其他时段（盘后/夜盘/周末/假日）用 1 年回报。 */
-  function rtIsMarketOpen() {
-    try {
-      const f = new Intl.DateTimeFormat('en-CA', {
-        timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
-        weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false,
-      });
-      const p = {};
-      for (const x of f.formatToParts(new Date())) p[x.type] = x.value;
-      if (RT_MKT_HOLIDAYS_2026.indexOf(p.year + '-' + p.month + '-' + p.day) >= 0) return false;
-      if (p.weekday === 'Sat' || p.weekday === 'Sun') return false;
-      const mins = (+p.hour % 24) * 60 + (+p.minute);
-      return mins >= 9 * 60 + 30 && mins < 16 * 60;
-    } catch (e) { return false; }
   }
 
   /* 单只实时涨跌幅（%）：rtInfo.latest（Finnhub 实时价） vs rtInfo.base（json 现价=昨收）。
@@ -4368,9 +4388,25 @@ const TICKER_TTL = 15000;
     if (rtInfo.started || !ALL_ROWS) return;
     const syms = Array.from(rtTopSet());
     if (!syms.length) return;
-    rtInfo.started = true;
     rtInfo.syms = syms;
     rtFillBase();
+    /* ⚠️ WS 只在盘中建连（用户 2026-10-17 定稿「时段只有盘中 websocket」）：
+       周末/盘后/夜盘/假日无成交 → WS 零 tick，且 Finnhub 订阅**不推快照** →
+       列里的值会冻在最后一次成交（可能是几天前）；localStorage 缓存更会把陈价
+       回填成「假实时」（实测：周末 NVDA 格显示周四收盘价 217.51，比 json 现价
+       214.13 旧一天）。非盘中直接不建连：实时列保持快照价（= all_stocks.json
+       现价），角标显示「已收盘/休市」；开盘由 rtCheckMode（30s 一跳）侦测后
+       回调本函数放行。 */
+    if (!rtIsMarketOpen()) {
+      /* 不读 localStorage 陈价（避免回填成假实时），顺手清掉历史脏缓存 */
+      try { localStorage.removeItem(RT_CACHE_KEY); } catch (e) {}
+      /* 计时器照常起：modeTimer 负责侦测开盘、timer 负责角标文字翻转 */
+      if (!rtInfo.timer) rtInfo.timer = setInterval(rtUpdateStatus, 1000);
+      if (!rtInfo.modeTimer) rtInfo.modeTimer = setInterval(rtCheckMode, RT_MODE_CHECK_MS);
+      rtUpdateStatus();
+      return;
+    }
+    rtInfo.started = true;
     /* PWA 冷启/切后台回来：先读 localStorage 上次实时价回填，WS 重连前不空白（仅首次 started 走） */
     try {
       const cached = JSON.parse(localStorage.getItem(RT_CACHE_KEY) || '{}');
@@ -4385,9 +4421,10 @@ const TICKER_TTL = 15000;
     /* 每组一个持久状态（tick/nextAt 跨重连保留）；两组在「整分钟边界 + 错峰」建连
      （同 tick 双握手实测也能成，但错峰 + localStorage 协调对 Finnhub 的
      「5 次连接/时间窗」更友好）。 */
+    rtInfo.groups = [];   /* 重开时清掉上一轮（收盘 rtStop 已关 ws 并清空，这里再兜底） */
     let gi = 0;
     for (let i = 0; i < syms.length; i += FH_PER_CONN) {
-      const gs = { syms: syms.slice(i, i + FH_PER_CONN), idx: gi++, tick: RT_TICK_MS, born: 0, alive: false, nextAt: 0 };
+      const gs = { syms: syms.slice(i, i + FH_PER_CONN), idx: gi++, tick: RT_TICK_MS, born: 0, alive: false, nextAt: 0, ws: null, dead: false };
       rtInfo.groups.push(gs);
       rtSchedule(gs);
     }
@@ -4404,15 +4441,23 @@ const TICKER_TTL = 15000;
     const o = rtIsMarketOpen();
     if (o === rtOpenState) return;
     rtOpenState = o;
+    if (o) {
+      /* 刚开盘：ws 此前未建连（非盘中期 started=false）→ 放行建连 */
+      if (!rtInfo.started) rtStart();
+    } else {
+      /* 刚收盘：关掉 ws、实时列回落快照价（避免残留陈价冻在格子里） */
+      if (rtInfo.started) rtStop();
+    }
     if (document.querySelector('#screenBody .ust-heat__fit')) renderSectors();
   }
 
   function rtConnect(gs) {
-    if (!rtInfo.started) return;
+    if (!rtInfo.started || gs.dead) return;
     let ws;
     try {
       ws = new WebSocket('wss://ws.finnhub.io?token=' + encodeURIComponent(FH_TOKENS[gs.idx % FH_TOKENS.length]));
     } catch (e) { return; }
+    gs.ws = ws;
     ws.onopen = () => {
       gs.alive = true;
       gs.born = Date.now();
@@ -4528,6 +4573,45 @@ const TICKER_TTL = 15000;
     for (const s in rtInfo.latest) rtPaint(s);
   }
 
+  /* 非盘中兜底：把实时列所有 [data-rt] 格刷回快照价（= all_stocks.json 现价），
+     pct 复位 '--'、去 up/down 着色、title 改非盘中提示。
+     ⚠️ 热力图不在这里处理 —— 收盘翻转时 rtCheckMode 会按年回报口径重绘 renderSectors。 */
+  function rtRepaintFallback() {
+    if (!rtInfo.topSet) return;
+    for (const s of rtInfo.topSet) {
+      const el = document.querySelector('#screenBody [data-rt="' + s + '"]');
+      if (!el) continue;
+      const b = rtInfo.base[s];
+      const txt = b != null ? fmt(b, 2) : '--';
+      const px = el.querySelector('.us-top__rt-px');
+      const pc = el.querySelector('.us-top__rt-pct');
+      if (px) px.textContent = txt;
+      if (pc) pc.textContent = '--';
+      el._rtPx = txt; el._rtPct = '--';
+      el.classList.remove('up', 'down', 'flat');
+      el.title = s + ' · 非盘中，未连接 Finnhub（显示快照价）';
+    }
+  }
+
+  /* 收盘/休市：关掉所有 ws、清实时价、列回落快照价。
+     ⚠️ 不清 modeTimer/timer —— 靠它们继续侦测开盘翻转回调 rtStart。 */
+  function rtStop() {
+    if (!rtInfo.started) return;
+    rtInfo.started = false;
+    for (const gs of rtInfo.groups) {
+      gs.alive = false;
+      gs.dead = true;
+      gs.tick = RT_TICK_MS;
+      gs.nextAt = 0;
+      if (gs.ws) { try { gs.ws.close(); } catch (e) {} gs.ws = null; }
+    }
+    rtInfo.groups = [];
+    rtInfo.open = 0;
+    rtInfo.latest = {};
+    rtRepaintFallback();
+    rtUpdateStatus();
+  }
+
   /* 状态角标（screen-bar 内）：已收到价格只数 / 订阅总数 · 连接数 ·
      未连满时附「下次 Ns」建连倒计时（节拍对齐，整分钟边界）。 */
   function rtUpdateStatus() {
@@ -4535,7 +4619,13 @@ const TICKER_TTL = 15000;
        板块 tab 初次渲染后也调用本函数 → 角标照常刷新。 */
     const el = document.getElementById('rtStat');
     if (el) {
-      if (!rtInfo.started) { el.textContent = ''; }
+      if (!rtInfo.started) {
+        /* 非盘中：一律休市/已收盘文案（Fix C，2026-10-17）。非交易日=休市，交易日非盘中=已收盘。 */
+        el.textContent = rtIsTradingDay() ? 'Finnhub实时 · 已收盘' : 'Finnhub实时 · 休市';
+        el.classList.add('is-off');
+        if (rtHeatDirty) rtUpdateHeatCats();
+        return;
+      }
       else {
         const got = Object.keys(rtInfo.latest).length;
         const need = Math.ceil(rtInfo.syms.length / FH_PER_CONN);
@@ -5143,7 +5233,10 @@ const TICKER_TTL = 15000;
     const on = !!(rtSyms && rtSyms.has(code));
     const b = on ? rtInfo.base[code] : null;
     const txt = b != null ? fmt(b, 2) : '--';
-    const tip = b != null ? ' title="' + cpEsc(code) + ' · 快照价 ' + txt + '（Finnhub 实时连接后刷新）"' : '';
+    const tipExtra = rtIsMarketOpen()
+      ? '（Finnhub 实时连接后刷新）'
+      : (rtIsTradingDay() ? '（已收盘，显示快照价）' : '（休市，显示快照价）');
+    const tip = b != null ? ' title="' + cpEsc(code) + ' · 快照价 ' + txt + tipExtra + '"' : '';
     return '<span class="us-top__rt num' + (on ? '' : ' rt-off') + '"'
       + (on ? ' data-rt="' + cpEsc(code) + '"' + tip : '') + '>'
       + '<span class="us-top__rt-px">' + txt + '</span>'
@@ -10278,4 +10371,443 @@ fundAmount += f.amount;
     } catch (e) { console.warn('[侧栏TWR] 首次补刷失败，等 15s 定时器', e && e.message); }
   }
   initAccountData();
+
+  /* ===================================================================
+     基本面（Finnhub REST / 仿富途「基本面」页签，2026-10-17 新增）
+     -----------------------------------------------------------------
+     · 页签 UI 在 index.html 的 .quote-head__right（图表 / 基本面），
+       CSS 在 INLINE_CSS 最末（.q-tabs / .fund-panel / .fh-*）。
+       切基本面 → 给 .chart-area 加 .show-fund（藏 chart-stage/toolbar/indicators）；
+       切回图表 → 派发 resize，让主作用域的 drawChart 按真实尺寸重绘
+       （画布被 display:none 过之后 width=0，不重绘就是白板）。
+     · **额度**（用户 2026-10-17 问「这个一分钟要耗费多少额度」）：
+       免费档 60 次/分钟/token，本项目 2 个 token（FH_TOKENS，主作用域）→ 120 次/分钟。
+       **打开一只新标的固定 8 次 REST**：
+         /quote · /stock/profile2 · /stock/metric · /stock/recommendation ·
+         /stock/earnings · /stock/peers ·
+         /stock/insider-transactions · /news
+       控制手段：
+       ① 懒加载——只有切到基本面页签且标的变化才发请求（不预取、不轮询）；
+       ② 端点级 TTL 落 localStorage（画像/同行 24h，指标/评级/盈利/内部人 6h，
+          报价/新闻 10min）→ 同一只票重复查看 **0 次**；
+       ③ 每次请求轮流挑 token，单 token 60s 内最多 50 次，另一个也在限内就换它，
+          两个都满/冷却 → 本次放弃并提示（绝不为基本面把额度打穿，连累 WS 被 429）；
+       ④ /stock/market-status **不调**，市场状态用 rtIsMarketOpen/rtIsTradingDay
+          本地判定（省 1 次额度，也更即时）。
+       ⇒ 正常使用（一天看几只票）每分钟个位数请求，远低于 60。
+     · 数据只渲染到 DOM，不写 APP_DATA、不碰行情链路（OKX/Alpaca/腾讯照旧）。
+     =================================================================== */
+  (function initFundamentals() {
+    const panel = document.getElementById('fundPanel');
+    const tabsEl = document.getElementById('qTabs');
+    const area = document.querySelector('.chart-area');
+    const codeEl = document.getElementById('qCode');
+    if (!panel || !tabsEl || !area) return;
+
+    const FH_API = 'https://api.finnhub.io/api/v1';
+    const CK = 'fhFund_v1:';
+    /* 端点级缓存秒数：行情类短、画像/同行长。免费额度按分钟算，缓存是唯一能
+     把「重复查看」降到 0 次的手段。 */
+    const TTL = {
+      '/quote': 600,
+      '/stock/profile2': 86400,
+      '/stock/peers': 86400,
+      '/stock/metric': 21600,
+      '/stock/recommendation': 21600,
+      '/stock/earnings': 21600,
+      '/stock/insider-transactions': 21600,
+      '/news': 600,
+    };
+
+    /* ---- 令牌轮换 + 每分钟额度闸门（每 token 60 次/分钟，这里卡在 50 留余量） ---- */
+    const tokUse = FH_TOKENS.map(() => []);
+    const tokCool = FH_TOKENS.map(() => 0);
+    let tokRR = 0;
+    function pickToken() {
+      const now = Date.now();
+      for (let k = 0; k < FH_TOKENS.length; k++) {
+        const i = (tokRR + k) % FH_TOKENS.length;
+        if (tokCool[i] > now) continue;
+        const arr = tokUse[i];
+        while (arr.length && now - arr[0] > 60000) arr.shift();
+        if (arr.length < 50) { tokRR = (i + 1) % FH_TOKENS.length; return i; }
+      }
+      return -1;
+    }
+
+    /* ---- 缓存 ---- */
+    const ckOf = (path, sym) => CK + path + ':' + sym;
+    function cacheGet(path, sym) {
+      try {
+        const raw = localStorage.getItem(ckOf(path, sym));
+        if (!raw) return undefined;
+        const o = JSON.parse(raw);
+        if (!o || typeof o.t !== 'number') return undefined;
+        if (Date.now() - o.t > (TTL[path] || 600) * 1000) return undefined;
+        return o.v;                       // 可能是 null（接口合法返回空），也算命中
+      } catch (e) { return undefined; }
+    }
+    function cacheSet(path, sym, v) {
+      try { localStorage.setItem(ckOf(path, sym), JSON.stringify({ t: Date.now(), v: v })); } catch (e) { /* 配额满忽略 */ }
+    }
+    function cacheDrop(path, sym) {
+      try { localStorage.removeItem(ckOf(path, sym)); } catch (e) { /* 忽略 */ }
+    }
+    /* 清掉 7 天以上的旧条目（localStorage 有 5MB 上限，别让画像把别的挤掉） */
+    (function pruneCache() {
+      try {
+        const dead = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (!k || k.indexOf(CK) !== 0) continue;
+          let t = 0;
+          try { t = (JSON.parse(localStorage.getItem(k)) || {}).t || 0; } catch (e) { t = 0; }
+          if (!t || Date.now() - t > 7 * 86400000) dead.push(k);
+        }
+        dead.forEach((k) => localStorage.removeItem(k));
+      } catch (e) { /* 隐私模式忽略 */ }
+    })();
+
+    let callsThisLoad = 0;
+    let cacheHits = 0;
+
+    async function fhGet(path, params) {
+      const sym = (params && params.symbol) || '';
+      const hit = cacheGet(path, sym);
+      if (hit !== undefined) { cacheHits++; return { ok: true, data: hit, cached: true }; }
+      const slot = pickToken();
+      if (slot < 0) return { ok: false, data: null, err: 'quota' };
+      const q = Object.assign({}, params, { token: FH_TOKENS[slot] });
+      const url = FH_API + path + '?' + Object.keys(q)
+        .map((k) => k + '=' + encodeURIComponent(q[k])).join('&');
+      tokUse[slot].push(Date.now());
+      callsThisLoad++;
+      let ctrl = null, tid = 0;
+      try { ctrl = new AbortController(); tid = setTimeout(() => ctrl.abort(), 12000); } catch (e) { ctrl = null; }
+      let res;
+      try {
+        res = await fetch(url, ctrl ? { signal: ctrl.signal, cache: 'no-store' } : { cache: 'no-store' });
+      } catch (e) {
+        if (tid) clearTimeout(tid);
+        return { ok: false, data: null, err: 'network' };
+      }
+      if (tid) clearTimeout(tid);
+      if (res.status === 429) { tokCool[slot] = Date.now() + 60000; return { ok: false, data: null, err: '429' }; }
+      if (!res.ok) return { ok: false, data: null, err: 'HTTP ' + res.status };
+      let data;
+      try { data = await res.json(); } catch (e) { return { ok: false, data: null, err: 'bad json' }; }
+      cacheSet(path, sym, data);          // 只缓存成功响应：失败下一轮还能重试
+      return { ok: true, data: data };
+    }
+
+    /* ---- 格式化小工具（只在本模块用；fmt/cls/cpEsc 走主作用域） ---- */
+    const n2 = (v, d) => (v == null || v === '' || !isFinite(v)) ? '--' : Number(v).toFixed(d == null ? 2 : d);
+    const signed = (v, d) => (v == null || v === '' || !isFinite(v)) ? '--' : (v > 0 ? '+' : '') + Number(v).toFixed(d == null ? 2 : d);
+    function fmtCap(m) {                    // 输入单位：百万美元（finnhub profile2 口径）
+      if (m == null || !isFinite(m) || m <= 0) return '--';
+      const v = m * 1e6;
+      if (v >= 1e12) return (v / 1e12).toFixed(2) + ' 万亿美元';
+      if (v >= 1e8) return (v / 1e8).toFixed(1) + ' 亿美元';
+      return (v / 1e4).toFixed(0) + ' 万美元';
+    }
+    function ago(ms) {
+      const d = Date.now() - ms;
+      if (!isFinite(d) || d < 0) return '';
+      const m = Math.floor(d / 60000);
+      if (m < 1) return '刚刚';
+      if (m < 60) return m + ' 分钟前';
+      const h = Math.floor(m / 60);
+      if (h < 24) return h + ' 小时前';
+      return Math.floor(h / 24) + ' 天前';
+    }
+    function kvGrid(rows) {
+      return '<div class="fh-kv">' + rows.map((r) => {
+        const v = r[1];
+        const c = r[2] ? ' class="' + r[2] + '"' : '';
+        return '<div><span>' + r[0] + '</span><b' + c + '>' + (v == null || v === '' ? '--' : v) + '</b></div>';
+      }).join('') + '</div>';
+    }
+
+    /* =================== 各卡片渲染（入参 = 接口原始 JSON） =================== */
+    function rQuote(d) {
+      if (!d || !d.c) return '<div class="fh-load">无报价数据</div>';
+      let when = '--';
+      if (d.t) {
+        try {
+          when = new Date(d.t * 1000).toLocaleString('zh-CN', {
+            timeZone: 'America/New_York', hour12: false,
+            month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+          });
+        } catch (e) { when = '--'; }
+      }
+      return kvGrid([
+        ['现价', n2(d.c, 2)],
+        ['涨跌', signed(d.d), cls(d.d)],
+        ['涨跌幅', signed(d.dp) + '%', cls(d.dp)],
+        ['今开', n2(d.o)],
+        ['最高', n2(d.h)],
+        ['最低', n2(d.l)],
+        ['前收', n2(d.pc)],
+        ['快照时间', when + ' ET'],
+      ]);
+    }
+
+    function rProfile(d) {
+      if (!d || !d.name) return '<div class="fh-load">公司画像无数据</div>';
+      const so = d.shareOutstanding;                      // 百万股
+      const web = d.weburl
+        ? '<a href="' + cpEsc(d.weburl) + '" target="_blank" rel="noopener">'
+          + cpEsc(String(d.weburl).replace(/^https?:\/\//, '').replace(/\/.*$/, '')) + '</a>'
+        : '--';
+      return '<div class="fh-prof">'
+        + (d.logo ? '<img class="fh-logo" src="' + cpEsc(d.logo) + '" alt="" loading="lazy" onerror="this.style.display=\'none\'">' : '')
+        + '<div><div class="fh-prof__nm">' + cpEsc(d.name)
+        + (d.ticker ? '<i>' + cpEsc(d.ticker) + '</i>' : '') + '</div>'
+        + '<div class="fh-prof__sub">'
+        + [d.exchange, d.finnhubIndustry, d.country].filter(Boolean).map((x) => cpEsc(String(x))).join(' · ')
+        + '</div></div></div>'
+        + kvGrid([
+          ['总市值', fmtCap(d.marketCapitalization)],
+          ['流通股本', so == null ? '--' : n2(so / 100) + ' 亿股'],
+          ['员工', d.employeeTotal ? Number(d.employeeTotal).toLocaleString('en-US') + ' 人' : '--'],
+          ['上市日期', d.ipo || '--'],
+          ['货币', d.currency || '--'],
+          ['官网', web],
+        ]);
+    }
+
+    function rMetric(d) {
+      const m = d && d.metric;
+      if (!m) return '<div class="fh-load">财务指标无数据</div>';
+      const pick = function () {
+        for (let i = 0; i < arguments.length; i++) {
+          const v = m[arguments[i]];
+          if (v != null && v !== '') return v;
+        }
+        return null;
+      };
+      const p = (v) => (v == null || !isFinite(v)) ? '--' : Number(v).toFixed(2) + '%';
+      /* 倍数类单独一个格式化：数据缺失时只输出 '--'，不要拖着「倍」变成「-- 倍」 */
+      const mult = (v) => (v == null || v === '' || !isFinite(v)) ? '--' : Number(v).toFixed(2) + ' 倍';
+      return kvGrid([
+        ['PE (TTM)', mult(pick('peTTM', 'peBasicExclExtraTTM', 'peInclExtraTTM'))],
+        ['PB', mult(pick('pbAnnual', 'pbQuarterly'))],
+        ['PS', mult(pick('psTTM', 'psAnnual'))],
+        ['EV/EBITDA', mult(pick('evEbitdaTTM', 'evEbitdaAnnual'))],
+        ['ROE (TTM)', p(pick('roeTTM', 'roeRfy', 'roeAnnual'))],
+        ['净利率 (TTM)', p(pick('netProfitMarginTTM', 'netProfitMarginAnnual'))],
+        ['毛利率 (TTM)', p(pick('grossMarginTTM', 'grossMarginAnnual'))],
+        ['营收同比', p(pick('revenueGrowthTTMYoy', 'revenueGrowthQuarterlyYoy'))],
+        ['EPS 同比', p(pick('epsGrowthTTMYoy', 'epsGrowthQuarterlyYoy'))],
+        ['Beta', n2(pick('beta'))],
+        ['52 周高', n2(pick('52WeekHigh'))],
+        ['52 周低', n2(pick('52WeekLow'))],
+        ['股息率', p(pick('dividendYieldIndicatedAnnual', 'currentDividendYieldTTM'))],
+        ['EPS (TTM)', n2(pick('epsTTM', 'epsBasicExclExtraItemsTTM'))],
+      ]);
+    }
+
+    function rRec(arr) {
+      if (!Array.isArray(arr) || !arr.length) return '<div class="fh-load">暂无分析师评级</div>';
+      const rows = arr.slice()
+        .sort((a, b) => String(b.period || '').localeCompare(String(a.period || '')))
+        .slice(0, 4);
+      let h = '<div class="fh-rec">';
+      for (const r of rows) {
+        const sb = r.strongBuy || 0, b = r.buy || 0, hd = r.hold || 0, s = r.sell || 0, ss = r.strongSell || 0;
+        const tot = sb + b + hd + s + ss;
+        const w = (n) => tot > 0 ? (n / tot * 100).toFixed(2) + '%' : '0%';
+        h += '<div class="fh-rec__row"><span class="fh-rec__p" title="' + cpEsc(r.period || '') + '">'
+          + cpEsc(String(r.period || '--').slice(0, 7)) + '</span>'
+          + '<span class="fh-bar">'
+          + (sb ? '<i class="b-sb" style="width:' + w(sb) + '"></i>' : '')
+          + (b ? '<i class="b-b" style="width:' + w(b) + '"></i>' : '')
+          + (hd ? '<i class="b-h" style="width:' + w(hd) + '"></i>' : '')
+          + (s ? '<i class="b-s" style="width:' + w(s) + '"></i>' : '')
+          + (ss ? '<i class="b-ss" style="width:' + w(ss) + '"></i>' : '')
+          + '</span>'
+          + '<span class="fh-rec__n">买 ' + (sb + b) + ' / 持 ' + hd + ' / 卖 ' + (s + ss) + '</span></div>';
+      }
+      h += '</div><div class="fh-legend">'
+        + '<span><i style="background:var(--up)"></i>买入</span>'
+        + '<span><i style="background:#c9ced8"></i>持有</span>'
+        + '<span><i style="background:var(--down)"></i>卖出</span>'
+        + '<span>浅色 = 强烈买入 / 强烈卖出</span></div>';
+      return h;
+    }
+
+    function rEarnings(arr) {
+      if (!Array.isArray(arr) || !arr.length) return '<div class="fh-load">暂无历史盈利</div>';
+      const rows = arr.slice()
+        .sort((a, b) => String(b.period || '').localeCompare(String(a.period || '')))
+        .slice(0, 4);
+      let h = '<table class="fh-tb"><thead><tr><th>季度</th><th>EPS 实际</th><th>预期</th><th>意外</th></tr></thead><tbody>';
+      for (const r of rows) {
+        const sp = r.surprisePercent;
+        h += '<tr><td>' + cpEsc(r.period || '') + '</td><td>' + n2(r.actual) + '</td><td>' + n2(r.estimate)
+          + '</td><td class="' + (sp == null ? '' : cls(sp)) + '">'
+          + (sp == null ? '--' : signed(sp) + '%') + '</td></tr>';
+      }
+      return h + '</tbody></table>';
+    }
+
+    function rPeers(arr) {
+      if (!Array.isArray(arr) || !arr.length) return '<div class="fh-load">暂无同行数据</div>';
+      return '<div class="fh-chips">'
+        + arr.slice(0, 14).map((s) => '<span class="fh-chip">' + cpEsc(String(s)) + '</span>').join('')
+        + '</div>';
+    }
+
+    function rInsider(d) {
+      const arr = (d && d.data) || [];
+      if (!arr.length) return '<div class="fh-load">暂无内部人交易（近 3 个月无 Form 4 备案）</div>';
+      const rows = arr.slice()
+        .sort((a, b) => String(b.transactionDate || '').localeCompare(String(a.transactionDate || '')))
+        .slice(0, 7);
+      let h = '<table class="fh-tb fh-tb--ins"><thead><tr><th>日期</th><th>高管</th><th>类型</th><th>股数</th></tr></thead><tbody>';
+      for (const r of rows) {
+        const c = String(r.transactionCode || '').toUpperCase();
+        const tag = c === 'P' ? 'fh-tag--buy' : c === 'S' ? 'fh-tag--sell' : 'fh-tag--other';
+        h += '<tr><td>' + cpEsc(String(r.transactionDate || '').slice(0, 10)) + '</td>'
+          + '<td>' + cpEsc(String(r.name || '').replace(/\s+/g, ' ').slice(0, 24)) + '</td>'
+          + '<td><span class="fh-tag ' + tag + '">' + cpEsc(c || '?') + '</span></td>'
+          + '<td>' + (r.change == null ? '--' : Math.abs(Number(r.change)).toLocaleString('en-US')) + '</td></tr>';
+      }
+      return h + '</tbody></table>'
+        + '<div class="fh-foot">P = 公开市场买入、S = 卖出、A = 授予、M = 期权行权、F = 代扣税（股数取绝对值）。</div>';
+    }
+
+    function rNews(arr) {
+      if (!Array.isArray(arr) || !arr.length) return '<div class="fh-load">暂无公司新闻</div>';
+      const items = arr.slice().sort((a, b) => (b.datetime || 0) - (a.datetime || 0)).slice(0, 6);
+      return '<div class="fh-news">' + items.map((n) => {
+        const t = n.datetime ? ago(n.datetime * 1000) : '';
+        return '<a href="' + cpEsc(n.url || '#') + '" target="_blank" rel="noopener">'
+          + '<div class="fh-news__t">' + cpEsc(n.headline || '') + '</div>'
+          + '<div class="fh-news__m">' + cpEsc(n.source || '')
+          + (t ? ' · ' + t : '') + '</div></a>';
+      }).join('') + '</div>';
+    }
+
+    /* ---- 任务表：顺序即渲染顺序（重要的先刷出来） ---- */
+    const JOBS = [
+      { id: 'quote', path: '/quote', title: '实时报价', src: 'Finnhub /quote', render: rQuote, params: (s) => ({ symbol: s }) },
+      { id: 'profile', path: '/stock/profile2', title: '公司概况', src: '/stock/profile2', render: rProfile, params: (s) => ({ symbol: s }) },
+      { id: 'metric', path: '/stock/metric', title: '估值 & 财务指标', src: '/stock/metric', render: rMetric, params: (s) => ({ symbol: s, metric: 'all' }) },
+      { id: 'rec', path: '/stock/recommendation', title: '分析师评级趋势', src: '/stock/recommendation', render: rRec, params: (s) => ({ symbol: s }) },
+      { id: 'earnings', path: '/stock/earnings', title: '历史盈利', src: '/stock/earnings', render: rEarnings, params: (s) => ({ symbol: s }) },
+      { id: 'peers', path: '/stock/peers', title: '同行', src: '/stock/peers', render: rPeers, params: (s) => ({ symbol: s }) },
+      { id: 'insider', path: '/stock/insider-transactions', title: '内部人交易', src: '/stock/insider-transactions', render: rInsider, params: (s) => ({ symbol: s }) },
+      { id: 'news', path: '/news', title: '公司新闻', src: '/news?category=company', render: rNews, params: (s) => ({ category: 'company', symbol: s }) },
+    ];
+
+    const ERR_TXT = {
+      quota: '本次已触发限流保护（每分钟额度快满），稍后点「刷新」重试',
+      429: '被 Finnhub 限流（429），约 1 分钟后自动恢复',
+      'HTTP 403': '该端点不在免费档（403，无权限）',
+      'HTTP 401': 'token 无效（401）',
+      network: '网络不可达（被拦截或离线）',
+      'bad json': '返回内容不是 JSON',
+    };
+    const errHtml = (e) => '<div class="fh-err">' + (ERR_TXT[e] || ('读取失败：' + e)) + '</div>';
+
+    /* ---- 标的判定 & 骨架 ---- */
+    function symNow() { return ((codeEl && codeEl.textContent) || '').trim(); }
+    function fundable(s) {
+      const q = APP_DATA.quote || {};
+      if (!s || s === '--') return false;
+      if (q.market && q.market !== 'US') return false;     // 沪深/外汇/债/NYMEX/USDT 没有 Finnhub 基本面
+      return /^[A-Z][A-Z.\-]{0,6}$/.test(s);
+    }
+    function skeleton(sym) {
+      let h = '<div class="fh-hd"><span class="fh-hd__t">' + cpEsc(sym) + ' 基本面</span>'
+        + '<span class="fh-hd__sub" data-fh-prog>0/' + JOBS.length + '</span>'
+        + '<span class="fh-hd__sp"><button class="fh-btn" data-fh-reload>刷新</button></span></div>';
+      for (const j of JOBS) {
+        h += '<section class="fh-card" data-fh="' + j.id + '">'
+          + '<div class="fh-card__t">' + j.title + '<i>' + j.src + '</i></div>'
+          + '<div class="fh-load">加载中…</div></section>';
+      }
+      return h + '<div class="fh-foot" data-fh-foot></div>';
+    }
+    function paintFoot() {
+      const f = panel.querySelector('[data-fh-foot]');
+      if (!f) return;
+      let t = '--';
+      try { t = new Date().toLocaleTimeString('zh-CN', { hour12: false }); } catch (e) { t = '--'; }
+      f.innerHTML = '数据源 Finnhub 免费档 · 本次发起 ' + callsThisLoad + ' 次请求（缓存命中 ' + cacheHits + '）· ' + t + ' 更新<br>'
+        + '额度：每 token 60 次/分钟（本项目 2 个 token）；打开一只新标的固定消耗 ' + JOBS.length + ' 次，'
+        + '同一只票 10 分钟内重复查看 0 次。市场状态为本地判定，不占额度。';
+    }
+
+    /* ---- 主流程 ---- */
+    let gen = 0;
+    async function load(sym, force) {
+      const my = ++gen;
+      callsThisLoad = 0; cacheHits = 0;
+      panel.innerHTML = skeleton(sym);
+      const prog = panel.querySelector('[data-fh-prog]');
+      for (const j of JOBS) {
+        if (my !== gen) return;                          // 期间切了标的 / 又点了刷新
+        if (force) cacheDrop(j.path, sym);
+        let r;
+        try { r = await fhGet(j.path, j.params(sym)); }
+        catch (e) { r = { ok: false, data: null, err: 'exception' }; }
+        if (my !== gen) return;
+        const host = panel.querySelector('[data-fh="' + j.id + '"]');
+        if (host) {
+          host.innerHTML = '<div class="fh-card__t">' + j.title + '<i>' + j.src + '</i></div>'
+            + (r.ok ? j.render(r.data) : errHtml(r.err));
+        }
+        if (prog) prog.textContent = (JOBS.indexOf(j) + 1) + '/' + JOBS.length;
+      }
+      if (prog) prog.textContent = '已更新';
+      paintFoot();
+    }
+
+    const state = { tab: 'chart', sym: '' };
+    function ensure(force) {
+      const s = symNow();
+      if (!fundable(s)) {
+        state.sym = '';
+        panel.innerHTML = '<div class="fh-empty">该标的没有 Finnhub 基本面数据<br>（仅美股 / 美股 ETF 提供：沪深、外汇、国债、期货、加密币不含）</div>';
+        return;
+      }
+      if (!force && state.sym === s) return;             // 同一只票、非强制 → 不重复请求
+      state.sym = s;
+      load(s, !!force);
+    }
+    function setTab(t) {
+      state.tab = t;
+      const isFund = t === 'fund';
+      area.classList.toggle('show-fund', isFund);
+      panel.hidden = !isFund;
+      const btns = tabsEl.querySelectorAll('.q-tab');
+      for (let i = 0; i < btns.length; i++) btns[i].classList.toggle('is-active', btns[i].dataset.qTab === t);
+      if (isFund) ensure();
+      else window.dispatchEvent(new Event('resize'));     // 画布重新可见 → 按真实尺寸重绘
+    }
+
+    tabsEl.addEventListener('click', (e) => {
+      const b = e.target.closest ? e.target.closest('.q-tab') : null;
+      if (!b || !b.dataset.qTab) return;
+      setTab(b.dataset.qTab);
+    });
+    panel.addEventListener('click', (e) => {
+      if (e.target.closest && e.target.closest('[data-fh-reload]')) ensure(true);
+    });
+
+    /* 标的变化（自选点击 → renderQuote 改 #qCode）时作废面板：
+     只在基本面页签下立即重载，图表态保持原样，下次打开时按 state.sym 差异重拉。 */
+    let lastCode = symNow();
+    if (codeEl && typeof MutationObserver !== 'undefined') {
+      new MutationObserver(() => {
+        const s = symNow();
+        if (s === lastCode) return;
+        lastCode = s;
+        state.sym = '';
+        if (state.tab === 'fund') ensure();
+      }).observe(codeEl, { childList: true, characterData: true, subtree: true });
+    }
+  })();
 })();

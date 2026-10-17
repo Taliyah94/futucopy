@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<link rel="preload" href="app.js?v=20261015e" as="script" />
+<link rel="preload" href="app.js?v=20261015h" as="script" />
 <!-- ⚠️ 用户要求「没读到数据就显示 --，别产生误导」：
  报价头/账户汇总的初始值一律 --（原来是硬编码的 137.790 / +5.190 / +3.91% 等假数字，
  页面刚加载、JS 还没跑到时就会显示出来）。真实值由 renderQuote / 账户页数据填充。 -->
@@ -2444,6 +2444,169 @@ html, body {
   .acc-asset .acc-metric .m-note-r .m-int { font-size: 11px; }
   .acc-asset .acc-metric h4 { font-size: 13px; }
 }
+
+/* =====================================================================
+ 详情页签「图表 / 基本面」+ 基本面面板（2026-10-17 新增，仿富途）
+ ---------------------------------------------------------------------
+ ⚠️ 本段**刻意放在 INLINE_CSS 最末**：上面的 680/720px 媒体块都排在很多基础
+ 规则之前，同特异度只能靠「后写者胜」；放在最后，本段的移动端覆盖不必堆前缀
+ 就能生效（项目里「特异度陷阱」已经中招过四次，别再往前挪）。
+ 切换逻辑在 app.js 的 initFundamentals()：切基本面时给 .chart-area 加
+ .show-fund（藏图表三件套），切回图表时派发 resize 让 drawChart 按真实尺寸
+ 重绘 —— 画布被 display:none 过之后尺寸是 0，不重绘就是一张空白。
+ ===================================================================== */
+.quote-head__right {
+  display: flex; align-items: center; gap: 8px;
+  margin-left: auto; min-width: 0;
+}
+.q-tabs {
+  display: flex; align-items: center; gap: 2px;
+  padding-left: 10px;
+  border-left: 1px solid var(--border);
+}
+.q-tab {
+  height: 26px; padding: 0 11px;
+  border: 0; border-radius: 5px;
+  background: transparent; color: var(--text-2);
+  font-size: 13px; line-height: 1; cursor: pointer; white-space: nowrap;
+}
+.q-tab:hover { background: var(--panel-2); color: var(--text); }
+.q-tab.is-active { background: var(--panel-3); color: var(--text); font-weight: 700; }
+
+/* 基本面态：藏图表（stage/toolbar/indicators 都是 flex 子项，必须 display:none!important，
+ [hidden] 对 display:flex 元素无效） */
+.chart-area.show-fund .chart-stage,
+.chart-area.show-fund .chart-toolbar,
+.chart-area.show-fund .chart-indicators { display: none !important; }
+
+.fund-panel {
+  flex: 1 1 auto; min-height: 0;
+  overflow-y: auto; overscroll-behavior: contain;
+  padding: 12px 14px 28px;
+  background: var(--bg);
+  font-size: 12px; color: var(--text);
+}
+.fund-panel[hidden] { display: none !important; }
+
+/* ---- 面板头（标的名 / 加载进度 / 刷新） ---- */
+.fh-hd { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; }
+.fh-hd__t { font-size: 13px; font-weight: 700; }
+.fh-hd__sub { font-size: 11px; color: var(--text-3); }
+.fh-hd__sp { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.fh-btn {
+  height: 24px; padding: 0 9px;
+  border: 1px solid var(--border-2); border-radius: 5px;
+  background: var(--panel); color: var(--text-2);
+  font-size: 11px; cursor: pointer;
+}
+.fh-btn:hover { background: var(--panel-2); color: var(--text); }
+
+/* ---- 卡片 ---- */
+.fh-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 10px 12px;
+  margin-bottom: 9px;
+}
+.fh-card__t {
+  display: flex; align-items: baseline; gap: 6px;
+  font-size: 12px; font-weight: 700; margin-bottom: 8px;
+}
+.fh-card__t i { font-style: normal; font-size: 10px; font-weight: 400; color: var(--text-3); margin-left: auto; }
+.fh-kv { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 7px 16px; }
+.fh-kv > div { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.fh-kv span { color: var(--text-2); white-space: nowrap; }
+.fh-kv b {
+  margin-left: auto; font-weight: 600; font-variant-numeric: tabular-nums;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.fh-kv a { color: var(--accent-2); text-decoration: none; overflow: hidden; text-overflow: ellipsis; }
+.fh-kv a:hover { text-decoration: underline; }
+.fh-load { color: var(--text-3); font-size: 11px; padding: 2px 0; }
+.fh-err { color: var(--down); font-size: 11px; padding: 2px 0; }
+
+/* ---- 公司画像 ---- */
+.fh-prof { display: flex; gap: 10px; align-items: center; margin-bottom: 9px; }
+.fh-logo {
+  width: 34px; height: 34px; flex: 0 0 auto;
+  border-radius: 7px; background: var(--panel-2);
+  object-fit: contain;
+}
+.fh-prof__nm { font-size: 14px; font-weight: 700; }
+.fh-prof__nm i { font-style: normal; font-size: 11px; font-weight: 600; color: var(--text-3); margin-left: 5px; }
+.fh-prof__sub { font-size: 11px; color: var(--text-2); margin-top: 2px; }
+
+/* ---- 分析师评级：堆叠条 ---- */
+.fh-rec { display: flex; flex-direction: column; gap: 7px; }
+.fh-rec__row { display: grid; grid-template-columns: 62px 1fr auto; align-items: center; gap: 8px; }
+.fh-rec__p { color: var(--text-2); font-variant-numeric: tabular-nums; }
+.fh-rec__n { font-size: 10px; color: var(--text-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.fh-bar { display: flex; height: 9px; border-radius: 4px; overflow: hidden; background: var(--panel-3); }
+.fh-bar > i { display: block; height: 100%; }
+.fh-bar .b-sb { background: var(--up); opacity: .5; }
+.fh-bar .b-b  { background: var(--up); }
+.fh-bar .b-h  { background: #c9ced8; }
+.fh-bar .b-s  { background: var(--down); }
+.fh-bar .b-ss { background: var(--down); opacity: .5; }
+.fh-legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 7px; font-size: 10px; color: var(--text-3); }
+.fh-legend i { display: inline-block; width: 7px; height: 7px; border-radius: 2px; margin-right: 4px; vertical-align: 0; }
+
+/* ---- 表格（历史盈利 / 内部人交易） ---- */
+.fh-tb { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.fh-tb th {
+  font-size: 10px; font-weight: 400; color: var(--text-3);
+  text-align: right; padding: 0 0 4px; white-space: nowrap;
+}
+.fh-tb th:first-child, .fh-tb td:first-child { text-align: left; }
+.fh-tb td {
+  padding: 4px 0; border-top: 1px solid var(--border);
+  text-align: right; white-space: nowrap;
+}
+.fh-tb td:first-child { color: var(--text-2); max-width: 132px; overflow: hidden; text-overflow: ellipsis; }
+/* 内部人交易表（.fh-tb--ins）第 2 列是高管姓名：左对齐才有阅读顺序；
+ 其余列右对齐便于比数字。盈利表不加这个类（第 2 列是 EPS 实际，要右对齐）。 */
+.fh-tb--ins th:nth-child(2), .fh-tb--ins td:nth-child(2) { text-align: left; }
+.fh-tb--ins td:nth-child(2) { max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
+.fh-tag {
+  display: inline-block; min-width: 15px; padding: 0 4px;
+  border-radius: 3px; font-size: 10px; font-weight: 700; text-align: center;
+}
+.fh-tag--buy { background: rgba(0,168,107,.12); color: var(--up); }
+.fh-tag--sell { background: rgba(234,59,59,.12); color: var(--down); }
+.fh-tag--other { background: var(--panel-3); color: var(--text-2); }
+
+/* ---- 同行 chips ---- */
+.fh-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.fh-chip {
+  padding: 3px 9px; border: 1px solid var(--border-2); border-radius: 999px;
+  background: var(--panel-2); color: var(--text-2);
+  font-size: 11px; font-weight: 600;
+}
+
+/* ---- 新闻列表 ---- */
+.fh-news { display: flex; flex-direction: column; }
+.fh-news a { display: block; padding: 7px 6px; border-radius: 6px; text-decoration: none; color: var(--text); }
+.fh-news a + a { border-top: 1px solid var(--border); }
+.fh-news a:hover { background: var(--panel-2); }
+.fh-news__t { font-size: 12px; line-height: 1.45; }
+.fh-news__m { font-size: 10px; color: var(--text-3); margin-top: 2px; }
+
+.fh-foot { margin-top: 2px; font-size: 10px; color: var(--text-3); line-height: 1.65; }
+.fh-empty { color: var(--text-3); font-size: 12px; padding: 18px 2px; text-align: center; }
+
+@media (max-width: 680px) {
+  /* 手机上报价头一行放不下「标的名 + 价格 + 页签」，页签整组换到第二行 */
+  .quote-head { flex-wrap: wrap; row-gap: 8px; }
+  .quote-head__right { width: 100%; margin-left: 0; padding-top: 2px; }
+  .q-tabs { flex: 1 1 auto; border-left: 0; padding-left: 0; }
+  .q-tab { padding: 0 9px; font-size: 12px; }
+  .quote-head__right .panel-expand--r { margin-left: auto; }
+  .fund-panel { padding: 10px 10px 22px; }
+  .fh-kv { grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 6px 12px; }
+  .fh-card { padding: 9px 10px; border-radius: 8px; }
+  .fh-rec__row { grid-template-columns: 54px 1fr auto; gap: 6px; }
+}
 </style>
 <!-- INLINE_CSS:END -->
 </head>
@@ -2533,9 +2696,17 @@ html, body {
           <span class="q-pct" id="qPct">--</span>
 </div>
 
-        <!-- 资讯面板收起后的展开按钮：原来浮在图表右侧中部，现放到报价头这一行的最右 -->
+        <!-- 右侧：详情页签（仿富途「图表 / 基本面」）+ 资讯面板展开按钮
+ 页签切换逻辑见 app.js 的 initFundamentals()；切到基本面时给 .chart-area
+ 加 .show-fund 类藏掉图表三件套（画布隐藏后尺寸会变，切回时要 resize 重绘）。 -->
 
-        <button class="panel-expand panel-expand--r" id="cpExpand" title="展开资讯" hidden><svg viewBox="0 0 24 24" class="ic"><path d="M14 6l-6 6 6 6"/></svg></button>
+        <div class="quote-head__right">
+          <nav class="q-tabs" id="qTabs" aria-label="详情页签">
+            <button class="q-tab is-active" data-q-tab="chart" title="图表">图表</button>
+            <button class="q-tab" data-q-tab="fund" title="基本面（Finnhub）">基本面</button>
+          </nav>
+          <button class="panel-expand panel-expand--r" id="cpExpand" title="展开资讯" hidden><svg viewBox="0 0 24 24" class="ic"><path d="M14 6l-6 6 6 6"/></svg></button>
+        </div>
 </div>
       <div class="chart-toolbar">
         <div class="ct-left">
@@ -2602,6 +2773,12 @@ html, body {
         <button class="ci-tab">VWAP</button>
         <button class="ci-tab">IV</button>
 </div>
+
+      <!-- 基本面面板（.chart-area.show-fund 时显示）：内容全部由 app.js 的
+ initFundamentals() 按需拉取 Finnhub 并渲染，HTML 里只留一个空壳。
+ 空壳必须带 hidden + CSS（不能只靠 hidden —— 见项目里 display:flex 盖掉 UA 规则的历史坑）。 -->
+
+      <div class="fund-panel" id="fundPanel" hidden></div>
     </main>
 
     <!-- 评论面板 -->
@@ -3394,6 +3571,6 @@ html, body {
  就没有任何入口，逻辑（app.js）/样式（index.html 内联块）/本段 HTML 一并移除。别再恢复。 -->
 </div>
 </div>
-<script defer src="app.js?v=20261015e"></script>
+<script defer src="app.js?v=20261015h"></script>
 </body>
 </html>

@@ -236,7 +236,13 @@ def main(argv=None):
                     help="只抓不写文件（调试用）")
     args = ap.parse_args(argv)
 
-    apikey = args.apikey or os.environ.get("FMP_API_KEY") or ""
+    _ak_in = args.apikey or os.environ.get("FMP_API_KEY") or ""
+    # ⚠️ GitHub Secret / 手工粘贴极易带尾随空格或换行 → FMP 会整串当成 key，
+    #    返回 "Invalid API KEY"（实测带尾空格必挂）。这里强制 strip 兜底。
+    apikey = _ak_in.strip()
+    if apikey != _ak_in:
+        sys.stderr.write("  [提示] API Key 首尾带了空白字符，已自动去掉。建议把 GitHub Secret "
+                         "FMP_API_KEY 也改成干净值（从 txt/后台复制时极易带尾随空格或换行）\n")
 
     here = os.path.dirname(os.path.abspath(args.all_stocks)) or "."
     cache_path = args.cache or os.path.join(here, fh.FMP_CACHE_FILE)
@@ -312,13 +318,21 @@ def main(argv=None):
     done, failed, fetched = 0, [], set()
     stat = {"filled": 0, "changed": 0, "same": 0}
     changed_lines = []
+    fatal = None
     t0 = time.time()
     for i, sym in enumerate(todo, 1):
         try:
             res = fetch_fmp_profile(sym, apikey, retries=args.retries)
         except FmpFatal as e:
+            fatal = str(e)
             sys.stderr.write("  [熔断] %s\n" % e)
-            sys.stderr.write("  （额度用尽或 key 无效，剩余 %d 个明日再试）\n" % (len(todo) - i + 1))
+            _low = fatal.lower()
+            if any(k in _low for k in ("invalid api", "unauthorized", "forbidden")):
+                sys.stderr.write("  （key 无效/未授权，重试无意义：检查 GitHub Secret FMP_API_KEY "
+                                 "是否复制干净——无空格/换行、无 fmp= 前缀；或 key 是否已在 "
+                                 "FMP 后台重新生成。剩余 %d 个未抓）\n" % (len(todo) - i + 1))
+            else:
+                sys.stderr.write("  （额度用尽，剩余 %d 个明日再试）\n" % (len(todo) - i + 1))
             break
         if res is None:
             failed.append(sym)
@@ -431,6 +445,8 @@ def main(argv=None):
     if price_lines:
         sys.stderr.write("HOM→FMP 价格名单（仅列前 %d 条）：\n%s\n"
                          % (len(price_lines), "\n".join(price_lines)))
+    if fatal:
+        sys.stderr.write("⚠️ 本轮熔断：%s\n" % fatal[:200])
     if failed:
         sys.stderr.write("失败名单：%s\n" % ", ".join(failed[:50]))
     # 有待抓且一个都没成功 → 非零退出，方便 CI/手动运行看出问题

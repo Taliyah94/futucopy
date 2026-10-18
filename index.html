@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<link rel="preload" href="app.js?v=20261016e" as="script" />
+<link rel="preload" href="app.js?v=20261016g" as="script" />
 <!-- ⚠️ 用户要求「没读到数据就显示 --，别产生误导」：
  报价头/账户汇总的初始值一律 --（原来是硬编码的 137.790 / +5.190 / +3.91% 等假数字，
  页面刚加载、JS 还没跑到时就会显示出来）。真实值由 renderQuote / 账户页数据填充。 -->
@@ -744,7 +744,7 @@ html, body {
 .cp__link:hover { color: var(--text); text-decoration: underline; }
 
 /* 「评论」tab：富途社区帖子（源 ai-news-search.futunn.com/stock_feed，
- 无 CORS → 经 corsfix / cors.lol 双源转发，见 app.js FUTU_FEED_SRCS）。
+ 无 CORS → 经 corsfix 单源转发（主源 + 自重试一次），见 app.js FUTU_FEED_SRCS）。
  富途原站没有「作者名」字段（该端点只回 id/title/desc/publish_time/url），
  所以不做头像/昵称行，正文 + 相对时间 + 原文链接即可。 */
 .cp__futu__text { margin: 0 0 6px; font-size: 13px; line-height: 1.55; color: var(--text); word-break: break-word; }
@@ -3613,6 +3613,6 @@ html, body {
  就没有任何入口，逻辑（app.js）/样式（index.html 内联块）/本段 HTML 一并移除。别再恢复。 -->
 </div>
 </div>
-<script defer src="app.js?v=20261016e"></script>
+<script defer src="app.js?v=20261016g"></script>
 </body>
 </html>

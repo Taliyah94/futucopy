@@ -2880,7 +2880,7 @@ const TICKER_TTL = 15000;
   /* ===================================================================
  资讯面板两个 tab：
  - 「推荐」**金十数据快讯**（默认，script 标签直连，不走 fetch）
-- 「评论」富途社区帖（ai-news-search.futunn.com，经 corsfix / cors.lol 双源，
+- 「评论」富途社区帖（ai-news-search.futunn.com，经 corsfix 单源转发，
   2026-10-18 新增；无 CORS 不能直连，详见下方 FUTU_FEED_SRCS 注释块）
  -------------------------------------------------------------------
  为什么「推荐」用金十而不是富途自己的快讯源（用户 调研结论）：
@@ -3076,17 +3076,19 @@ const TICKER_TTL = 15000;
      -------------------------------------------------------------------
      免 key / 免 cookie / 免登录（2026-10-18 实测），但该端点**无 CORS**
      （对任何 Origin 都不回 Access-Control-Allow-Origin）→ 浏览器不能直连，
-     必须经代理。源列表按序尝试，全失败才报错：
+     必须经代理。源列表按序尝试、主源自重试一次，全失败才报错：
       ① https://proxy.corsfix.com/?url=<编码后上游>  公共 CORS 代理（BunnyCDN
-         法国节点）。2026-10-18 实测：4 只票 4/4、0.9~1.6s/次、curl 8/8、
-         浏览器串行 4/4；**错误响应也带 CORS 头**（ACAO:*），429/400 浏览器
-         读得到状态码（比 cors.lol 把 429 藏成 ERR_FAILED 可读性好）；
-         富途错误码原样透传。⚠️ 两个坑：URL 必须**整体编码**塞进 ?url=
-         （直接拼 ?url=https://…?a=1&b=2 会丢 & 后的参数）；强制要求 Origin
+         法国节点）。2026-10-18 实测：4 只票 4/4、2.2~2.9s/次、连发 16 次全 200；
+         响应头 X-Ratelimit-Limit: 60（60 次/分钟/IP）——本应用稳态 ≤4 次/分钟，
+         用量不到限额 7%；**错误响应也带 CORS 头**（ACAO:*），429/400 浏览器
+         读得到状态码；富途错误码原样透传。⚠️ 两个坑：URL 必须**整体编码**塞进
+         ?url=（直接拼 ?url=https://…?a=1&b=2 会丢 & 后的参数）；强制要求 Origin
          头（浏览器自动带；curl 测试要手动 -H "Origin: …"）。
-      ② https://api.cors.lol/?url=<编码后上游>  老牌公共代理（源站德国 Hetzner
-         195.201.220.186）。匿名档 4 请求/5min 共享池限额——现仅作 corsfix
-         挂掉时的兜底（corsfix 优先 → cors.lol 配额消耗趋近 0）。
+     ⚠️ cors.lol 已删（2026-10-18，曾作备用源）：匿名档 4 请求/5min **共享池**，
+         当天实测 4/4 全 429「Rate limit exceeded」——且 429 **不带 CORS 头**，
+         浏览器只能看到 opaque ERR_FAILED，既读不到状态码也永远成功不了。
+         留着它只有两个后果：corsfix 一超时就白等它几秒；失败文案被它的 opaque
+         429 冒充成「限流/不可达」。故删除，改为主源自重试（瞬时超时/抖动更多）。
      ⚠️ 历史源（均已删）：
         · 127.0.0.1:8443 本地反代（cf_proxy.js）—— 需手动起、平时没收益，
           反而给每只失败票多加一次等待；.workbuddy/tools/cloudflare/ 已删空。
@@ -3095,33 +3097,31 @@ const TICKER_TTL = 15000;
      字段坑：title/desc 带 HTML 标签与数字实体 → 渲染前必须剥；
              正文股票标签 $名字 (CODE.US)$ → cpEsc 后包 span.cp__futu__sym（蓝色）；
              publish_time 是 Unix **秒**（转毫秒再算相对时间）。
-     节流（cors.lol 匿名档限流、官方不给数字；2026-10-18 实测三阶段探测：
-           配额 **4 个请求** / 恢复窗口 **≈5 分钟**，共享池——别人刷爆会连坐。
-           脚本与完整日志见 .workbuddy/tmp/rl_probe.sh|.log）。三层防护：
+     节流（ corsfix 60 次/分钟/IP，响应头可查；本应用远低于限额，仍保留三层防护
+            防异常连打 ）：
            ① 白名单（FUTU_ALLOWED 4 只）+ 缓存（TTL 默认 600s，内存+localStorage
               双写）：缓存新鲜 → 0 请求直接渲染；切票/轮询/聚焦都先过这层，
-              总请求量 ≈4×(3600/600)≈24 次/小时（配额 48/小时的一半）。
+              总请求量 ≈4×(3600/600)≈24 次/小时。
            ② 全局最小请求间隔 FUTU_GAP_SEC（180s）：缓存过期后真正发请求前还要过
-              这关——切 tab / 换票 / 聚焦未到点都不发（防连切烧额度）；
-              换票被拦但有旧缓存 → 显示旧数据 + 尾条说明，无缓存 → 'throttled' 倒计时。
+              这关——切 tab / 换票 / 聚焦未到点都不发（防连切）；
+              换票被拦但有旧缓存 → 显示旧数据，无缓存 → 'throttled' 倒计时。
            ③ 退避：连续全败间隔加倍（封顶 600s），成功即复位。
            轮询 setInterval 固定 gap 秒，仅本 tab 激活 + 页面前台时跑；缓存新鲜时
            自然空转（不发请求）。换标的由 #qCode 的 MutationObserver 即时触发。
      =================================================================== */
   const FUTU_FEED_SRCS = [
-    /* timeout：单源超时（ms）。corsfix 实测 0.9~1.6s → 6s 够宽；cors.lol 慢些
-       （实测单次 5.9s）→ 9s。两源都不设冷却：corsfix 无可见限流，cors.lol 的
-       429 是 5 分钟临时窗口，交给 round 级 gapSec 退避更合适。 */
-    { base: 'https://proxy.corsfix.com/?url=', wrap: true, timeout: 6000, coolMs: 0 },
-    { base: 'https://api.cors.lol/?url=', wrap: true, timeout: 9000, coolMs: 0 },
+    /* timeout：单次尝试超时（ms）。corsfix 实测 2.2~2.9s/次 → 10s 留足慢速余量
+       （原来 6s 偏紧，偶发慢一次就整票失败、还白搭一次备用源等待）。
+       不设 coolMs：corsfix 限额 60/min 而用量 ≤4/min，没有冷却的必要。 */
+    { base: 'https://proxy.corsfix.com/?url=', wrap: true, timeout: 10000, coolMs: 0 },
   ];
-  /* 源健康度看板：base → 冷却截止时间戳。跨轮次保留（同一个页面会话内有效）。 */
+  /* 源健康度看板：base → 冷却截止时间戳。跨轮次保留（同一个页面会话内有效）。
+     当前唯一源 coolMs=0 → 实际不走冷却；保留机制是为了加源时不用改结构。 */
   const FUTU_SRC_COOL = {};
   /* 接入白名单：只对这 4 只票拉社区评论。
-     起因：cors.lol 匿名档实测配额仅 4 请求/5min（共享池，rl_probe.log），
-     全市场放开必被 429 晾 5 分钟；收窄到 4 只 + 缓存后总请求量
-     ≈4×(3600/TTL)≈24 次/小时（配额 48/小时），留一倍余量。
-     加票 = 往这个数组加字符串（ticker 与 #qCode 显示的 code 一致，不带后缀）。 */
+     4 只是内容口径（用户要的「总评论」= 这 4 只合并），不是限额倒推——
+     corsfix 60/min 的配额下再翻几倍也够用。加票 = 往数组加字符串
+     （ticker 与 #qCode 显示的 code 一致，不带后缀）。 */
   const FUTU_ALLOWED = ['ORCL', 'QQQ', 'NVDA', 'SNDK'];
   const FUTU_STATE = { items: [], loaded: false, loading: false, at: '', atTs: 0, sym: '', err: '', lastReqTs: 0, gapSec: 0 };
   /* 两个口径（2026-10-18 用户定稿）：
@@ -3140,13 +3140,10 @@ const TICKER_TTL = 15000;
   const FUTU_MSTATE = { err: '', loading: false };
   /* 合并流条数上限：4 只 × 30 条 ≈ 120，全铺开太长也无意义，取时间最近的 80 条 */
   const FUTU_MULTI_MAX = 80;
-  /* cors.lol 匿名限流 → 固定刷新间隔（秒）。所有触发共用这一个全局间隔，
-     等于把额度按时间摊平。?futugap=<秒> 可覆盖（回归测试传 0 = 关闸门）。
-     终值 180s 的定值依据（2026-10-18 rl_probe 实测）：
-       配额 4 请求 / 窗口 ≈5min → 公式 300/4×1.5 ≈ 112s；
-       但 cors.lol 是**共享池**（他人消耗不可见）且 429 无响应头可依，
-       180s 在窗口内仅 ≈1.7 次请求（配额的 43%），留一倍安全边际；
-       评论 3 分钟延迟无感；afraid.org+Vercel 自建上线后此值仅约束备用源。 */
+  /* 固定刷新间隔（秒）。所有触发共用这一个全局间隔，等于把请求按时间摊平。
+     ?futugap=<秒> 可覆盖（回归测试传 0 = 关闸门）。
+     终值 180s：corsfix 限额 60/min 而稳态仅 ≈24 次/小时，限额完全不紧；
+     取 180s 是评论新鲜度（3 分钟延迟无感）与「切 tab/换票不连打」的折中。 */
   const FUTU_GAP_SEC = (function () {
     const m = /[?&]futugap=(\d+)/.exec(location.search);
     return m ? Math.max(0, parseInt(m[1], 10)) : 180;
@@ -3288,12 +3285,12 @@ const TICKER_TTL = 15000;
     return (d.getMonth() + 1) + '/' + d.getDate();
   }
 
-  /* 单票抓取（两个口径共用）：按 FUTU_FEED_SRCS 顺序试源，返回
-     { ok, err, items }。**不碰任何状态**——状态由调用方按口径写，
-     免得合并口径把「某一只票」的结果误写进个股口径的 FUTU_STATE。 */
+  /* 单票抓取（两个口径共用）：按 FUTU_FEED_SRCS 顺序试源，**主源（第一个源）
+     额外重试一次**，返回 { ok, err, items }。**不碰任何状态**——状态由调用方
+     按口径写，免得合并口径把「某一只票」的结果误写进个股口径的 FUTU_STATE。 */
   async function futuFetchOne(sym) {
     let lastErr = '';
-    let primaryErr = '';   // 主源（cors.lol）的失败原因：用来判断「是不是额度问题」
+    let primaryErr = '';   // 主源（corsfix）的失败原因：决定最终报错文案的口径
     for (let si = 0; si < FUTU_FEED_SRCS.length; si++) {
       const src = FUTU_FEED_SRCS[si];
       /* 冷却中的源直接跳过：省掉毫无意义的超时等待（见 FUTU_SRC_COOL 注释） */
@@ -3301,29 +3298,36 @@ const TICKER_TTL = 15000;
         if (!lastErr) lastErr = 'cooling';
         continue;
       }
-      let ctrl = null, tid = 0;
-      const to = src.timeout || 9000;
-      try { ctrl = new AbortController(); tid = setTimeout(() => ctrl.abort(), to); } catch (e) { ctrl = null; }
-      try {
-        const upstream = 'https://ai-news-search.futunn.com/stock_feed?keyword=' + encodeURIComponent(sym) + '&size=30';
-        const url = src.wrap ? src.base + encodeURIComponent(upstream)
-                            : src.base + '/stock_feed?keyword=' + encodeURIComponent(sym) + '&size=30';
-        const res = await fetch(url,
-          ctrl ? { signal: ctrl.signal, cache: 'no-store' } : { cache: 'no-store' });
-        if (tid) clearTimeout(tid);
-        if (!res.ok) {
-          lastErr = 'HTTP ' + res.status;
-          /* 4xx/5xx：源是活的但拒绝服务 → 同样进冷却（429 除外，交给 round 级退避） */
-          if (src.coolMs && res.status !== 429) FUTU_SRC_COOL[src.base] = Date.now() + src.coolMs;
-          if (si === 0) primaryErr = lastErr;
-          continue;
-        }
-        const j = await res.json();
-        if (!j || j.code !== 0 || !Array.isArray(j.data)) {
-          lastErr = 'bad json';
-          if (si === 0) primaryErr = lastErr;
-          continue;
-        }
+      /* 主源试 2 次、其余源 1 次。单源架构下没有「换源」可走，瞬时超时/抖动
+         （corsfix 实测偶发慢）重试一次比直接判死更值；两次间隔 800ms——
+         立刻重发大概率撞上同一个慢节点。429/403 是真限额信号，不重试。 */
+      const tries = (si === 0) ? 2 : 1;
+      for (let ti = 0; ti < tries; ti++) {
+        if (ti) await new Promise((r) => setTimeout(r, 800));
+        let ctrl = null, tid = 0;
+        const to = src.timeout || 10000;
+        try { ctrl = new AbortController(); tid = setTimeout(() => ctrl.abort(), to); } catch (e) { ctrl = null; }
+        try {
+          const upstream = 'https://ai-news-search.futunn.com/stock_feed?keyword=' + encodeURIComponent(sym) + '&size=30';
+          const url = src.wrap ? src.base + encodeURIComponent(upstream)
+                              : src.base + '/stock_feed?keyword=' + encodeURIComponent(sym) + '&size=30';
+          const res = await fetch(url,
+            ctrl ? { signal: ctrl.signal, cache: 'no-store' } : { cache: 'no-store' });
+          if (tid) clearTimeout(tid);
+          if (!res.ok) {
+            lastErr = 'HTTP ' + res.status;
+            /* 4xx/5xx：源是活的但拒绝服务 → 同样进冷却（429 除外，交给 round 级退避） */
+            if (src.coolMs && res.status !== 429) FUTU_SRC_COOL[src.base] = Date.now() + src.coolMs;
+            if (si === 0) primaryErr = lastErr;
+            if (res.status === 429 || res.status === 403) break;   // 真限额：不重试
+            continue;
+          }
+          const j = await res.json();
+          if (!j || j.code !== 0 || !Array.isArray(j.data)) {
+            lastErr = 'bad json';
+            if (si === 0) primaryErr = lastErr;
+            continue;
+          }
         const items = j.data.map((p) => {
           /* title/desc 去重拼接：富途部分帖子的 desc 就是 title 的全文
              （或以其开头），直接拼会把同一段话显示两遍（2026-10-18 用户截图反馈）。
@@ -3346,7 +3350,7 @@ const TICKER_TTL = 15000;
             url: String(p.url || ''),
           };
         }).filter((x) => x.text);
-        return { ok: true, err: '', items: items, quota: false };
+        return { ok: true, err: '', items: items };
       } catch (e) {
         if (tid) clearTimeout(tid);
         lastErr = (e && e.name === 'AbortError') ? 'timeout' : 'network';
@@ -3354,15 +3358,15 @@ const TICKER_TTL = 15000;
         /* 网络级失败 → 该源进冷却，后面的票别再为它等一遍超时 */
         if (src.coolMs) FUTU_SRC_COOL[src.base] = Date.now() + src.coolMs;
       }
+      }
     }
-    /* ⚠️ cors.lol 撞限流时**不带 CORS 头**，浏览器读不到 429，fetch 直接抛
-       TypeError（报 net::ERR_FAILED）→ 只能落到 'network' 分支。所以「主源网络级
-       失败」≈「额度被限」，据此给 round 层一个 quota 信号：立刻收手，别再拿剩下
-       几只票去挨个撞（原来是 continue → 每只票再多等 10s 的 Worker 超时）。
-       报错文案取**主源**的：备用源是「必然失败」的那两个，拿它们的 timeout
-       当结论会误导（真机看板会写成「ORCL timeout」，其实是 cors.lol 429）。 */
+    /* 失败文案取**主源**的（唯一源，重试后仍败）。corsfix 的 429 自带 CORS 头、
+       浏览器读得到状态码 → 原样报 'HTTP 429'；'network'（连接失败 / CORS 被拦 /
+       opaque 错误）没法细分，统一写「限流/不可达」。
+       round 层只凭 /429|403/ 决定停手：真限额才停，瞬时超时不连坐其余票
+       （删 cors.lol 后「主源 network ≈ 额度被共享池耗尽」的推断已不成立）。 */
     const err = primaryErr === 'network' ? '限流/不可达' : (primaryErr || lastErr || 'network');
-    return { ok: false, err: err, items: [], quota: !!primaryErr };
+    return { ok: false, err: err, items: [] };
   }
 
   /* 合并口径拉取（总评论）：只补「缺失 / 过期」的票，逐票串行、间隔
@@ -3406,8 +3410,9 @@ const TICKER_TTL = 15000;
         const r = await futuFetchOne(sym);
         if (!r.ok) {
           fails.push(sym + ' ' + r.err);
-          /* 限流/额度问题 → 立刻停，别把剩下几只也撞掉（每只都要多付一次超时） */
-          if (r.quota || /429|403/.test(r.err)) break;
+          /* 真限流（429/403）→ 立刻停，别把剩下几只也撞掉（每只都要多付一次超时）；
+             瞬时超时/网络抖动 → 继续下一只（重试已在单票内做过，不连坐） */
+          if (/429|403/.test(r.err)) break;
           continue;
         }
         const atTs = Date.now();
@@ -3444,7 +3449,7 @@ const TICKER_TTL = 15000;
     }
     /* ===== 缓存层 =====
        1) 缓存新鲜（<TTL）→ 直接渲染，0 请求。切票/轮询/聚焦都走这条，
-          不耗 cors.lol 配额（gap 闸门也不触发——根本没发请求）。
+          不发任何代理请求（gap 闸门也不触发——根本没发请求）。
        2) 缓存过期但存在 → 先渲染旧数据（好过空白/转圈），继续走下面对比分；
        3) 无缓存 → 走请求。 */
     const cached = futuCacheOf(sym);
@@ -3521,9 +3526,9 @@ const TICKER_TTL = 15000;
   }
 
   /* 合并口径（总评论）渲染：4 只票的缓存拼一条时间倒序流。
-     ⚠️ 与单票分支的取舍差异：合并流里「某只失败/缺缓存」**不清场**，
-     已有的照常显示——失败标在头部后缀，从未拉到过缓存的票才在尾部挂「待补」
-     （2026-10-18 用户定稿：失败提示只写头部，否则一只 429 会把其余三只也抹掉的观感）。 */
+     ⚠️ 与单票分支的取舍差异：合并流里「某只失败/缺缓存」**不清场**，已有的照常显示
+     （否则一只 429 会把其余三只也抹掉）；失败只标头部后缀，列表尾不挂任何提示条
+     （2026-10-18 用户定稿：失败条、「待补」条全删）。 */
   function renderFutuMulti() {
     const els = cpListEls();
     if (!els.length) return;
@@ -3542,14 +3547,9 @@ const TICKER_TTL = 15000;
       }
     } else {
       html = shown.map((x) => futuItemHtml(x.p, x.sym, true)).join('');
-      /* 尾部说明：哪几只票从未拉到过缓存（本次刷新成败只看头部后缀，
-         2026-10-18 用户定稿：失败提示只写在头部，列表尾不再重复）。
-         判「缺」用**有没有缓存条目**，不是「本次有没有出条目」——某只票 0 条帖子也是有效结果，
-         不能一直挂在「待补」里。 */
-      const noCache = FUTU_ALLOWED.filter((s) => !futuCacheOf(s));
-      if (noCache.length) {
-        html += '\n      <li class="cp__item cp__item--stale">' + cpEsc(noCache.join('/') + ' 待补（公共代理限流，按间隔逐个补）') + '</li>';
-      }
+      /* 尾部不再挂任何提示条（2026-10-18 用户定稿）：
+         刷新失败只标头部后缀；「待补」也删——冷启动缺票时列表就是短一截，
+         下一轮自动补上，挂在尾巴上反而像报错。 */
     }
     els.forEach((ul) => { ul.innerHTML = html; });
   }
@@ -6387,8 +6387,8 @@ const applyMode = (mode, skipDraw) => {
   fetchJin10();
   setInterval(() => { if (!document.hidden) fetchJin10(); }, 60000);
 
-  /* 「评论」tab（富途社区）轮询：固定 FUTU_GAP_SEC 秒（对齐 cors.lol 限流窗口，
-     见 FUTU_GAP_SEC 注释），只在**本 tab 激活 + 页面前台**时跑；未到点会被
+  /* 「评论」tab（富途社区）轮询：固定 FUTU_GAP_SEC 秒（见 FUTU_GAP_SEC 注释），
+     只在**本 tab 激活 + 页面前台**时跑；未到点会被
      fetchFutuFeed 里的全局闸门拦下，不发请求。换标的由 #qCode 的
      MutationObserver 即时触发（同样受全局闸门管）。 */
   setInterval(() => { if (!document.hidden && cpTab === 'futu') fetchFutuFeed(); }, Math.max(60, FUTU_GAP_SEC) * 1000);

@@ -2445,75 +2445,9 @@
       "price": 0.0,
       "realized": 80.63,
       "tradeId": "10246869882"
-    },
-    {
-      "date": "2026-09-17",
-      "symbol": "TQQQ",
-      "underlying": "TQQQ",
-      "cat": "STK",
-      "buySell": "SELL",
-      "quantity": -100.0,
-      "price": 69.91,
-      "realized": 119.06,
-      "tradeId": "10232785089"
-    },
-    {
-      "date": "2026-09-17",
-      "symbol": "TQQQ",
-      "underlying": "TQQQ",
-      "cat": "STK",
-      "buySell": "BUY",
-      "quantity": 100.0,
-      "price": 69.75,
-      "realized": 0.0,
-      "tradeId": "10232805508"
-    },
-    {
-      "date": "2026-09-17",
-      "symbol": "TQQQ",
-      "underlying": "TQQQ",
-      "cat": "STK",
-      "buySell": "SELL",
-      "quantity": -100.0,
-      "price": 69.91,
-      "realized": 15.1,
-      "tradeId": "10232876664"
-    },
-    {
-      "date": "2026-09-17",
-      "symbol": "TQQQ  260918P00069500",
-      "underlying": "TQQQ",
-      "cat": "OPT",
-      "buySell": "SELL",
-      "quantity": -1.0,
-      "price": 0.48,
-      "realized": 0.0,
-      "tradeId": "10234337870"
-    },
-    {
-      "date": "2026-09-17",
-      "symbol": "TQQQ  260918P00069500",
-      "underlying": "TQQQ",
-      "cat": "OPT",
-      "buySell": "SELL",
-      "quantity": -1.0,
-      "price": 0.48,
-      "realized": 0.0,
-      "tradeId": "10234338202"
-    },
-    {
-      "date": "2026-09-17",
-      "symbol": "TQQQ  260918P00069500",
-      "underlying": "TQQQ",
-      "cat": "OPT",
-      "buySell": "SELL",
-      "quantity": -1.0,
-      "price": 0.48,
-      "realized": 0.0,
-      "tradeId": "10234338607"
     }
   ],
-  "lastSync": "2026-10-17",
+  "lastSync": "2026-10-18",
   "seed": {
     "pa_funds": [
       {

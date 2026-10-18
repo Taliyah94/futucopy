@@ -1628,8 +1628,10 @@ const TICKER_TTL = 15000;
       + ' font-family="Helvetica,Arial,sans-serif">' + txt + '</text>';
   }
   const assetIconSvg = (key) => '<svg viewBox="0 0 14 16" aria-hidden="true">' + (ASSET_SESS[key] ? ASSET_SESS[key].icon : '') + '</svg>';
-  /* 默认时段 = 当前进行中的美东时段（与自选页分时同款规则：夜盘看夜盘、盘前看盘前） */
-  let assetSessSel = currentSessionKey();
+  /* 默认时段 = **24h**（用户 2026-10-18 定稿：「这个图默认打开显示24h」）。
+     原来的「当前进行中的美东时段」规则作废——凌晨打开只有 8 小时夜盘、
+     盘中打开只有半天，都不如滚动 24h 信息全。 */
+  let assetSessSel = 'h24';
   /* 基金成分股 1m 序列缓存：本轮某 US 成分股(OKX 永续)没取到时沿用上轮，
   避免静默退化成当日常数导致聚合曲线刷新抖动。 */
   let assetFundCandleCache = null;
@@ -2008,6 +2010,7 @@ const TICKER_TTL = 15000;
 
     return {
       base,
+      sess: key,                 // 时段 key（drawAssetChart 据此切刻度规则：h24=6h 整点，其他=4 均分）
       /* 曲线里「基金段」用的市值（= 末点那份 computeFundAt()）。
      ⚠️ 基金段是**逐点现值**（每个 ts 调一次 computeFundAt：该分钟成分股价格 × 当日净值），
      不是常数 —— 成分股分钟价不可变，所以每个点的基金段也是定值，刷新不变。
@@ -2020,7 +2023,7 @@ const TICKER_TTL = 15000;
       fundComplete: fundModels.length > 0,
       pts: out.map((d) => ({
         t: etHHMM(d.ts),
-        day: etMD(d.ts),        // 'MM/DD'：1D 窗口跨日界时要靠它画竖线（见 drawAssetChart）
+        day: etMD(d.ts),        // 'MM/DD'：刻度标签 0:00 前缀用（见 drawAssetChart labelOf）
         ts: d.ts,
         v: d.price,
         pct: (d.price / base - 1) * 100,
@@ -2082,6 +2085,60 @@ const TICKER_TTL = 15000;
     /* 基准线的纵坐标：落在范围内就按真实位置画；低于下界就**贴到绘图区底部**，
  高于上界同理贴顶。clamp 后它只是一条位置指示线，不参与刻度计算。 */
     const baseY = Math.min(Math.max(Y(base), padT), padT + plotH);
+
+    /* ===== 时段背景 + 分隔虚线（用户 2026-10-18 定稿：「把盘中/盘前/盘后分开吧，
+       画个虚线，盘中的背景变成纯白的，其他的带点灰就可以区分了」）=====
+       · 背景：整个绘图区先铺纯白 → 盘中段（ET 09:30-16:00）盖浅灰，
+         其余时段保持白底（2026-10-18 最终定稿：别的都是白色，盘中灰色）。
+         24h 窗口可能同时含「昨天盘中尾段 + 今天盘中」两段 → 逐段填。
+       · 虚线：窗内每个时段边界（ET 04:00/09:30/16:00/20:00）画竖虚线；
+         窗口起点恰好在边界上不画（与左边缘重合，无视觉意义）。
+       ⚠️ 必须画在网格/基准线/曲线**之前**（面积渐变是半透明的，后画会盖回去），
+       但必须放在 pts/padL/plotW/padT/plotH 的 `const` 声明**之后**。
+       ⚠️⚠️ 2026-10-18 事故（用户两次报「曲线全是空白」）：这段原本写在函数顶部
+       （`ctx.clearRect` 之后、变量声明之前），里面引用了 `pts`/`padL`/`plotW`/
+       `plotH` —— 全是本函数下方才 `const` 出来的 → TDZ ReferenceError →
+       drawAssetChart 在 clearRect 之后整段抛错 → 画布永久空白（头部数字正常，
+       因为 paintAssetHead 是另一个函数）。上次误判成 `X` 的 TDZ，只把 x 换成
+       本地 xAt，但 `pts` 等仍然未初始化，照样抛。
+       结论：**这个函数里任何新代码块都必须排在 `const pts`（下面那行）之后。** */
+    {
+      const axT0 = pts[0].ts, axT1 = pts[pts.length - 1].ts;
+      const xAt = (ts) => padL + ((ts - axT0) / ((axT1 - axT0) || 1)) * plotW;
+      const isRth = (ts) => { const m = etMinutes(ts); return m >= 570 && m < 960; };
+      /* 底色：整图先铺纯白；盘中段（ET 09:30-16:00）盖浅灰，其余时段保持白底
+         → 视觉上「只有盘中带灰、其他全白」（2026-10-18 用户最终定稿：「别的都是
+         白色，盘中灰色」）。灰底必须**不透明** #f2f3f7，否则画在透明画布上 alpha
+         太低等于没铺（上次踩过：rgba(43,50,69,0.055) 实测只剩 alpha≈18）。 */
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(padL, padT, plotW, plotH);
+      ctx.fillStyle = '#f2f3f7';
+      let segA = -1;
+      for (let i = 0; i <= pts.length; i++) {
+        const inSeg = i < pts.length && isRth(pts[i].ts);
+        if (inSeg && segA < 0) segA = i;
+        if (!inSeg && segA >= 0) {
+          const x0 = xAt(pts[segA].ts), x1 = xAt(pts[i - 1].ts);
+          ctx.fillRect(x0, padT, Math.max(x1 - x0, 1), plotH);
+          segA = -1;
+        }
+      }
+      ctx.save();
+      ctx.strokeStyle = 'rgba(120,128,150,0.55)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      for (let i = 1; i < pts.length; i++) {
+        const m = etMinutes(pts[i].ts);
+        if (m !== 240 && m !== 570 && m !== 960 && m !== 1200) continue;
+        const x = xAt(pts[i].ts);
+        ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + plotH); ctx.stroke();
+      }
+      ctx.restore();
+      /* 背景/虚线画完，恢复后续网格要用的基础态 */
+      ctx.setLineDash([]);
+      ctx.lineWidth = 1;
+      ctx.textBaseline = 'middle';
+    }
 
     const money = (v) => Math.round(v).toLocaleString('en-US');
     ctx.font = '10px "PingFang SC", "Microsoft YaHei", sans-serif';
@@ -2173,31 +2230,31 @@ const TICKER_TTL = 15000;
     drawTag(padL - (padL - 4), padL - 6, money(last.v));
     drawTag(padL + plotW + 2, padR - 4, (last.pct > 0 ? '+' : '') + last.pct.toFixed(2) + '%');
 
-    /* 时间轴（美东） */
+    /* 时间轴（美东）——用户 2026-10-18 定稿：
+       · 24h 视图刻度 = 窗内 **6h 整点**（ET 0/6/12/18 时）→ 通常正好 4 个
+         「0:00 / 6:00 / 12:00 / 0:00」，替代原来的索引均分（会打出 15:03 这种斜刻）；
+       · 其他时段固定 4 个索引均分（narrow 也是 4，不再挤 6 个）；
+       · **0:00 刻度直接带日期前缀**（「10/18 0:00」）——取代原来的日界竖线
+         + 顶部 MM/DD 标注（用户：「10/18的分界线也不需要画了，10/18直接写到
+         0：00数字前面」）。 */
     ctx.fillStyle = THEME.axisText;
     ctx.textAlign = 'center';
-    const ticks = narrow ? 4 : 6;
-    for (let i = 0; i < ticks; i++) {
-      const idx = Math.round((i / (ticks - 1)) * (pts.length - 1));
-      ctx.fillText(pts[idx].t, X(idx), H - padB / 2 - 2);
+    const t0 = pts[0].ts, t1 = pts[pts.length - 1].ts;
+    const xOfTs = (ts) => padL + ((ts - t0) / (t1 - t0)) * plotW;
+    const labelOf = (ts) => (etMinutes(ts) < 60 ? etMD(ts) + ' ' : '') + etHHMM(ts);
+    const tickTs = [];
+    if (data.sess === 'h24') {
+      /* 窗内第一个 ET 6h 整点，之后每 6h 一个（t0 恰在整点上时含 t0 本身）。
+         q = m0 上取整到 360 的倍数；回绕到 0（如 m0=1439）→ 顺延到明天。 */
+      const m0 = etMinutes(t0);
+      let q = Math.ceil(m0 / 360) * 360;
+      if (q >= 1440) q -= 1440;
+      let t = etTsOn(t0, m0 > q ? 1 : 0, q);
+      while (t <= t1 && tickTs.length < 8) { tickTs.push(t); t += 6 * 3600e3; }
+    } else {
+      for (let i = 0; i < 4; i++) tickTs.push(Math.round(t0 + (i / 3) * (t1 - t0)));
     }
-    /* ⚠️ 跨交易日时补一条日界竖线 + MM/DD 标注：
- 「1D」窗口 = 最近一个 ET 20:00 → 24h 后 ET 20:00，**必然跨日界**，
- 而刻度只画 HH:MM → 会出现两个 "20:00" 谁也分不清是谁天。
- （与自选页 all 的做法一致：跨日处画竖线 + 日期。） */
-    for (let i = 1; i < pts.length; i++) {
-      if (pts[i].day === pts[i - 1].day) continue;
-      const x = X(i);
-      ctx.save();
-      ctx.strokeStyle = 'rgba(148,154,171,0.45)';
-      ctx.setLineDash([2, 3]);
-      ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + plotH); ctx.stroke();
-      ctx.restore();
-      ctx.fillStyle = THEME.axisText;
-      ctx.textAlign = 'left';
-      ctx.fillText(pts[i].day, Math.min(x + 4, padL + plotW - 28), padT + 8);
-      ctx.textAlign = 'center';
-    }
+    for (const t of tickTs) ctx.fillText(labelOf(t), xOfTs(t), H - padB / 2 - 2);
   }
 
   /* ---- 分时图的两处落点：**同一个节点**搬家 ----
@@ -2721,6 +2778,10 @@ const TICKER_TTL = 15000;
               chartMode = defMode;
               syncPeriodTabActive(defMode);
             }
+            /* 评论面板口径：**用户主动点自选里的某只票** → 切到「个股评论」
+               （只显示这一只）。默认口径「总评论」（4 只合并）由点「资讯」恢复，
+               见 setFutuScope 的注释与调用点。 */
+            setFutuScope('single');
             loadInstrument(picked.code);
             // 移动端：点行后切到图表页（列表隐藏，只剩该标的 K 线）
             // （桌面端保持列表常驻，不受影响）
@@ -2802,6 +2863,8 @@ const TICKER_TTL = 15000;
         document.querySelectorAll('.rail__item[data-view]').forEach((b) => {
           b.classList.toggle('is-active', b.dataset.view === 'comment');
         });
+        /* 进「资讯」页 = 看**总评论**（4 只合并）；个股口径只在点了自选某只票时生效 */
+        setFutuScope('all');
         redrawAfterLayout();
       }
     });
@@ -2816,10 +2879,11 @@ const TICKER_TTL = 15000;
 
   /* ===================================================================
  资讯面板两个 tab：
- - 「最新」社区评论（占位 mock）
  - 「推荐」**金十数据快讯**（默认，script 标签直连，不走 fetch）
+ - 「评论」富途社区帖（ai-news-search.futunn.com，经 CF Worker / 本地反代，
+   2026-10-18 新增；无 CORS 不能直连，详见下方 FUTU_FEED_SRCS 注释块）
  -------------------------------------------------------------------
- 为什么用金十而不是富途自己的源（用户 调研结论）：
+ 为什么「推荐」用金十而不是富途自己的快讯源（用户 调研结论）：
  - `news.futunn.com/news-site-api/main/get-flash-list`（真正的富途快讯 API，能拿 60 条）
  实测响应里 **0 个 Access-Control-Allow-* 头** → 浏览器 fetch 必被同源策略拦掉。
  - `news.platform.elebank.com/main`（富途资讯站 SSR 页）
@@ -2909,11 +2973,11 @@ const TICKER_TTL = 15000;
       NEWS_STATE.atTs = Date.now();
       NEWS_STATE.at = new Date().toLocaleTimeString('zh-CN',
         { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Shanghai' });
-      paintNewsAt();
+      paintCpAt();
       if (cpTab === 'news') renderCpTab();
     } catch (e) {
       console.warn('[金十] 快讯加载失败，沿用上次数据：', e);
-      paintNewsAt();
+      paintCpAt();
     } finally { NEWS_STATE.loading = false; }
   }
 
@@ -2927,9 +2991,10 @@ const TICKER_TTL = 15000;
 
   function renderCpTab() {
     syncCpTabs();
-    /* 资讯面板现已只剩「推荐」（金十快讯）一个 tab：原「最新」社区评论（东财股吧 / 雪球 / Reddit）
- 已于 下线、 彻底移除该 tab，故这里只渲染推荐流。 */
+    /* 两个数据 tab：「推荐」= 金十快讯（renderNews），「评论」= 富途社区帖（renderFutu）。
+       原「最新」社区聚合（东财股吧/雪球/Reddit）已整体移除，勿复活。 */
     if (cpTab === 'news') renderNews();
+    else if (cpTab === 'futu') renderFutu();
   }
 
   /* 金十 time 形如 '2026-10-04 18:21:13'，取 'HH:MM'。
@@ -2941,11 +3006,15 @@ const TICKER_TTL = 15000;
   }
 
   /* 把「最后更新 HH:MM」写到两个资讯面板（自选页 / 持仓页）的头部。
- 用已有的 NEWS_STATE.at（北京时区 HH:MM）。这样用户一眼能看出资讯是否在自动刷新——
+ 用当前 tab 对应数据源的 at（北京时区 HH:MM）。这样用户一眼能看出资讯是否在自动刷新——
  若时间不动，说明刷新链路断了（利于自查，而非只能干等）。
- ⚠️ head 里原本没有这个节点，首次渲染时动态建一个插到收起按钮之前。 */
-  function paintNewsAt() {
-    const txt = NEWS_STATE.at ? ('更新 ' + NEWS_STATE.at) : (NEWS_STATE.loaded ? '已加载' : '加载中…');
+  ⚠️ head 里原本没有这个节点，首次渲染时动态建一个插到收起按钮之前。 */
+  function paintCpAt() {
+    /* 按当前 tab 选数据源：评论（富途）与推荐（金十）各自的新鲜度，
+       避免在评论 tab 里看到金十的更新时间（反之亦然）。
+       评论 tab 还要按口径取：合并视图的「最后更新」= 4 只票缓存里最新的那个。 */
+    const st = (cpTab === 'futu') ? futuAtInfo() : NEWS_STATE;
+    const txt = st.at ? ('更新 ' + st.at) : (st.loaded ? '已加载' : '加载中…');
     document.querySelectorAll('.cp__head[data-tabs]').forEach((h) => {
       let el = h.querySelector('.js-news-at');
       if (!el) {
@@ -2975,6 +3044,508 @@ const TICKER_TTL = 15000;
       </li>`).join('');
     els.forEach((ul) => { ul.innerHTML = html; });
   }
+
+  /* ===================================================================
+     「评论」tab：富途社区帖子（ai-news-search.futunn.com/stock_feed）
+     -------------------------------------------------------------------
+     免 key / 免 cookie / 免登录（2026-10-18 实测），但该端点**无 CORS**
+     （对任何 Origin 都不回 Access-Control-Allow-Origin）→ 浏览器不能直连，
+     必须经代理。源列表按序尝试，全失败才报错：
+       ① https://api.cors.lol/?url=<编码后上游>  公共 CORS 代理，源站德国 Hetzner
+         （195.201.220.186，延迟 ~200ms，零设置；免费公有服务，有限流/停运风险）
+       ② http://127.0.0.1:8443                 本地反代（需手动起 cf_proxy.js）
+       ③ futu-feed-proxy.futucopy-feed.workers.dev  CF Worker（workers.dev 的 SNI
+         被 GFW 封杀，仅翻墙可用；换 SNI 的自建方案见 tools/futu-proxy/README.md）
+     wrap:true = 「?url=」包裹式（公共代理）；false = 路径拼接式（自建代理）。
+     字段坑：title/desc 带 HTML 标签与数字实体 → 渲染前必须剥；
+             正文股票标签 $名字 (CODE.US)$ → cpEsc 后包 span.cp__futu__sym（蓝色）；
+             publish_time 是 Unix **秒**（转毫秒再算相对时间）。
+     节流（cors.lol 匿名档限流、官方不给数字；2026-10-18 实测三阶段探测：
+           配额 **4 个请求** / 恢复窗口 **≈5 分钟**，共享池——别人刷爆会连坐。
+           脚本与完整日志见 .workbuddy/tmp/rl_probe.sh|.log）。三层防护：
+           ① 白名单（FUTU_ALLOWED 4 只）+ 缓存（TTL 默认 600s，内存+localStorage
+              双写）：缓存新鲜 → 0 请求直接渲染；切票/轮询/聚焦都先过这层，
+              总请求量 ≈4×(3600/600)≈24 次/小时（配额 48/小时的一半）。
+           ② 全局最小请求间隔 FUTU_GAP_SEC（180s）：缓存过期后真正发请求前还要过
+              这关——切 tab / 换票 / 聚焦未到点都不发（防连切烧额度）；
+              换票被拦但有旧缓存 → 显示旧数据 + 尾条说明，无缓存 → 'throttled' 倒计时。
+           ③ 退避：连续全败间隔加倍（封顶 600s），成功即复位。
+           轮询 setInterval 固定 gap 秒，仅本 tab 激活 + 页面前台时跑；缓存新鲜时
+           自然空转（不发请求）。换标的由 #qCode 的 MutationObserver 即时触发。
+     =================================================================== */
+  const FUTU_FEED_SRCS = [
+    { base: 'https://api.cors.lol/?url=', wrap: true },
+    { base: 'http://127.0.0.1:8443', wrap: false },
+    { base: 'https://futu-feed-proxy.futucopy-feed.workers.dev', wrap: false },
+  ];
+  /* 接入白名单：只对这 4 只票拉社区评论。
+     起因：cors.lol 匿名档实测配额仅 4 请求/5min（共享池，rl_probe.log），
+     全市场放开必被 429 晾 5 分钟；收窄到 4 只 + 缓存后总请求量
+     ≈4×(3600/TTL)≈24 次/小时（配额 48/小时），留一倍余量。
+     加票 = 往这个数组加字符串（ticker 与 #qCode 显示的 code 一致，不带后缀）。 */
+  const FUTU_ALLOWED = ['ORCL', 'QQQ', 'NVDA', 'SNDK'];
+  const FUTU_STATE = { items: [], loaded: false, loading: false, at: '', atTs: 0, sym: '', err: '', lastReqTs: 0, gapSec: 0 };
+  /* 两个口径（2026-10-18 用户定稿）：
+       'all'    = **总评论**：白名单 4 只的帖子按时间倒序混排（每条带来源票标记）。
+                  这是**默认口径**——开屏右侧评论栏、点「资讯」进去看到的都是它。
+       'single' = **个股评论**：只有用户**主动点自选里的某只票**才切进来，
+                  只显示那一只；点了白名单外的票 → 'nosym' 空态。
+     切换点：点自选行 → 'single'（setFutuScope 调用在 renderWatchlist 的行点击里）；
+            点底栏/侧栏「资讯」→ 'all'。
+     ⚠️ 为什么不能「按当前 #qCode 单票」当默认：开屏默认选中第一只票（ORCL），
+     那样「总评论」会被单只内容冒充——用户 2026-10-18 截图反馈的正是这个。 */
+  let futuScope = 'all';
+  /* 合并口径的运行态：只放聚合视角的字段（错误/加载锁）。
+     数据本体仍以逐票 FUTU_CACHE 为准（合并视图每次渲染现算、不存第二份，
+     避免「逐票缓存」与「合并快照」两份数据打架）。 */
+  const FUTU_MSTATE = { err: '', loading: false };
+  /* 合并流条数上限：4 只 × 30 条 ≈ 120，全铺开太长也无意义，取时间最近的 80 条 */
+  const FUTU_MULTI_MAX = 80;
+  /* cors.lol 匿名限流 → 固定刷新间隔（秒）。所有触发共用这一个全局间隔，
+     等于把额度按时间摊平。?futugap=<秒> 可覆盖（回归测试传 0 = 关闸门）。
+     终值 180s 的定值依据（2026-10-18 rl_probe 实测）：
+       配额 4 请求 / 窗口 ≈5min → 公式 300/4×1.5 ≈ 112s；
+       但 cors.lol 是**共享池**（他人消耗不可见）且 429 无响应头可依，
+       180s 在窗口内仅 ≈1.7 次请求（配额的 43%），留一倍安全边际；
+       评论 3 分钟延迟无感；afraid.org+Vercel 自建上线后此值仅约束备用源。 */
+  const FUTU_GAP_SEC = (function () {
+    const m = /[?&]futugap=(\d+)/.exec(location.search);
+    return m ? Math.max(0, parseInt(m[1], 10)) : 180;
+  })();
+
+  /* 缓存 TTL（秒）：单票数据保鲜时长。默认 600s（10 分钟）。
+     定值账：4 只白名单全过期后连切 = 4 请求/10min（配额 4/5min 的 1/2.5）；
+     盯单票 = 6 次/小时（配额 48/小时的 1/8）。缓存新鲜 → 0 请求直接渲染。
+     ?fututtl=<秒> 可覆盖（回归测试用小值验证过期重拉）。 */
+  const FUTU_TTL_SEC = (function () {
+    const m = /[?&]fututtl=(\d+)/.exec(location.search);
+    return m ? Math.max(0, parseInt(m[1], 10)) : 600;
+  })();
+  /* 评论数据缓存：内存 Map + localStorage 持久化（关页面再开数据还在）。
+     key 前缀带版本：改**已存储内容**的语义必须 bump 前缀（旧缓存自然失效重拉）。
+     v1→v2：2026-10-18 title/desc 去重拼接修复——v1 缓存里存的是拼好的重复文本，
+     不 bump 前缀的话用户强刷后 10 分钟内仍看到旧的重复版本。 */
+  const FUTU_CACHE = {};
+  const FUTU_LS_PREFIX = 'futu_feed_v2_';
+  function futuLsGet(sym) {
+    try {
+      const raw = localStorage.getItem(FUTU_LS_PREFIX + sym);
+      if (!raw) return null;
+      const d = JSON.parse(raw);
+      if (!d || !Array.isArray(d.items) || !d.atTs) return null;
+      return { items: d.items, atTs: d.atTs };
+    } catch (e) { return null; }
+  }
+  function futuLsSet(sym, items, atTs) {
+    try {
+      localStorage.setItem(FUTU_LS_PREFIX + sym, JSON.stringify({
+        items: items.slice(0, 60).map((p) => ({ id: p.id, text: p.text, ts: p.ts, url: p.url })),
+        atTs: atTs,
+      }));
+    } catch (e) { /* 隐私模式/超额：静默降级为内存缓存 */ }
+  }
+  /* 裸 item → 渲染 item：补 cashtag 蓝色高亮 html（缓存只存 text，渲染时重生成） */
+  function futuDecorate(p) {
+    return {
+      id: String(p.id || ''),
+      text: String(p.text || ''),
+      /* 富途正文股票标签 $甲骨文 (ORCL.US)$ → 蓝色高亮（$ 为标记符，不显示；
+         必须含「(代码)」才匹配，避免 $500 和 $600 这类金额被误伤）。
+         先 cpEsc 再替换：$ 间内容已是转义后的纯文本，不存在注入面 */
+      html: cpEsc(String(p.text || '')).replace(/\$([^$\n()]{0,40}\s*\([A-Za-z0-9.\-]{1,12}\))\$/g, '<span class="cp__futu__sym">$1</span>'),
+      ts: Number(p.ts) || 0,
+      url: String(p.url || ''),
+    };
+  }
+
+  /* 当前标的：白名单制（见 FUTU_ALLOWED 注释）。
+     白名单直接匹配 ticker 字符串——QQQ 是 ETF、SNDK 2025 年从 WDC 分拆，
+     不过问 market 字段，避免 ETF/分拆股的 market 标记差异把票漏掉。 */
+  function futuSym() {
+    const q = APP_DATA.quote || {};
+    const s = String(q.code || '').trim();
+    if (!s || s === '--') return '';
+    return FUTU_ALLOWED.indexOf(s) >= 0 ? s : '';
+  }
+  /* 逐票缓存取用（内存优先 → localStorage 回填内存）。
+     合并视图每次渲染都会问 4 只票的缓存，回填后第二次起是纯内存读，
+     不会反复 JSON.parse 几百 KB 的 localStorage。 */
+  function futuCacheOf(sym) {
+    let c = FUTU_CACHE[sym];
+    if (!c) { c = futuLsGet(sym); if (c) FUTU_CACHE[sym] = c; }
+    return c;
+  }
+
+  /* 合并流：把逐票缓存拼成一条时间倒序的帖流（附来源票 sym）。
+     纯读，不发请求、不写状态 —— 所以切口径/重渲染都是 0 成本。
+     去重：同一条帖子可能同时挂在不同票的 feed 里（正文提到多只票），按 id 只留最新出现的那条。 */
+  function futuMergeItems() {
+    const out = [];
+    const seen = {};
+    FUTU_ALLOWED.forEach((s) => {
+      const c = futuCacheOf(s);
+      if (!c || !Array.isArray(c.items)) return;
+      c.items.forEach((p) => {
+        const id = String(p.id || '');
+        if (id && seen[id]) return;
+        if (id) seen[id] = 1;
+        out.push({ p: p, sym: s });
+      });
+    });
+    out.sort((a, b) => (Number(b.p.ts) || 0) - (Number(a.p.ts) || 0));
+    return out;
+  }
+
+  /* 「最后更新」口径：合并视图取 4 只票缓存里最新的 atTs；
+     个股视图直接用 FUTU_STATE（paintCpAt 只读 at/atTs/loaded 三个字段）。 */
+  function futuAtInfo() {
+    if (futuScope !== 'all') return FUTU_STATE;
+    let newest = 0;
+    FUTU_ALLOWED.forEach((s) => {
+      const c = futuCacheOf(s);
+      if (c && c.atTs > newest) newest = c.atTs;
+    });
+    return {
+      atTs: newest,
+      at: newest ? new Date(newest).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '',
+      loaded: !!newest,
+    };
+  }
+
+  /* 切口径。'single' 时**清场**再拉：否则合并视图里逐票数据被打包成
+     FUTU_STATE.items 后，切到个股会把「别的票的帖子」冒充成这只票的数据。 */
+  function setFutuScope(sc) {
+    if (futuScope === sc) return;
+    futuScope = sc;
+    if (sc === 'all') {
+      FUTU_MSTATE.err = '';
+    } else {
+      FUTU_STATE.sym = ''; FUTU_STATE.items = []; FUTU_STATE.loaded = false;
+      FUTU_STATE.err = ''; FUTU_STATE.at = ''; FUTU_STATE.atTs = 0;
+    }
+    if (cpTab === 'futu') {
+      renderFutu(); paintCpAt();
+      /* 进视图即刷新（内部有缓存 TTL + 全局闸门兜底，新鲜时 0 请求） */
+      fetchFutuFeed();
+    }
+  }
+
+  function stripTags(s) {
+    const d = document.createElement('div');
+    d.innerHTML = String(s == null ? '' : s);
+    return (d.textContent || '').replace(/\s+/g, ' ').trim();
+  }
+  function futuAgo(ts) {
+    const ms = Number(ts) * 1000;
+    if (!ms || !isFinite(ms)) return '';
+    const diff = Date.now() - ms;
+    if (diff < 0) return '';
+    const m = Math.floor(diff / 60000);
+    if (m < 1) return '刚刚';
+    if (m < 60) return m + ' 分钟前';
+    const h = Math.floor(m / 60);
+    if (h < 24) return h + ' 小时前';
+    const d = new Date(ms);
+    return (d.getMonth() + 1) + '/' + d.getDate();
+  }
+
+  /* 单票抓取（两个口径共用）：按 FUTU_FEED_SRCS 顺序试源，返回
+     { ok, err, items }。**不碰任何状态**——状态由调用方按口径写，
+     免得合并口径把「某一只票」的结果误写进个股口径的 FUTU_STATE。 */
+  async function futuFetchOne(sym) {
+    let lastErr = '';
+    for (const src of FUTU_FEED_SRCS) {
+      let ctrl = null, tid = 0;
+      try { ctrl = new AbortController(); tid = setTimeout(() => ctrl.abort(), 10000); } catch (e) { ctrl = null; }
+      try {
+        const upstream = 'https://ai-news-search.futunn.com/stock_feed?keyword=' + encodeURIComponent(sym) + '&size=30';
+        const url = src.wrap ? src.base + encodeURIComponent(upstream)
+                            : src.base + '/stock_feed?keyword=' + encodeURIComponent(sym) + '&size=30';
+        const res = await fetch(url,
+          ctrl ? { signal: ctrl.signal, cache: 'no-store' } : { cache: 'no-store' });
+        if (tid) clearTimeout(tid);
+        if (!res.ok) { lastErr = 'HTTP ' + res.status; continue; }
+        const j = await res.json();
+        if (!j || j.code !== 0 || !Array.isArray(j.data)) { lastErr = 'bad json'; continue; }
+        const items = j.data.map((p) => {
+          /* title/desc 去重拼接：富途部分帖子的 desc 就是 title 的全文
+             （或以其开头），直接拼会把同一段话显示两遍（2026-10-18 用户截图反馈）。
+             stripTags 内部已做空白归一 → 归一后 indexOf 前缀判定可靠。 */
+          const tt = stripTags(p.title);
+          const dd = stripTags(p.desc);
+          let t;
+          if (tt && dd && (dd === tt || dd.indexOf(tt) === 0)) t = dd;
+          else if (tt && dd && (tt === dd || tt.indexOf(dd) === 0)) t = tt;
+          else t = tt + ' ' + dd;
+          t = t.replace(/\s+/g, ' ').trim();
+          return {
+            id: String(p.id || ''),
+            text: t,
+            /* 富途正文股票标签 $甲骨文 (ORCL.US)$ → 蓝色高亮（$ 为标记符，不显示；
+               必须含「(代码)」才匹配，避免 $500 和 $600 这类金额被误伤）。
+               先 cpEsc 再替换：$ 间内容已是转义后的纯文本，不存在注入面 */
+            html: cpEsc(t).replace(/\$([^$\n()]{0,40}\s*\([A-Za-z0-9.\-]{1,12}\))\$/g, '<span class="cp__futu__sym">$1</span>'),
+            ts: Number(p.publish_time) || 0,
+            url: String(p.url || ''),
+          };
+        }).filter((x) => x.text);
+        return { ok: true, err: '', items: items };
+      } catch (e) {
+        if (tid) clearTimeout(tid);
+        lastErr = (e && e.name === 'AbortError') ? 'timeout' : 'network';
+      }
+    }
+    return { ok: false, err: lastErr || 'network', items: [] };
+  }
+
+  /* 合并口径拉取（总评论）：只补「缺失 / 过期」的票，逐票串行、间隔
+     FUTU_MULTI_STEP_MS，撞 429/403 立刻停手（剩下的留到下一轮 gap 后补）。
+     额度账：4 只全过期时一轮最多 4 次真实请求；缓存 TTL 600s → 稳态仍是
+     4 次/10min（=48 次/小时配额的一半），与单票口径同一额度模型
+     （见 FUTU_TTL_SEC 注释）。中途失败不清已成功的那些票。 */
+  /* 逐票之间的间隔。?futustep=<毫秒> 可覆盖（回归测试压到 0/100 免等待）。 */
+  const FUTU_MULTI_STEP_MS = (function () {
+    const m = /[?&]futustep=(\d+)/.exec(location.search);
+    return m ? Math.max(0, parseInt(m[1], 10)) : 1500;
+  })();
+  async function fetchFutuMulti(force) {
+    const stale = FUTU_ALLOWED.filter((s) => {
+      const c = futuCacheOf(s);
+      if (!c) return true;
+      return force || Date.now() - c.atTs >= FUTU_TTL_SEC * 1000;
+    });
+    if (!stale.length) {
+      FUTU_MSTATE.err = '';
+      if (cpTab === 'futu') { renderFutu(); paintCpAt(); }
+      return;
+    }
+    const gapMs = (FUTU_STATE.gapSec || FUTU_GAP_SEC) * 1000;
+    if (!force && FUTU_STATE.lastReqTs && Date.now() - FUTU_STATE.lastReqTs < gapMs) {
+      /* 闸门拦下：照常把现有缓存画出来（不足 4 只也只画已有的，不发请求） */
+      if (cpTab === 'futu') { renderFutu(); paintCpAt(); }
+      return;
+    }
+    FUTU_STATE.loading = true;
+    FUTU_MSTATE.loading = true;
+    FUTU_STATE.lastReqTs = Date.now();
+    /* 先把缓存/加载态画出来（loading 已置位 → 无缓存时显示「加载中」而不是闪一下「暂无」） */
+    if (cpTab === 'futu') { renderFutu(); paintCpAt(); }
+    const fails = [];
+    try {
+      for (let i = 0; i < stale.length; i++) {
+        if (i) await new Promise((r) => setTimeout(r, FUTU_MULTI_STEP_MS));
+        const sym = stale[i];
+        if (cpTab !== 'futu') { fails.push('已切走'); break; }  // 用户已离开评论 tab，省额度
+        const r = await futuFetchOne(sym);
+        if (!r.ok) {
+          fails.push(sym + ' ' + r.err);
+          if (/429|403/.test(r.err)) break;   // 限流 → 立刻停，别把剩下几只也撞掉
+          continue;
+        }
+        const atTs = Date.now();
+        FUTU_CACHE[sym] = { items: r.items, atTs: atTs };
+        futuLsSet(sym, r.items, atTs);
+        FUTU_STATE.gapSec = 0;               // 有成功 → 退避复位
+      }
+    } finally {
+      FUTU_STATE.loading = false;
+      FUTU_MSTATE.loading = false;
+    }
+    FUTU_MSTATE.err = fails.filter((x) => x !== '已切走').join(' / ');
+    if (FUTU_MSTATE.err) FUTU_STATE.gapSec = Math.min((FUTU_STATE.gapSec || FUTU_GAP_SEC) * 2, 600);
+    if (cpTab === 'futu') { renderFutu(); paintCpAt(); }
+  }
+
+  async function fetchFutuFeed(force) {
+    if (FUTU_STATE.loading) return;
+    if (futuScope === 'all') return fetchFutuMulti(force);
+    const sym = futuSym();
+    if (!sym) {
+      /* 白名单外标的：清空 + 空态（不发任何请求） */
+      if (FUTU_STATE.sym !== '' || FUTU_STATE.err !== 'nosym') {
+        FUTU_STATE.sym = ''; FUTU_STATE.items = []; FUTU_STATE.loaded = false;
+        FUTU_STATE.err = 'nosym'; FUTU_STATE.at = '';
+        if (cpTab === 'futu') { renderFutu(); paintCpAt(); }
+      }
+      return;
+    }
+    /* ===== 缓存层 =====
+       1) 缓存新鲜（<TTL）→ 直接渲染，0 请求。切票/轮询/聚焦都走这条，
+          不耗 cors.lol 配额（gap 闸门也不触发——根本没发请求）。
+       2) 缓存过期但存在 → 先渲染旧数据（好过空白/转圈），继续走下面对比分；
+       3) 无缓存 → 走请求。 */
+    const cached = futuCacheOf(sym);
+    if (!force && cached && Date.now() - cached.atTs < FUTU_TTL_SEC * 1000) {
+      if (cached.items.length) FUTU_CACHE[sym] = cached;
+      if (FUTU_STATE.sym !== sym || !FUTU_STATE.loaded || FUTU_STATE.err) {
+        FUTU_STATE.sym = sym; FUTU_STATE.loaded = true; FUTU_STATE.err = '';
+        FUTU_STATE.items = cached.items.map(futuDecorate);
+        FUTU_STATE.atTs = cached.atTs;
+        FUTU_STATE.at = new Date(cached.atTs).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+        if (cpTab === 'futu') { renderFutu(); paintCpAt(); }
+      }
+      return;
+    }
+    if (cached && FUTU_STATE.sym !== sym) {
+      /* 过期缓存：先垫上旧数据，渲染层会在拉取失败时补「刷新失败」提示条 */
+      FUTU_STATE.sym = sym; FUTU_STATE.loaded = true; FUTU_STATE.err = '';
+      FUTU_STATE.items = cached.items.map(futuDecorate);
+      FUTU_STATE.atTs = cached.atTs;
+      FUTU_STATE.at = new Date(cached.atTs).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+    }
+    /* 限流闸门（全局）：距上次真实请求不足 gap → 不发请求。
+       换票被拦 → 若已有旧数据则保留显示（渲染层 err='throttled' 时追加提示），
+       无数据则 err='throttled'（渲染层显示倒计时）；
+       同票被拦 → 静默返回，界面保持上次成功的数据。 */
+    const gapMs = (FUTU_STATE.gapSec || FUTU_GAP_SEC) * 1000;
+    if (!force && FUTU_STATE.lastReqTs && Date.now() - FUTU_STATE.lastReqTs < gapMs) {
+      if (FUTU_STATE.sym !== sym) {
+        FUTU_STATE.sym = ''; FUTU_STATE.items = []; FUTU_STATE.err = 'throttled';
+      } else {
+        FUTU_STATE.err = 'throttled';
+      }
+      if (cpTab === 'futu') { renderFutu(); paintCpAt(); }
+      return;
+    }
+    FUTU_STATE.lastReqTs = Date.now();
+    FUTU_STATE.loading = true;
+    try {
+      const r = await futuFetchOne(sym);
+      if (r.ok) {
+        FUTU_STATE.sym = sym; FUTU_STATE.loaded = true; FUTU_STATE.err = '';
+        FUTU_STATE.items = r.items;
+        FUTU_STATE.atTs = Date.now();
+        FUTU_STATE.gapSec = 0; /* 成功 → 退避复位 */
+        FUTU_STATE.at = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+        /* 双写缓存：内存（本会话切票秒切）+ localStorage（跨会话/刷新） */
+        FUTU_CACHE[sym] = { items: r.items, atTs: FUTU_STATE.atTs };
+        futuLsSet(sym, r.items, FUTU_STATE.atTs);
+      } else {
+        /* 所有源都失败：err 记上；已有数据是**别的票**的 → 清空（不能混着显示）；
+           同一只票刷新失败 → 保留旧数据，渲染层补「刷新失败」提示条。
+           退避：间隔加倍（封顶 600s）——限流时别按原间隔持续撞墙 */
+        if (FUTU_STATE.sym !== sym) FUTU_STATE.items = [];
+        FUTU_STATE.err = r.err;
+        FUTU_STATE.gapSec = Math.min((FUTU_STATE.gapSec || FUTU_GAP_SEC) * 2, 600);
+      }
+    } finally {
+      FUTU_STATE.loading = false;
+    }
+    if (cpTab === 'futu') { renderFutu(); paintCpAt(); }
+  }
+
+  /* 单条帖的 HTML（两个口径共用）。merged=true 时补一个来源票标记，
+     否则合并流里 4 只票的帖子混在一起看不出「这条属于哪只」。 */
+  function futuItemHtml(p, sym, merged) {
+    const d = (p && p.html != null) ? p : futuDecorate(p || {});
+    const src = merged ? '<span class="cp__futu__src">' + cpEsc(sym) + '</span>' : '';
+    return `
+      <li class="cp__item cp__futu">
+        <p class="cp__futu__text">${d.html || cpEsc(d.text)}</p>
+        <div class="cp__futu__meta">${src}<span>${cpEsc(futuAgo(d.ts))}</span>${
+      d.url ? '<a href="' + cpEsc(d.url) + '" target="_blank" rel="noopener">查看原文</a>' : ''}</div>
+      </li>`;
+  }
+
+  /* 合并口径（总评论）渲染：4 只票的缓存拼一条时间倒序流。
+     ⚠️ 与单票分支的取舍差异：合并流里「某只失败/缺缓存」**不清场**，
+     已有的照常显示，只在尾部提示哪几只待补——否则一只 429 会把其余三只也抹掉。 */
+  function renderFutuMulti() {
+    const els = cpListEls();
+    if (!els.length) return;
+    const all = futuMergeItems();
+    const shown = all.slice(0, FUTU_MULTI_MAX);
+    const err = FUTU_MSTATE.err;
+    let html;
+    if (!shown.length) {
+      if (err) {
+        html = '<li class="cp__item cp__item--empty"><p class="cp__text">社区评论加载失败（' + cpEsc(err) + '）<br>'
+          + '公共代理可能限流/不可达，将按固定间隔自动重试<br>'
+          + '（备用：本地 cf_proxy.js 反代 / Vercel 自建代理）</p></li>';
+      } else if (FUTU_MSTATE.loading) {
+        html = '<li class="cp__item cp__item--empty"><p class="cp__text">社区评论加载中…</p></li>';
+      } else {
+        html = '<li class="cp__item cp__item--empty"><p class="cp__text">暂无社区评论</p></li>';
+      }
+    } else {
+      html = shown.map((x) => futuItemHtml(x.p, x.sym, true)).join('');
+      /* 尾部说明：哪几只票这次没刷新成功 / 还没缓存。
+         判「缺」用**有没有缓存条目**，不是「本次有没有出条目」——某只票 0 条帖子也是有效结果，
+         不能一直挂在「待补」里。 */
+      const notes = [];
+      if (err) notes.push('部分股票刷新失败（' + err + '）');
+      const noCache = FUTU_ALLOWED.filter((s) => !futuCacheOf(s));
+      if (noCache.length) notes.push(noCache.join('/') + ' 待补（公共代理限流，按间隔逐个补）');
+      if (notes.length) {
+        html += '\n      <li class="cp__item cp__item--stale">' + cpEsc(notes.join('；')) + '</li>';
+      }
+    }
+    els.forEach((ul) => { ul.innerHTML = html; });
+  }
+
+  function renderFutu() {
+    if (futuScope === 'all') return renderFutuMulti();
+    const els = cpListEls();
+    if (!els.length) return;
+    let html;
+    if (FUTU_STATE.err === 'nosym') {
+      html = '<li class="cp__item cp__item--empty"><p class="cp__text">该标的暂未接入社区评论<br>'
+        + '（当前仅 ' + cpEsc(FUTU_ALLOWED.join(' / ')) + '）</p></li>';
+    } else if (!FUTU_STATE.loaded && !FUTU_STATE.items.length && !FUTU_STATE.err) {
+      /* 仅在「从未成功且当前无任何错误」时显示转圈——即首屏进 tab 到首次请求
+         返回的极短窗口。一旦请求失败（err 被置位），必须落到下面的失败分支
+         显示原因，绝不能再显示「加载中」把错误藏起来（2026-10-18 实测：
+         公共代理 429 / 网络不通导致首拉失败 → 旧代码永久卡在「加载中」）。
+         throttled 也已置 err='throttled'，会被上面的 throttled 分支接住，不影响。 */
+      html = '<li class="cp__item cp__item--empty"><p class="cp__text">社区评论加载中…</p></li>';
+    } else if (FUTU_STATE.err === 'throttled' && !FUTU_STATE.items.length) {
+      const left = FUTU_STATE.lastReqTs
+        ? Math.max(1, Math.ceil((FUTU_STATE.gapSec || FUTU_GAP_SEC) - (Date.now() - FUTU_STATE.lastReqTs) / 1000))
+        : FUTU_GAP_SEC;
+      html = '<li class="cp__item cp__item--empty"><p class="cp__text">正在为下一只票节省请求额度<br>'
+        + left + ' 秒后自动刷新（公共代理限流，按固定间隔拉取）</p></li>';
+    } else if (FUTU_STATE.err === 'throttled' && FUTU_STATE.items.length) {
+      /* 换票被闸门拦但缓存里有旧数据：先显示旧数据，尾条说明 */
+      html = FUTU_STATE.items.map((p) => futuItemHtml(p, '', false)).join('')
+        + '\n      <li class="cp__item cp__item--stale">请求太频繁，' + cpEsc(futuAgo(Math.floor((FUTU_STATE.atTs || 0) / 1000)) || '较早')
+          + '的数据，稍后自动刷新</li>';
+    } else if (FUTU_STATE.err && !FUTU_STATE.items.length) {
+      html = '<li class="cp__item cp__item--empty"><p class="cp__text">社区评论加载失败（' + cpEsc(FUTU_STATE.err) + '）<br>'
+        + '公共代理可能限流/不可达，将按固定间隔自动重试<br>'
+        + '（备用：本地 cf_proxy.js 反代 / Vercel 自建代理）</p></li>';
+    } else if (!FUTU_STATE.items.length) {
+      html = '<li class="cp__item cp__item--empty"><p class="cp__text">暂无社区评论</p></li>';
+    } else {
+      html = FUTU_STATE.items.map((p) => futuItemHtml(p, '', false)).join('')
+        /* 刷新失败但有旧数据：留一条提示，别让用户以为数据是新的 */
+        + (FUTU_STATE.err && FUTU_STATE.items.length
+          ? '\n      <li class="cp__item cp__item--stale">刷新失败（' + cpEsc(FUTU_STATE.err) + '），以上为 '
+            + cpEsc(futuAgo(Math.floor((FUTU_STATE.atTs || 0) / 1000)) || '较早') + '的数据</li>'
+          : '');
+    }
+    els.forEach((ul) => { ul.innerHTML = html; });
+  }
+
+  /* 标的变化即时跟上（不用干等 60s 轮询）：监听报价头 #qCode 文本。
+     非评论 tab 下换票 → 只作废旧数据，下次切回时按 sym 差异重拉。
+     ⚠️ 只在**个股口径**（futuScope==='single'）下响应：合并口径（总评论）
+     显示的是 4 只票的汇总，换不换票与它无关，跟着重拉等于白白烧配额。 */
+  (function watchFutuSym() {
+    const el = document.getElementById('qCode');
+    if (!el || typeof MutationObserver === 'undefined') return;
+    let last = futuSym();
+    new MutationObserver(() => {
+      const s = futuSym();
+      if (s === last) return;
+      last = s;
+      if (futuScope !== 'single') return;
+      if (cpTab === 'futu') fetchFutuFeed();
+      else {
+        FUTU_STATE.sym = ''; FUTU_STATE.loaded = false;
+        FUTU_STATE.items = []; FUTU_STATE.err = '';
+      }
+    }).observe(el, { childList: true, characterData: true, subtree: true });
+  })();
 
   const cpEsc = (s) => String(s == null ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -3481,7 +4052,7 @@ const TICKER_TTL = 15000;
         renderWatchlist(APP_DATA.watchlist || [], (APP_DATA.quote || {}).code);
         renderTradeList();
       }
-      // 资讯面板 tab：最新（社区 mock）/ 推荐（金十快讯）
+      // 资讯面板 tab：推荐（金十快讯）/ 评论（富途社区帖）
       const cpc = btn.dataset.cpTab;
       if (cpc && cpc !== cpTab) {
         cpTab = cpc;
@@ -3489,7 +4060,8 @@ const TICKER_TTL = 15000;
         // 每次切到「推荐」都重拉一次（源侧有 ~45 分钟延迟，但刷新仍能拿到该源此刻的最新一条；
         // 原来只在首次 !loaded 时拉，重新打开页面看到的可能是 30 秒前的旧快照）
         if (cpTab === 'news') fetchJin10();
-        // 「富途」tab 目前是待接入占位，不拉数据
+        // 切到「评论」：拉富途社区（内部 60s 新鲜度闸门，连点不重复请求）
+        else if (cpTab === 'futu') fetchFutuFeed();
       }
     });
   });
@@ -3699,6 +4271,9 @@ const TICKER_TTL = 15000;
       if (view === 'comment') {
         if (typeof renderCpTab === 'function') renderCpTab();
         if (typeof fetchJin10 === 'function') fetchJin10();
+        /* 桌面「资讯」= 总评论（4 只合并）；已在合并口径时 setFutuScope 内部早退，
+           不会重复拉（真发请求还要过 TTL + 全局 gap 闸门） */
+        setFutuScope('all');
       }
       if (isMarket) drawChart();      // 画布重新可见后按新尺寸重绘
     }
@@ -4267,16 +4842,20 @@ const TICKER_TTL = 15000;
     const rows = sortAllStocks(ALL_ROWS, ALL_SORT);
     const d = ALL_META || {};
     const srcLabel = (d.source || 'fund_holdings.json（每日快照）').replace(/（.*?）/g, '').trim();
+    /* 头栏（用户 2026-10-18 定稿：「数据日期删了，把 Finnhub实时休市提到这里，
+       这样手机就两行了」）：
+       左组 = 共 N 只 + Finnhub 实时状态（rt-stat 紧跟 b，DOM 顺序即同行顺序）；
+       右组 = 来源 + HOM/FMP/当前采用（桌面 margin-left:auto 推右，手机 720px 块
+       用 order 规则让 rt-stat 与 b 同处第一行，见 index.html）。 */
     const bar = '<div class="screen-bar screen-bar--src-top">'
       + '<b>共 ' + rows.length + ' 只</b>'
-      + (d.asOf ? '<span>数据日期 ' + cpEsc(String(d.asOf).slice(0, 10)) + '</span>' : '')
+      + '<span class="rt-stat" id="rtStat"></span>'
       + '<span class="screen-bar__src">来源：' + cpEsc(srcLabel) + '</span>'
       + (d.homAsOf || d.fmpAsOf
           ? '<span class="dsrc dsrc--hom" title="HOM：历史行情收盘（指数快照）">HOM 收盘 ' + cpEsc(d.homAsOf || '-') + '</span>'
             + '<span class="dsrc dsrc--fmp" title="FMP：收盘价（前 120 只）">FMP 收盘 ' + cpEsc(d.fmpAsOf || '-') + '</span>'
             + '<span class="dsrc-badge ' + (d.fmpActive ? 'dsrc-badge--fmp' : 'dsrc-badge--hom') + '" title="名次/市值当前采用的数据源">当前采用：' + (d.fmpActive ? 'FMP' : 'HOM') + '</span>'
           : '')
-      + '<span class="rt-stat" id="rtStat"></span>'
       + '</div>';
     rtFillBase();    /* 先填基准价 → 实时列初始即显示快照价（等建连节拍期间也有价格看） */
     host.innerHTML = bar + renderIndexTable(rows, { noW: true, sortable: true, sort: ALL_SORT, rt: true, rtSyms: rtTopSet(), rank: true, fmpActive: d.fmpActive });
@@ -5737,13 +6316,24 @@ const applyMode = (mode, skipDraw) => {
  60s 而非 30s：金十是分钟级更新的流，再密拉到的多半是同一份内容。 */
   fetchJin10();
   setInterval(() => { if (!document.hidden) fetchJin10(); }, 60000);
+
+  /* 「评论」tab（富途社区）轮询：固定 FUTU_GAP_SEC 秒（对齐 cors.lol 限流窗口，
+     见 FUTU_GAP_SEC 注释），只在**本 tab 激活 + 页面前台**时跑；未到点会被
+     fetchFutuFeed 里的全局闸门拦下，不发请求。换标的由 #qCode 的
+     MutationObserver 即时触发（同样受全局闸门管）。 */
+  setInterval(() => { if (!document.hidden && cpTab === 'futu') fetchFutuFeed(); }, Math.max(60, FUTU_GAP_SEC) * 1000);
   // 「切回页面 / 窗口聚焦」立即补刷一次：离开 60s 周期回来不用干等（距上次超 5s 才补，避免抖动）
-  function tryJin10OnVisible() {
+  function tryRefreshOnVisible() {
     if (document.hidden) return;
     if (Date.now() - (NEWS_STATE.atTs || 0) > 5000) fetchJin10();
+    /* 评论 tab 激活时同样补刷（fetchFutuFeed 内部 60s 闸门兜底，数据够新就跳过）；
+       atTs=0（从未成功拉到过）时恒判定为过期，回来即重试。
+       新鲜度按**当前口径**取：合并视图看 4 只票里最新的那个，否则「单票旧数据」
+       会让总评论一直以为自己是新的、永远不补另外几只。 */
+    if (cpTab === 'futu' && Date.now() - (futuAtInfo().atTs || 0) > 5000) fetchFutuFeed();
   }
-  document.addEventListener('visibilitychange', tryJin10OnVisible);
-  window.addEventListener('focus', tryJin10OnVisible);
+  document.addEventListener('visibilitychange', tryRefreshOnVisible);
+  window.addEventListener('focus', tryRefreshOnVisible);
 
   /* 刷新按钮已改为整页重载（见上方 initRefresh：点一下 = F5 + cb=1 强制拉新），
   此处旧的「增量刷新」handler 整块删除 —— 同一按钮绑两套行为会互相叠跑

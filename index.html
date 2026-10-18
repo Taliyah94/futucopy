@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<link rel="preload" href="app.js?v=20261015h" as="script" />
+<link rel="preload" href="app.js?v=20261015x" as="script" />
 <!-- ⚠️ 用户要求「没读到数据就显示 --，别产生误导」：
  报价头/账户汇总的初始值一律 --（原来是硬编码的 137.790 / +5.190 / +3.91% 等假数字，
  页面刚加载、JS 还没跑到时就会显示出来）。真实值由 renderQuote / 账户页数据填充。 -->
@@ -742,6 +742,19 @@ html, body {
 .cp__item--cplatest .cp__text { word-break: break-word; }
 .cp__link { color: inherit; text-decoration: none; }
 .cp__link:hover { color: var(--text); text-decoration: underline; }
+
+/* 「评论」tab：富途社区帖子（源 ai-news-search.futunn.com/stock_feed，
+ 无 CORS → 经 CF Worker（线上）/ cf_proxy.js 本地反代（预览）转发，见 app.js FUTU_FEED_SRCS）。
+ 富途原站没有「作者名」字段（该端点只回 id/title/desc/publish_time/url），
+ 所以不做头像/昵称行，正文 + 相对时间 + 原文链接即可。 */
+.cp__futu__text { margin: 0 0 6px; font-size: 13px; line-height: 1.55; color: var(--text); word-break: break-word; }
+.cp__futu__meta { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--text-3); }
+.cp__futu__meta a { margin-left: auto; color: var(--accent); text-decoration: none; }
+.cp__futu__meta a:hover { text-decoration: underline; }
+/* 正文股票标签 $名字 (CODE.US)$：蓝色加粗（富途同款高亮） */
+.cp__futu__sym { color: #1565d8; font-weight: 600; }
+/* 刷新失败但有旧数据时的提示条 */
+.cp__item--stale { padding: 6px 12px; font-size: 11px; color: var(--text-3); text-align: center; }
 /* ---- 快讯流（金十）：仿富途时间轴 = 左侧圆点+时间，下方正文 ---- */
 .cp__news { padding: 10px 14px 12px 14px; }
 .cp__news-time {
@@ -1552,12 +1565,19 @@ html, body {
   .screen-switch button { flex: 0 0 auto; padding: 3px 8px; font-size: 11px; }
   .screen-bar { padding: 7px 12px; gap: 10px; font-size: 11px; }
   .screen-bar__src { margin-left: 0; width: 100%; }
+  /* 375px 实测：HOM/FMP/采用三个徽标默认 11px+8px padding 会超出 343px 内容区，
+     「当前采用」被挤到第三行 → 压字号/padding/gap 凑成两行
+     （用户 2026-10-18：「这样手机就两行了」）。 */
+  .screen-bar .dsrc, .screen-bar .dsrc-badge { padding: 1px 6px; font-size: 10px; }
   /* 移动端：四个指数/个股 tab（screen-bar--src-top）的来源提到第一行，紧挨标题；
-     市场 tab 不加该修饰类，保持「来源」独自成行（用户 ：市场除外） */
+     市场 tab 不加该修饰类，保持「来源」独自成行（用户 ：市场除外）。
+     2026-10-18： Finnhub 实时状态（rt-stat）从末尾提到「共 N 只」旁边 →
+     第一行 = 共 N 只 + 实时状态，第二行 = 来源 + HOM/FMP 徽标（用户：手机两行）。
+     b 与 rt-stat 同 order 1，flex 同序按 DOM 顺序 → b 在左、rt-stat 紧跟。 */
   .screen-bar--src-top > b { order: 1; }
+  .screen-bar--src-top > .rt-stat { order: 1; }
   .screen-bar--src-top > .screen-bar__src { order: 2; margin-left: 0; width: auto; }
   .screen-bar--src-top > span:not(.rt-stat):not(.screen-bar__src) { order: 3; }
-  .screen-bar--src-top > .rt-stat { order: 4; }
   .us-top { padding: 0 12px; }
   /* 指数成分股表在手机上「不横滑」：5 列全塞进 ~430px 视口（iPhone 15 Pro Max，用户 ）。
  ⚠️ 必须同时压掉 .us-top 的 min-width:780px（base 里那条是为 7 列市值榜设的），
@@ -2596,16 +2616,36 @@ html, body {
 .fh-empty { color: var(--text-3); font-size: 12px; padding: 18px 2px; text-align: center; }
 
 @media (max-width: 680px) {
-  /* 手机上报价头一行放不下「标的名 + 价格 + 页签」，页签整组换到第二行 */
-  .quote-head { flex-wrap: wrap; row-gap: 8px; }
-  .quote-head__right { width: 100%; margin-left: 0; padding-top: 2px; }
-  .q-tabs { flex: 1 1 auto; border-left: 0; padding-left: 0; }
+  /* 手机上报价行放不下时：原来把页签整组换到第二行（width:100% 独占）。
+     用户 2026-10-18 定稿：「移动端这俩提上去，和甲骨文 -0.93% 一行，在最右边」
+     → __right 不再独占行，margin-left:auto 整组推到报价行最右；
+     __id/__price 可压缩，q-tabs 不缩（页签是操作目标，不能挤没）。 */
+  .quote-head { flex-wrap: nowrap; gap: 8px; padding: 8px 12px; }
+  .quote-head__id { min-width: 0; flex: 0 1 auto; }
+  .quote-head__price { flex: 0 0 auto; gap: 8px; }
+  .quote-head__right { width: auto; margin-left: auto; padding-top: 0; }
+  .q-tabs { flex: 0 0 auto; border-left: 0; padding-left: 0; }
   .q-tab { padding: 0 9px; font-size: 12px; }
-  .quote-head__right .panel-expand--r { margin-left: auto; }
+  .quote-head__right .panel-expand--r { margin-left: 8px; }
   .fund-panel { padding: 10px 10px 22px; }
   .fh-kv { grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 6px 12px; }
   .fh-card { padding: 9px 10px; border-radius: 8px; }
   .fh-rec__row { grid-template-columns: 54px 1fr auto; gap: 6px; }
+}
+
+/* 「总评论」合并流的来源票标记（ORCL / QQQ / NVDA / SNDK）。
+   刻意放在 INLINE_CSS 最末（与 .q-tabs / .fund-panel 同策略）：
+   躲开 680/720px 媒体块的「同特异度后写者胜」陷阱。 */
+.cp__futu__src {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: rgba(21, 101, 216, .09);
+  color: #1565d8;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 15px;
+  letter-spacing: .02em;
 }
 </style>
 <!-- INLINE_CSS:END -->
@@ -2786,6 +2826,7 @@ html, body {
     <aside class="comment-panel">
       <div class="cp__head" data-tabs="feed">
         <button class="cp-tab is-active" data-cp-tab="news" title="金十数据快讯（默认）">推荐</button>
+        <button class="cp-tab" data-cp-tab="futu" title="富途社区评论（ai-news-search.futunn.com，经 CF Worker / 本地反代，仅美股）">评论</button>
         <button class="icon-btn icon-btn--sm cp__close" title="收起"><svg viewBox="0 0 24 24" class="ic"><path d="M9 5l7 7-7 7"/></svg></button>
 </div>
       <ul class="cp__list" id="commentList"></ul>
@@ -3444,6 +3485,7 @@ html, body {
         <aside class="trade-news" id="tradeNews">
           <div class="cp__head trade-news__head" data-tabs="feedTrade">
             <button class="cp-tab is-active" data-cp-tab="news" title="金十数据快讯（默认）">推荐</button>
+            <button class="cp-tab" data-cp-tab="futu" title="富途社区评论（ai-news-search.futunn.com，经 CF Worker / 本地反代，仅美股）">评论</button>
             <button class="icon-btn icon-btn--sm trade-news__close" id="tradeNewsClose" title="收起资讯"><svg viewBox="0 0 24 24" class="ic"><path d="M9 5l7 7-7 7"/></svg></button>
           </div>
           <ul class="cp__list" id="tradeNewsList"></ul>
@@ -3571,6 +3613,6 @@ html, body {
  就没有任何入口，逻辑（app.js）/样式（index.html 内联块）/本段 HTML 一并移除。别再恢复。 -->
 </div>
 </div>
-<script defer src="app.js?v=20261015h"></script>
+<script defer src="app.js?v=20261015x"></script>
 </body>
 </html>

@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<link rel="preload" href="app.js?v=20261019e" as="script" />
+<link rel="preload" href="app.js?v=20261019g" as="script" />
 <!-- ⚠️ 用户要求「没读到数据就显示 --，别产生误导」：
  报价头/账户汇总的初始值一律 --（原来是硬编码的 137.790 / +5.190 / +3.91% 等假数字，
  页面刚加载、JS 还没跑到时就会显示出来）。真实值由 renderQuote / 账户页数据填充。 -->
@@ -1293,6 +1293,83 @@ html, body {
 @media (max-width: 720px) {
   .me-page { padding: 20px 12px 28px; }
 }
+
+/* ---- 殆知阁古籍检索面板（2026-10-19；盖在 .me-page 之上，不占新视图） ---- */
+/* ⚠️ .me-dzg / .me-page 都是 display:flex —— 会盖掉 UA 的 [hidden]{display:none}，
+   必须显式写 [hidden] 规则（与 .account-view[hidden] 同款 !important）。 */
+.me-dzg {
+  flex: 1 1 auto; min-height: 0;
+  display: flex; flex-direction: column;
+  background: var(--panel);
+}
+.me-dzg[hidden] { display: none !important; }
+.me-page[hidden] { display: none !important; }
+.dzg-bar {
+  flex: none; display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px; border-bottom: 1px solid var(--border);
+}
+.dzg-back {
+  display: inline-flex; align-items: center; gap: 1px;
+  border: 0; background: none; cursor: pointer;
+  font: inherit; font-size: 14px; color: var(--text-2); padding: 4px 6px 4px 0;
+}
+.dzg-back svg { width: 18px; height: 18px; }
+.dzg-back:hover { color: var(--accent); }
+.dzg-bar__t {
+  font-size: 16px; font-weight: 700; color: var(--text);
+  display: flex; align-items: baseline; gap: 8px; min-width: 0;
+}
+.dzg-bar__t i {
+  font-style: normal; font-size: 11px; font-weight: 400; color: var(--text-3);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.dzg-search { flex: none; display: flex; gap: 8px; padding: 12px 14px 8px; }
+.dzg-input {
+  flex: 1; min-width: 0; height: 36px; padding: 0 12px;
+  border: 1px solid var(--border-2); border-radius: 8px;
+  font: inherit; font-size: 14px; color: var(--text); background: var(--bg);
+  outline: none; -webkit-appearance: none; appearance: none;
+}
+.dzg-input:focus { border-color: var(--accent); }
+.dzg-go {
+  flex: none; height: 36px; padding: 0 16px; border: 0; border-radius: 8px;
+  background: var(--accent); color: #1a1206;
+  font: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
+}
+.dzg-go:disabled { opacity: .55; cursor: default; }
+.dzg-opts { flex: none; padding: 0 14px 6px; display: flex; flex-direction: column; gap: 8px; }
+.dzg-modes { display: inline-flex; align-self: flex-start; background: var(--panel-3); border-radius: 8px; padding: 2px; }
+.dzg-modes button {
+  border: 0; background: none; cursor: pointer; font: inherit; font-size: 12px;
+  padding: 5px 14px; border-radius: 6px; color: var(--text-2);
+}
+.dzg-modes button.is-active {
+  background: var(--panel); color: var(--text); font-weight: 600;
+  box-shadow: 0 1px 3px rgba(20, 23, 31, .12);
+}
+.dzg-cats { display: flex; flex-wrap: wrap; gap: 6px; }
+/* 逐字模式：分类整组置灰（reference.md：fulltext 服务端无分类参数） */
+.dzg-cats.is-off { opacity: .45; }
+.dzg-cats.is-off .dzg-cat { cursor: not-allowed; }
+.dzg-cat {
+  border: 1px solid var(--border-2); background: var(--panel); border-radius: 999px;
+  font: inherit; font-size: 11px; padding: 3px 10px; cursor: pointer; color: var(--text-2);
+}
+.dzg-cat.is-on { border-color: var(--accent); color: var(--accent); background: #fff6ec; }
+.dzg-status {
+  flex: none; padding: 2px 14px 8px; font-size: 11px; color: var(--text-3);
+  min-height: 16px; line-height: 1.5;
+}
+.dzg-status.is-err { color: var(--down); }
+/* 结果区 = 官方检索页 iframe（v2 弃 corsfix 自建渲染，改官方页直连）。
+   flex:1 占满余下空间，内部滚动条归官方页。 */
+.dzg-frame {
+  flex: 1 1 auto; min-height: 0;
+  margin: 0 14px 14px;
+  border: 1px solid var(--border); border-radius: 10px;
+  overflow: hidden; background: #fff;
+}
+.dzg-frame iframe { width: 100%; height: 100%; border: 0; display: block; }
 /* ---- 市场榜：三栏并排（成交/涨幅/跌幅）---- */
 .mkt {
   display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -3545,6 +3622,9 @@ html, body {
     <!-- ================= 我的（复刻富途个人中心 · 2026-10-13） =================
      布局照富途「我的」：头像区 → 6 宫格快捷入口 → 4 组菜单。
      菜单行/快捷入口暂为**纯视觉复刻**（未接功能）——要哪行跳哪告诉我就行。
+     ⚠️ 例外（2026-10-19）：「功能建议」行已改为**「殆知阁」**并接真功能——
+     古籍全文检索面板（#meDzg，数据源 daizhige.org 公开 API，经 corsfix 代理）。
+     入口按钮 id="meDzgEntry"，点击后面板盖住 .me-page（返回按钮切回）。
      头像 = avatar.jpg（用户真实头像，2026-10-14 换上；顶栏导航条底部同一张）。
      牛牛号/昵称取自用户富途账号。
      2026-10-14：会员黑卡横幅（「解锁会员享更多权益 / 去解锁」）按用户要求删除。 -->
@@ -3602,9 +3682,9 @@ html, body {
         </div>
 
         <div class="me-menu">
-          <button class="me-menu__row" type="button">
-            <span class="me-menu__icon" style="color:#4c8dff"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h9l5 5v11H5V4z"/><path d="M14 4v5h5"/><path d="M9 12h6M9 15h4"/></svg></span>
-            <span class="me-menu__label">功能建议</span>
+          <button class="me-menu__row" type="button" id="meDzgEntry" title="殆知阁 · 在线古籍全文检索（daizhige.org 公开库）">
+            <span class="me-menu__icon" style="color:#8b5a2b"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5V5.5z"/><path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H20"/><path d="M9 7.5h7M9 11h5"/></svg></span>
+            <span class="me-menu__label">殆知阁</span>
             <span class="me-menu__arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></span>
           </button>
         </div>
@@ -3617,12 +3697,45 @@ html, body {
           </button>
         </div>
       </div>
+
+      <!-- ================= 殆知阁古籍检索面板（2026-10-19 v2 · iframe 官方页直连） =================
+         「我的」页点「殆知阁」进入：面板盖住 .me-page（返回按钮切回），不新增
+         左侧 rail 视图、不动 switchView 状态机（移动端天然全宽，无需适配）。
+         v1 曾自建数据层经 corsfix 代理调 daizhige.org API；v2 弃用代理（用户
+         2026-10-19 要求）：实测官方站未设 X-Frame-Options / CSP 可嵌入，且官方
+         前端读取 q/mode/page/size/collection 全部 URL 参数——结果区直接嵌
+         https://daizhige.org/?q=… 官方检索页，我方只拼 URL、零 API 请求。
+         模式三选：逐字（fulltext，不支持分类过滤）/ 分词（normal，官方默认）/
+         精确（exact）；collection 单数可重复（reference.md 实测参数表）。
+         分页/高亮/书名自动补全/公告全部由官方页自带，我方不再实现。 -->
+      <div class="me-dzg" id="meDzg" hidden>
+        <div class="dzg-bar">
+          <button class="dzg-back" type="button" id="dzgBack"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>我的</button>
+          <div class="dzg-bar__t">殆知阁<i>在线古籍检索 · daizhige.org</i></div>
+        </div>
+        <div class="dzg-search">
+          <input class="dzg-input" id="dzgInput" type="search" placeholder="检索古籍全文，如：天地不仁" autocomplete="off">
+          <button class="dzg-go" type="button" id="dzgGo">检索</button>
+        </div>
+        <div class="dzg-opts">
+          <div class="dzg-modes" id="dzgModes">
+            <button type="button" data-mode="fulltext" class="is-active" title="逐字扫描全文 · 不支持分类过滤">逐字</button>
+            <button type="button" data-mode="normal" title="分词检索 · 相关度排序">分词</button>
+            <button type="button" data-mode="exact" title="分词索引 · 精确串匹配">精确</button>
+          </div>
+          <div class="dzg-cats" id="dzgCats" title="限定分类（可多选；全不选 = 不限）。逐字模式不支持分类过滤"></div>
+        </div>
+        <div class="dzg-status" id="dzgStatus">输入检索词——结果由官方检索页直连提供，无代理、无额度限制</div>
+        <div class="dzg-frame" id="dzgFrameWrap" hidden>
+          <iframe id="dzgFrame" title="殆知阁官方检索结果"></iframe>
+        </div>
+      </div>
     </section>
 
 <!-- 全屏走势图（#aoFs）已整体删除（用户 ）：#aoFsBtn 被 CSS 全尺寸隐藏后浮层
  就没有任何入口，逻辑（app.js）/样式（index.html 内联块）/本段 HTML 一并移除。别再恢复。 -->
 </div>
 </div>
-<script defer src="app.js?v=20261019e"></script>
+<script defer src="app.js?v=20261019g"></script>
 </body>
 </html>

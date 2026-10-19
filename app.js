@@ -2779,7 +2779,7 @@ const TICKER_TTL = 15000;
               syncPeriodTabActive(defMode);
             }
             /* 评论面板口径：**用户主动点自选里的某只票** → 切到「个股评论」
-               （只显示这一只）。默认口径「总评论」（4 只合并）由点「资讯」恢复，
+               （只显示这一只）。默认口径「总评论」（2 只合并）由点「资讯」恢复，
                见 setFutuScope 的注释与调用点。 */
             setFutuScope('single');
             loadInstrument(picked.code);
@@ -2863,7 +2863,7 @@ const TICKER_TTL = 15000;
         document.querySelectorAll('.rail__item[data-view]').forEach((b) => {
           b.classList.toggle('is-active', b.dataset.view === 'comment');
         });
-        /* 进「资讯」页 = 看**总评论**（4 只合并）；个股口径只在点了自选某只票时生效 */
+        /* 进「资讯」页 = 看**总评论**（2 只合并）；个股口径只在点了自选某只票时生效 */
         setFutuScope('all');
         redrawAfterLayout();
       }
@@ -3012,7 +3012,7 @@ const TICKER_TTL = 15000;
   function paintCpAt() {
     /* 按当前 tab 选数据源：评论（富途）与推荐（金十）各自的新鲜度，
        避免在评论 tab 里看到金十的更新时间（反之亦然）。
-       评论 tab 还要按口径取：合并视图的「最后更新」= 4 只票缓存里最新的那个。 */
+       评论 tab 还要按口径取：合并视图的「最后更新」= 2 只票缓存里最新的那个。 */
     const st = (cpTab === 'futu') ? futuAtInfo() : NEWS_STATE;
     /* 评论 tab 的降级文案（2026-10-18 真机探针后补）：完全没数据且已有失败记录时，
        头部不能还写「加载中…」——那正是用户投诉「评论一直转圈不出来」的同款错觉，
@@ -3077,13 +3077,22 @@ const TICKER_TTL = 15000;
      免 key / 免 cookie / 免登录（2026-10-18 实测），但该端点**无 CORS**
      （对任何 Origin 都不回 Access-Control-Allow-Origin）→ 浏览器不能直连，
      必须经代理。源列表按序尝试、主源自重试一次，全失败才报错：
-      ① https://proxy.corsfix.com/?url=<编码后上游>  公共 CORS 代理（BunnyCDN
-         法国节点）。2026-10-18 实测：4 只票 4/4、2.2~2.9s/次、连发 16 次全 200；
-         响应头 X-Ratelimit-Limit: 60（60 次/分钟/IP）——本应用稳态 ≤4 次/分钟，
-         用量不到限额 7%；**错误响应也带 CORS 头**（ACAO:*），429/400 浏览器
-         读得到状态码；富途错误码原样透传。⚠️ 两个坑：URL 必须**整体编码**塞进
-         ?url=（直接拼 ?url=https://…?a=1&b=2 会丢 & 后的参数）；强制要求 Origin
-         头（浏览器自动带；curl 测试要手动 -H "Origin: …"）。
+      ① https://proxy.corsfix.com/?[sdk=1&]url=<编码后上游>  公共 CORS 代理
+         （BunnyCDN 法国节点）。2026-10-18 实测：4 只票 4/4、2.2~2.9s/次、连发
+         16 次全 200；响应头 X-Ratelimit-Limit: 60（60 次/分钟/IP），本应用稳态
+         ≤2 次/分钟，用量不到限额 4%；**错误响应也带 CORS 头**（ACAO:*），
+         429/400 浏览器读得到状态码；富途错误码原样透传。
+         ⚠️ 坑一：URL 必须**整体编码**塞进 ?url=（直接拼 ?url=https://…?a=1&b=2
+         会丢 & 后的参数）；强制要求 Origin 头（浏览器自动带；curl 测试要手动
+         -H "Origin: …"）。
+         ⚠️ 坑二（2026-10-19 踩坑记录）：corsfix 免费档改制——**经典 ?url= 路径
+         对任何域名都返回 no_active_plan（要付费计划）；唯一免费通路是带 sdk=1
+         参数的「SDK 路径」**（扒 SDK 源码发现它只是加了这一个参数，无需引脚本）。
+         未注册域名带 sdk=1 也能用（10MB/月 + 同时限 1 并发，连打实测 429
+         free_tier_concurrency_limit）；域名在 app.corsfix.com 注册 application
+         后升到 100MB/月（用户 2026-10-19 已注册 taliyah94.github.io，实测两条
+         路径报错从 domain_not_registered 变为 no_active_plan = 注册已生效）。
+         本应用生产 Origin 一律带 sdk=1，本地 localhost 走开发档不带。
      ⚠️ cors.lol 已删（2026-10-18，曾作备用源）：匿名档 4 请求/5min **共享池**，
          当天实测 4/4 全 429「Rate limit exceeded」——且 429 **不带 CORS 头**，
          浏览器只能看到 opaque ERR_FAILED，既读不到状态码也永远成功不了。
@@ -3099,9 +3108,9 @@ const TICKER_TTL = 15000;
              publish_time 是 Unix **秒**（转毫秒再算相对时间）。
      节流（ corsfix 60 次/分钟/IP，响应头可查；本应用远低于限额，仍保留三层防护
             防异常连打 ）：
-           ① 白名单（FUTU_ALLOWED 4 只）+ 缓存（TTL 默认 600s，内存+localStorage
-              双写）：缓存新鲜 → 0 请求直接渲染；切票/轮询/聚焦都先过这层，
-              总请求量 ≈4×(3600/600)≈24 次/小时。
+           ① 白名单（FUTU_ALLOWED 2 只）+ 缓存（TTL 按环境分流：本地 600s /
+              生产 3600s，内存+localStorage 双写）：缓存新鲜 → 0 请求直接渲染；
+              切票/轮询/聚焦都先过这层，总请求量 ≈2×(3600/TTL) 次/小时。
            ② 全局最小请求间隔 FUTU_GAP_SEC（180s）：缓存过期后真正发请求前还要过
               这关——切 tab / 换票 / 聚焦未到点都不发（防连切）；
               换票被拦但有旧缓存 → 显示旧数据，无缓存 → 'throttled' 倒计时。
@@ -3112,20 +3121,30 @@ const TICKER_TTL = 15000;
   const FUTU_FEED_SRCS = [
     /* timeout：单次尝试超时（ms）。corsfix 实测 2.2~2.9s/次 → 10s 留足慢速余量
        （原来 6s 偏紧，偶发慢一次就整票失败、还白搭一次备用源等待）。
-       不设 coolMs：corsfix 限额 60/min 而用量 ≤4/min，没有冷却的必要。 */
-    { base: 'https://proxy.corsfix.com/?url=', wrap: true, timeout: 10000, coolMs: 0 },
+       不设 coolMs：corsfix 限额 60/min 而用量 ≤4/min，没有冷却的必要。
+       ⚠️ base 结尾不带参数：最终 URL 在 futuFetchOne 里拼，生产 Origin 会加
+       sdk=1 标记（见那里注释）——corsfix 免费档只认 SDK 路径，经典 ?url= 路径
+       2026-10-19 实测对已注册域名也返回 no_active_plan（要付费计划才行）。 */
+    { base: 'https://proxy.corsfix.com/', wrap: true, timeout: 10000, coolMs: 0 },
   ];
   /* 源健康度看板：base → 冷却截止时间戳。跨轮次保留（同一个页面会话内有效）。
      当前唯一源 coolMs=0 → 实际不走冷却；保留机制是为了加源时不用改结构。 */
   const FUTU_SRC_COOL = {};
-  /* 接入白名单：只对这 4 只票拉社区评论。
-     4 只是内容口径（用户要的「总评论」= 这 4 只合并），不是限额倒推——
-     corsfix 60/min 的配额下再翻几倍也够用。加票 = 往数组加字符串
-     （ticker 与 #qCode 显示的 code 一致，不带后缀）。 */
-  const FUTU_ALLOWED = ['ORCL', 'QQQ', 'NVDA', 'SNDK'];
+  /* 接入白名单：只对这 2 只票拉社区评论（2026-10-19 用户定稿：原 4 只
+     ORCL/QQQ/NVDA/SNDK → 3 只 → **2 只**）。
+     2 只是内容口径（用户要的「总评论」= 这 2 只合并），对应当前核心持仓：
+     ORCL（IBKR 重仓正股）、QQQ（纳指100 ETF，基金持仓 016532/016533 的唯一成分）。
+     ⚠️ 用户口头提过的「NQMain」不可用：NQMain = OKX 期货 US100-USDT-SWAP
+     （2026-10-13 已换成 QQQ，见上方自选注释），且富途该端点只认「关联股票」——
+     实测 .IXIC / NQ / NQ100 / NQMain 全部返回「未识别到关联股票」，指数/期货
+     代码拿不到社区帖；纳指话题由 QQQ 覆盖（TQQQ/NVDA 曾候补，响应体 93/109KB
+     太胖且用户只要 2 只，2026-10-19 删）。
+     加票 = 往数组加字符串（ticker 与 #qCode 显示的 code 一致、不带后缀，
+     且必须是富途认得的股票/ETF 代码）。 */
+  const FUTU_ALLOWED = ['ORCL', 'QQQ'];
   const FUTU_STATE = { items: [], loaded: false, loading: false, at: '', atTs: 0, sym: '', err: '', lastReqTs: 0, gapSec: 0 };
   /* 两个口径（2026-10-18 用户定稿）：
-       'all'    = **总评论**：白名单 4 只的帖子按时间倒序混排（每条带来源票标记）。
+       'all'    = **总评论**：白名单 2 只的帖子按时间倒序混排（每条带来源票标记）。
                   这是**默认口径**——开屏右侧评论栏、点「资讯」进去看到的都是它。
        'single' = **个股评论**：只有用户**主动点自选里的某只票**才切进来，
                   只显示那一只；点了白名单外的票 → 'nosym' 空态。
@@ -3138,24 +3157,47 @@ const TICKER_TTL = 15000;
      数据本体仍以逐票 FUTU_CACHE 为准（合并视图每次渲染现算、不存第二份，
      避免「逐票缓存」与「合并快照」两份数据打架）。 */
   const FUTU_MSTATE = { err: '', loading: false };
-  /* 合并流条数上限：4 只 × 30 条 ≈ 120，全铺开太长也无意义，取时间最近的 80 条 */
+  /* 合并流条数上限：2 只 × 最多 30 条 ≈ 60（生产 size=15 时 ≈30），全铺开
+     也不算长，保留 80 上限留余量 */
   const FUTU_MULTI_MAX = 80;
+  /* 运行环境识别（2026-10-19 加）：本地预览（http.server / 127.0.0.1 / 局域网 IP）
+     不在 corsfix 域名注册制的流量配额内 → 保持高新鲜度；其余 Origin（生产
+     GitHub Pages 等）按免费档 100MB/月 省着用。file:// 直开无 Origin 头、
+     代理必 400，本就看不了评论，无需适配。 */
+  const FUTU_IS_LOCAL = /^(localhost|127\.|192\.168\.|0\.0\.0\.0|\[::1\])/.test(location.hostname);
   /* 固定刷新间隔（秒）。所有触发共用这一个全局间隔，等于把请求按时间摊平。
      ?futugap=<秒> 可覆盖（回归测试传 0 = 关闸门）。
-     终值 180s：corsfix 限额 60/min 而稳态仅 ≈24 次/小时，限额完全不紧；
+     终值 180s：corsfix 限额 60/min 而稳态仅 ≈2 次/小时（生产 TTL 3600s）
+     / ≈12 次/小时（本地 TTL 600s），限额完全不紧；
      取 180s 是评论新鲜度（3 分钟延迟无感）与「切 tab/换票不连打」的折中。 */
   const FUTU_GAP_SEC = (function () {
     const m = /[?&]futugap=(\d+)/.exec(location.search);
     return m ? Math.max(0, parseInt(m[1], 10)) : 180;
   })();
 
-  /* 缓存 TTL（秒）：单票数据保鲜时长。默认 600s（10 分钟）。
-     定值账：4 只白名单全过期后连切 = 4 请求/10min（配额 4/5min 的 1/2.5）；
-     盯单票 = 6 次/小时（配额 48/小时的 1/8）。缓存新鲜 → 0 请求直接渲染。
+  /* 缓存 TTL（秒）：单票数据保鲜时长。**按运行环境分流**（2026-10-19，corsfix
+     免费档改域名注册制后，生产域名仅 100MB/月流量配额，本地预览无限制）：
+       · 本地预览 → 600s（10 分钟），保持高新鲜度；
+       · 生产站   → 3600s（1 小时）省流量。
+     流量账（2026-10-19 逐只实测，响应大小因票而异、差 2.4 倍）：
+       size=15：ORCL 26KB + QQQ 63KB → 一轮 89KB；TTL 3600s → 89KB/小时
+       → 30 天 ≈64MB/月，31 天+30% 长帖波动最差 ≈84MB，压在 100MB 档内。
+       （历史教训：曾按 ORCL 单只 26KB 估算 TTL 3600 只要 56MB，混入 QQQ/TQQQ
+       后实测一轮 182KB → 124MB/月超配额，故白名单收窄到 2 只才回到 3600s。
+       更稳可选 size=10：一轮 30KB → 仅 ≈21MB/月。）
      ?fututtl=<秒> 可覆盖（回归测试用小值验证过期重拉）。 */
   const FUTU_TTL_SEC = (function () {
     const m = /[?&]fututtl=(\d+)/.exec(location.search);
-    return m ? Math.max(0, parseInt(m[1], 10)) : 600;
+    if (m) return Math.max(0, parseInt(m[1], 10));
+    return FUTU_IS_LOCAL ? 600 : 3600;
+  })();
+  /* 每票拉取条数：同样按环境分流（本地 30 条看全量；生产 15 条控流量）。
+     ?futusize=<条数> 可覆盖。⚠️ size 与响应大小**非线性**（越翻越长帖越多）：
+     实测 ≈6 / 13 / 26 / 80 / 175KB @ size=5 / 10 / 15 / 20 / 30。 */
+  const FUTU_SIZE = (function () {
+    const m = /[?&]futusize=(\d+)/.exec(location.search);
+    if (m) return Math.max(1, parseInt(m[1], 10));
+    return FUTU_IS_LOCAL ? 30 : 15;
   })();
   /* 评论数据缓存：内存 Map + localStorage 持久化（关页面再开数据还在）。
      key 前缀带版本：改**已存储内容**的语义必须 bump 前缀（旧缓存自然失效重拉）。
@@ -3195,8 +3237,8 @@ const TICKER_TTL = 15000;
   }
 
   /* 当前标的：白名单制（见 FUTU_ALLOWED 注释）。
-     白名单直接匹配 ticker 字符串——QQQ 是 ETF、SNDK 2025 年从 WDC 分拆，
-     不过问 market 字段，避免 ETF/分拆股的 market 标记差异把票漏掉。 */
+     白名单直接匹配 ticker 字符串——QQQ 是 ETF，
+     不过问 market 字段，避免 ETF 的 market 标记差异把票漏掉。 */
   function futuSym() {
     const q = APP_DATA.quote || {};
     const s = String(q.code || '').trim();
@@ -3204,7 +3246,7 @@ const TICKER_TTL = 15000;
     return FUTU_ALLOWED.indexOf(s) >= 0 ? s : '';
   }
   /* 逐票缓存取用（内存优先 → localStorage 回填内存）。
-     合并视图每次渲染都会问 4 只票的缓存，回填后第二次起是纯内存读，
+     合并视图每次渲染都会问 2 只票的缓存，回填后第二次起是纯内存读，
      不会反复 JSON.parse 几百 KB 的 localStorage。 */
   function futuCacheOf(sym) {
     let c = FUTU_CACHE[sym];
@@ -3232,7 +3274,7 @@ const TICKER_TTL = 15000;
     return out;
   }
 
-  /* 「最后更新」口径：合并视图取 4 只票缓存里最新的 atTs；
+  /* 「最后更新」口径：合并视图取 2 只票缓存里最新的 atTs；
      个股视图直接用 FUTU_STATE（paintCpAt 只读 at/atTs/loaded 三个字段）。 */
   function futuAtInfo() {
     if (futuScope !== 'all') return FUTU_STATE;
@@ -3308,9 +3350,14 @@ const TICKER_TTL = 15000;
         const to = src.timeout || 10000;
         try { ctrl = new AbortController(); tid = setTimeout(() => ctrl.abort(), to); } catch (e) { ctrl = null; }
         try {
-          const upstream = 'https://ai-news-search.futunn.com/stock_feed?keyword=' + encodeURIComponent(sym) + '&size=30';
-          const url = src.wrap ? src.base + encodeURIComponent(upstream)
-                              : src.base + '/stock_feed?keyword=' + encodeURIComponent(sym) + '&size=30';
+          const upstream = 'https://ai-news-search.futunn.com/stock_feed?keyword=' + encodeURIComponent(sym) + '&size=' + FUTU_SIZE;
+          /* sdk=1 = corsfix「SDK 免费档」标记（2026-10-19 实测+官方文档）：
+             免费档只认带此参数的路径；域名已在后台注册 application 时该路径
+             = 100MB/月（未注册仅 10MB/月，且同时限 1 并发请求）。
+             本地 localhost 不加——走 corsfix 开发档（免注册、无流量上限）。 */
+          const sdkFlag = FUTU_IS_LOCAL ? '' : 'sdk=1&';
+          const url = src.wrap ? src.base + '?' + sdkFlag + 'url=' + encodeURIComponent(upstream)
+                              : src.base + 'stock_feed?keyword=' + encodeURIComponent(sym) + '&size=' + FUTU_SIZE;
           const res = await fetch(url,
             ctrl ? { signal: ctrl.signal, cache: 'no-store' } : { cache: 'no-store' });
           if (tid) clearTimeout(tid);
@@ -3371,9 +3418,9 @@ const TICKER_TTL = 15000;
 
   /* 合并口径拉取（总评论）：只补「缺失 / 过期」的票，逐票串行、间隔
      FUTU_MULTI_STEP_MS，撞 429/403 立刻停手（剩下的留到下一轮 gap 后补）。
-     额度账：4 只全过期时一轮最多 4 次真实请求；缓存 TTL 600s → 稳态仍是
-     4 次/10min（=48 次/小时配额的一半），与单票口径同一额度模型
-     （见 FUTU_TTL_SEC 注释）。中途失败不清已成功的那些票。 */
+     额度账：2 只全过期时一轮最多 2 次真实请求；生产 TTL 3600s → 稳态 2 次/小时，
+     本地 TTL 600s → 12 次/小时（localhost 无流量限制），模型见 FUTU_TTL_SEC 注释。
+     中途失败不清已成功的那些票。 */
   /* 逐票之间的间隔。?futustep=<毫秒> 可覆盖（回归测试压到 0/100 免等待）。 */
   const FUTU_MULTI_STEP_MS = (function () {
     const m = /[?&]futustep=(\d+)/.exec(location.search);
@@ -3392,7 +3439,7 @@ const TICKER_TTL = 15000;
     }
     const gapMs = (FUTU_STATE.gapSec || FUTU_GAP_SEC) * 1000;
     if (!force && FUTU_STATE.lastReqTs && Date.now() - FUTU_STATE.lastReqTs < gapMs) {
-      /* 闸门拦下：照常把现有缓存画出来（不足 4 只也只画已有的，不发请求） */
+      /* 闸门拦下：照常把现有缓存画出来（不足 2 只也只画已有的，不发请求） */
       if (cpTab === 'futu') { renderFutu(); paintCpAt(); }
       return;
     }
@@ -3513,7 +3560,7 @@ const TICKER_TTL = 15000;
   }
 
   /* 单条帖的 HTML（两个口径共用）。merged=true 时补一个来源票标记，
-     否则合并流里 4 只票的帖子混在一起看不出「这条属于哪只」。 */
+     否则合并流里 2 只票的帖子混在一起看不出「这条属于哪只」。 */
   function futuItemHtml(p, sym, merged) {
     const d = (p && p.html != null) ? p : futuDecorate(p || {});
     const src = merged ? '<span class="cp__futu__src">' + cpEsc(sym) + '</span>' : '';
@@ -3525,9 +3572,9 @@ const TICKER_TTL = 15000;
       </li>`;
   }
 
-  /* 合并口径（总评论）渲染：4 只票的缓存拼一条时间倒序流。
+  /* 合并口径（总评论）渲染：2 只票的缓存拼一条时间倒序流。
      ⚠️ 与单票分支的取舍差异：合并流里「某只失败/缺缓存」**不清场**，已有的照常显示
-     （否则一只 429 会把其余三只也抹掉）；失败只标头部后缀，列表尾不挂任何提示条
+     （否则一只 429 会把另一只也抹掉）；失败只标头部后缀，列表尾不挂任何提示条
      （2026-10-18 用户定稿：失败条、「待补」条全删）。 */
   function renderFutuMulti() {
     const els = cpListEls();
@@ -3599,7 +3646,7 @@ const TICKER_TTL = 15000;
   /* 标的变化即时跟上（不用干等 60s 轮询）：监听报价头 #qCode 文本。
      非评论 tab 下换票 → 只作废旧数据，下次切回时按 sym 差异重拉。
      ⚠️ 只在**个股口径**（futuScope==='single'）下响应：合并口径（总评论）
-     显示的是 4 只票的汇总，换不换票与它无关，跟着重拉等于白白烧配额。 */
+     显示的是 2 只票的汇总，换不换票与它无关，跟着重拉等于白白烧配额。 */
   (function watchFutuSym() {
     const el = document.getElementById('qCode');
     if (!el || typeof MutationObserver === 'undefined') return;
@@ -4341,7 +4388,7 @@ const TICKER_TTL = 15000;
       if (view === 'comment') {
         if (typeof renderCpTab === 'function') renderCpTab();
         if (typeof fetchJin10 === 'function') fetchJin10();
-        /* 桌面「资讯」= 总评论（4 只合并）；已在合并口径时 setFutuScope 内部早退，
+        /* 桌面「资讯」= 总评论（2 只合并）；已在合并口径时 setFutuScope 内部早退，
            不会重复拉（真发请求还要过 TTL + 全局 gap 闸门） */
         setFutuScope('all');
       }
@@ -6398,7 +6445,7 @@ const applyMode = (mode, skipDraw) => {
     if (Date.now() - (NEWS_STATE.atTs || 0) > 5000) fetchJin10();
     /* 评论 tab 激活时同样补刷（fetchFutuFeed 内部 60s 闸门兜底，数据够新就跳过）；
        atTs=0（从未成功拉到过）时恒判定为过期，回来即重试。
-       新鲜度按**当前口径**取：合并视图看 4 只票里最新的那个，否则「单票旧数据」
+       新鲜度按**当前口径**取：合并视图看 2 只票里最新的那个，否则「单票旧数据」
        会让总评论一直以为自己是新的、永远不补另外几只。 */
     if (cpTab === 'futu' && Date.now() - (futuAtInfo().atTs || 0) > 5000) fetchFutuFeed();
   }

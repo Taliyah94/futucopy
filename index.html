@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<link rel="preload" href="app.js?v=20261019h" as="script" />
+<link rel="preload" href="app.js?v=20261019l" as="script" />
 <!-- ⚠️ 用户要求「没读到数据就显示 --，别产生误导」：
  报价头/账户汇总的初始值一律 --（原来是硬编码的 137.790 / +5.190 / +3.91% 等假数字，
  页面刚加载、JS 还没跑到时就会显示出来）。真实值由 renderQuote / 账户页数据填充。 -->
@@ -245,12 +245,14 @@ html, body {
 
 .wl__list { flex: 1; overflow-y: auto; list-style: none; min-height: 0; }   /* min-height:0 别让长列表把下方汇总块挤没 */
 
-/* 交易页持仓列表：4 列（名称 / 现价 / 涨跌幅 / 市值·盈亏），最后一列上下两行。
- 列宽按 430px 侧栏分配：名称 1fr（183px），现价 62、涨跌 54、市值/盈亏 90。
- 名称缩写规则（去 (QDII)/ETF/发起联接）腾出空间后，字号可以放大：
- 最长名「嘉实纳斯达克100A人民币」13px 实测 153px，距 183px 还有 30px 余量。 */
+/* 交易页持仓列表：名称 / 现价(副行:涨跌幅) / 市值·盈亏（2026-10-19 用户定稿：
+ 「涨跌幅写在现价下面副行，绿涨红跌，留出空给总资产曲线」→ 原第 3 列「涨跌幅」
+ 60px + 1 个间距随侧栏收窄让给曲线，侧栏 430 → 365px）。
+ 列宽按 365px 侧栏分配：名称 1fr（169px，与改前一致），现价 66、市值/盈亏 96。 */
 .wl__columns--4,
-.wl__list--4 .wl__row { grid-template-columns: minmax(0, 1fr) 66px 60px 96px; gap: 5px; }
+.wl__list--4 .wl__row { grid-template-columns: minmax(0, 1fr) 66px 96px; gap: 5px; }
+/* 涨跌幅并入现价副行 → 表头该列隐藏（移动端 4 列还原，见 855 行 680 媒体块） */
+.wl__columns--4 .wl-col-pct { display: none; }
 .wl__columns--4 span { white-space: nowrap; }
 .wl__columns--4 span:first-child { overflow: hidden; text-overflow: ellipsis; }
 .wl__columns--4 span:nth-child(4),
@@ -272,9 +274,26 @@ html, body {
  缩写后 13px 时有 30px 余量，14px 仍留约 20px） */
 .wl__list--4 .wl-name b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
 .wl__list--4 .wl-name span { font-size: 11px; }
-/* 现价 / 涨跌幅两列：数字列也放大到与名称匹配 */
-.wl__list--4 .wl-price,
-.wl__list--4 .wl-pct { font-size: 14px; }
+/* 现价格两行：主行现价 14px/700 / 副行涨跌幅 11px（2026-10-19 用户定稿：
+ 「涨跌幅写在现价下面副行，也是绿涨红跌」）。结构与 .wl-vp 的 b/i 完全一致。
+ ⚠️ 颜色必须按 class 显式声明——`.wl__list--4 .wl-price b`(0,2,1) 会盖掉全局
+ `.up`(0,1,0)，只靠模板 className 不上色（wl-vp 同款坑，见 261 行注释）。
+ 副行无涨跌（期权 pct=null → '--' / 0%）走灰 text-3，与 vp 副行同口径。 */
+.wl__list--4 .wl-price {
+  display: flex; flex-direction: column; align-items: flex-end; justify-content: center;
+  line-height: 1.25; min-width: 0;
+}
+.wl__list--4 .wl-price b {
+  font-size: 14px; font-weight: 700; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
+}
+.wl__list--4 .wl-price i {
+  font-style: normal; font-size: 11px; margin-top: 2px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
+}
+.wl__list--4 .wl-price b.up, .wl__list--4 .wl-price i.up { color: var(--up); }
+.wl__list--4 .wl-price b.down, .wl__list--4 .wl-price i.down { color: var(--down); }
+.wl__list--4 .wl-price i:not(.up):not(.down) { color: var(--text-3); }
 .wl__row--empty { color: var(--text-3); cursor: default; }
 .wl__row--empty .wl-name b { font-weight: 400; color: var(--text-3); }
 
@@ -748,16 +767,25 @@ html, body {
  富途原站没有「作者名」字段（该端点只回 id/title/desc/publish_time/url），
  所以不做头像/昵称行，正文 + 相对时间 + 原文链接即可。 */
 .cp__futu__text {
-  margin: 0 0 6px; font-size: 13px; line-height: 1.65; color: var(--text); word-break: break-word;
-  /* 富途评论正文楷体（2026-10-19 用户定稿）：系统楷体，不引 Web Font。
-     曾试用霞鹜文楷 TC 自托管（fonts/lxgw-wenkai-tc/，已删）——用户嫌不好看，回退系统栈。
-     KaiTi=Windows 简体楷体、Kaiti SC=macOS 简体楷体、STKaiti=macOS 旧版，最后 serif 兜底。
-     行高 1.55→1.65：楷体笔画密，原行高略挤。仅正文换字体；11px/10px 的 meta、
-     时间、标签、UI 骨架保持无衬线（小字号楷体笔画发虚）。
-     正文简→繁转换见 app.js futuDecorate（opencc cn→t 标准繁体，仅展示层，缓存仍存原文）——
-     转换与字体独立，任何字体下都生效。 */
-  font-family: "KaiTi", "Kaiti SC", "STKaiti", serif;
+  margin: 0 0 6px; font-size: 13px; line-height: 1.55; color: var(--text); word-break: break-word;
+  /* 2026-10-19 用户定稿两改：① **默认字体**（系统无衬线）——楷体方案回退
+     （用户嫌不好看）；曾试霞鹜文楷 TC 自托管（fonts/lxgw-wenkai-tc/，已删），也别恢复。
+     行高随楷体补偿一起退回 1.55（与新闻正文同款）。
+     ② **正文最多 5 行**：-webkit-line-clamp 截断，引擎自动补省略号；实际溢出才挂
+     「全文」按钮（JS 量 scrollHeight>clientHeight 加 .is-clamp），点正文/全文展开
+     （.is-open 解除钳制），再点收起。
+     简→繁转换见 app.js futuDecorate，与字体/钳制彼此独立。 */
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 5; overflow: hidden;
 }
+.cp__futu__text.is-open { display: block; -webkit-line-clamp: unset; overflow: visible; }
+.cp__futu__text.is-clamp { cursor: pointer; }
+/* 「全文」按钮：插在正文与 meta 行之间，仅溢出帖才有（JS 动态插） */
+.cp__futu__more {
+  display: inline-block; margin: 0 0 6px; padding: 0;
+  border: 0; background: none; cursor: pointer;
+  font-size: 11px; line-height: 1; color: var(--accent);
+}
+.cp__futu__more:hover { text-decoration: underline; }
 .cp__futu__meta { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--text-3); }
 .cp__futu__meta a { margin-left: auto; color: var(--accent); text-decoration: none; }
 .cp__futu__meta a:hover { text-decoration: underline; }
@@ -969,8 +997,19 @@ html, body {
   .trade-sum__open { display: flex; }
   /* 名称字号已在基础规则统一 11px（两端一致），这里不用再覆盖 */
   /* 移动端不显示右侧主区，交易页就是「持仓列表 + 汇总」全宽一屏。
- 桌面端保留占位（`.trade-empty`），那里右侧是空的、留个提示不突兀。 */
+  桌面端保留占位（`.trade-empty`），那里右侧是空的、留个提示不突兀。 */
   .trade-view .trade-main { display: none !important; }
+
+  /* 移动端持仓列表**保持 4 列**（用户 2026-10-19：「移动端不变」）：桌面端把涨跌幅
+  并进了现价副行（3 列 + 侧栏 430→365），这里① 还原 4 列网格（表头 + 行同一套）；
+  ② `.wl-price` 改 `display:contents` → 其 b/i 拆成行的直接网格项（现价 / 涨跌幅
+  各占一格，涨跌幅字号回 14px、与改前一致）；③ 表头「涨跌幅」span 显回。
+  ⚠️ 基础规则（252~300 行）都在本媒体查询**之前** → 同特异度后写者胜，无需 !important。 */
+  .wl__columns--4,
+  .wl__list--4 .wl__row { grid-template-columns: minmax(0, 1fr) 66px 60px 96px; }
+  .wl__list--4 .wl-price { display: contents; }
+  .wl__list--4 .wl-price i { font-size: 14px; margin-top: 0; }
+  .wl__columns--4 .wl-col-pct { display: block; }
 
   /* 图表区：移动端默认隐藏（主页只显示自选），加 .is-chart-mode 才显示 */
   .chart-area { display: none !important; }
@@ -1323,46 +1362,9 @@ html, body {
   font-style: normal; font-size: 11px; font-weight: 400; color: var(--text-3);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.dzg-search { flex: none; display: flex; gap: 8px; padding: 12px 14px 8px; }
-.dzg-input {
-  flex: 1; min-width: 0; height: 36px; padding: 0 12px;
-  border: 1px solid var(--border-2); border-radius: 8px;
-  font: inherit; font-size: 14px; color: var(--text); background: var(--bg);
-  outline: none; -webkit-appearance: none; appearance: none;
-}
-.dzg-input:focus { border-color: var(--accent); }
-.dzg-go {
-  flex: none; height: 36px; padding: 0 16px; border: 0; border-radius: 8px;
-  background: var(--accent); color: #1a1206;
-  font: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
-}
-.dzg-go:disabled { opacity: .55; cursor: default; }
-.dzg-opts { flex: none; padding: 0 14px 6px; display: flex; flex-direction: column; gap: 8px; }
-.dzg-modes { display: inline-flex; align-self: flex-start; background: var(--panel-3); border-radius: 8px; padding: 2px; }
-.dzg-modes button {
-  border: 0; background: none; cursor: pointer; font: inherit; font-size: 12px;
-  padding: 5px 14px; border-radius: 6px; color: var(--text-2);
-}
-.dzg-modes button.is-active {
-  background: var(--panel); color: var(--text); font-weight: 600;
-  box-shadow: 0 1px 3px rgba(20, 23, 31, .12);
-}
-.dzg-cats { display: flex; flex-wrap: wrap; gap: 6px; }
-/* 逐字模式：分类整组置灰（reference.md：fulltext 服务端无分类参数） */
-.dzg-cats.is-off { opacity: .45; }
-.dzg-cats.is-off .dzg-cat { cursor: not-allowed; }
-.dzg-cat {
-  border: 1px solid var(--border-2); background: var(--panel); border-radius: 999px;
-  font: inherit; font-size: 11px; padding: 3px 10px; cursor: pointer; color: var(--text-2);
-}
-.dzg-cat.is-on { border-color: var(--accent); color: var(--accent); background: #fff6ec; }
-.dzg-status {
-  flex: none; padding: 2px 14px 8px; font-size: 11px; color: var(--text-3);
-  min-height: 16px; line-height: 1.5;
-}
-.dzg-status.is-err { color: var(--down); }
-/* 结果区 = 官方检索页 iframe（v2 弃 corsfix 自建渲染，改官方页直连）。
-   flex:1 占满余下空间，内部滚动条归官方页。 */
+/* 结果区 = 官方站整页 iframe（v3 用户定稿：自建检索框架全删，点入口直接进官方页；
+   官方页自带检索 UI/分页/公告，我方只挂 src + 返回）。
+   flex:1 占满余下空间，内部滚动归官方页。 */
 .dzg-frame {
   flex: 1 1 auto; min-height: 0;
   margin: 0 14px 14px;
@@ -1565,6 +1567,10 @@ html, body {
   font-style: normal; font-size: 11px; color: var(--text-3);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* 名称副行：代码后带 FMP 细行业（renderIndexTable opts.fiSub，仅「全部个股」表；
+   每日只补前 120 只 → 其余行不显示）。分隔点走 ::before 不进文本，截断时整体消失。 */
+.idx-const .us-top__n .us-top__fi { color: var(--text-2); }
+.idx-const .us-top__n .us-top__fi::before { content: "· "; color: var(--text-3); }
 /* 市值单元格两行：主行市值 / 副行权重（对齐 .us-top__n 的 b/i 结构） */
 .idx-const .us-top__m {
   display: flex; flex-direction: column; justify-content: center;
@@ -1715,15 +1721,15 @@ html, body {
  实测 430px 下 名称/成交额/现价/涨跌幅 全部装下、零横滑。 */
   .mkt__row { grid-template-columns: 22px 96px 1fr 68px 60px; }
 }
-/* 交易页侧栏宽度：让名称列的可视宽度与移动端（430px 全宽）一致 ——
- 移动端 430 - 24内边距 - 62现价 - 54涨跌 - 90市值 - 4×5间距 = 180px 给名称；
- 桌面若只给 332px，名称只剩 82px，长基金名几乎全是省略号。 */
-.trade-view .watchlist--trade { flex: 0 0 430px; }
-.trade-view .watchlist--trade > * { width: 430px; }
+/* 交易页侧栏宽度：430 → 365px（2026-10-19 用户定稿「涨跌幅并进现价副行，留出空给
+ 总资产曲线」）—— 省出原「涨跌幅」列 60px + 1 个 5px 间距 = 65px 全给右侧曲线。
+ 365 - 24内边距 - 66现价 - 96市值 - 2×5间距 = 169px 给名称（与改前 4 列时一致）。 */
+.trade-view .watchlist--trade { flex: 0 0 365px; }
+.trade-view .watchlist--trade > * { width: 365px; }
 /* 桌面端收起/展开（用户 ：「桌面端这里右边加个自选一样的收起箭头」） */
 .wl__actions { display: flex; gap: 2px; flex: none; }
 /* 收起态：⚠️ 必须比上面那条多一级 class（0,3,0 > 0,2,0）——
- 否则 `.trade-view .watchlist--trade { flex: 0 0 430px }`（写在后面）会盖掉
+ 否则 `.trade-view .watchlist--trade { flex: 0 0 365px }`（写在后面）会盖掉
  `.watchlist.is-collapsed { flex-basis: 0 }`，侧栏收不起来。 */
 .trade-view .watchlist--trade.is-collapsed {
   flex-basis: 0;
@@ -2913,7 +2919,7 @@ html, body {
     <aside class="comment-panel">
       <div class="cp__head" data-tabs="feed">
         <button class="cp-tab is-active" data-cp-tab="news" title="金十数据快讯（默认）">推荐</button>
-        <button class="cp-tab" data-cp-tab="futu" title="富途社区评论（ai-news-search.futunn.com，经 CF Worker / 本地反代，仅美股）">评论</button>
+        <button class="cp-tab" data-cp-tab="futu" title="富途社区评论（ai-news-search.futunn.com，经 corsfix 代理，仅美股）">评论</button>
         <button class="icon-btn icon-btn--sm cp__close" title="收起"><svg viewBox="0 0 24 24" class="ic"><path d="M9 5l7 7-7 7"/></svg></button>
 </div>
       <ul class="cp__list" id="commentList"></ul>
@@ -3458,7 +3464,7 @@ html, body {
         <div class="wl__columns wl__columns--4">
           <span>名称代码</span>
           <span>现价</span>
-          <span>涨跌幅</span>
+          <span class="wl-col-pct">涨跌幅</span>
           <span class="ta-r">市值/盈亏</span>
         </div>
         <ul class="wl__list wl__list--4" id="watchlistTrade"></ul>
@@ -3572,7 +3578,7 @@ html, body {
         <aside class="trade-news" id="tradeNews">
           <div class="cp__head trade-news__head" data-tabs="feedTrade">
             <button class="cp-tab is-active" data-cp-tab="news" title="金十数据快讯（默认）">推荐</button>
-            <button class="cp-tab" data-cp-tab="futu" title="富途社区评论（ai-news-search.futunn.com，经 CF Worker / 本地反代，仅美股）">评论</button>
+            <button class="cp-tab" data-cp-tab="futu" title="富途社区评论（ai-news-search.futunn.com，经 corsfix 代理，仅美股）">评论</button>
             <button class="icon-btn icon-btn--sm trade-news__close" id="tradeNewsClose" title="收起资讯"><svg viewBox="0 0 24 24" class="ic"><path d="M9 5l7 7-7 7"/></svg></button>
           </div>
           <ul class="cp__list" id="tradeNewsList"></ul>
@@ -3682,7 +3688,7 @@ html, body {
         </div>
 
         <div class="me-menu">
-          <button class="me-menu__row" type="button" id="meDzgEntry" title="殆知阁 · 在线古籍全文检索（daizhige.org 公开库）">
+          <button class="me-menu__row" type="button" id="meDzgEntry" title="殆知阁 · 在线古籍全文检索（直连 daizhige.org）">
             <span class="me-menu__icon" style="color:#8b5a2b"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5V5.5z"/><path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H20"/><path d="M9 7.5h7M9 11h5"/></svg></span>
             <span class="me-menu__label">殆知阁</span>
             <span class="me-menu__arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></span>
@@ -3698,36 +3704,20 @@ html, body {
         </div>
       </div>
 
-      <!-- ================= 殆知阁古籍检索面板（2026-10-19 v2 · iframe 官方页直连） =================
+      <!-- ================= 殆知阁古籍检索面板（2026-10-19 v3 · iframe 官方页直连） =================
          「我的」页点「殆知阁」进入：面板盖住 .me-page（返回按钮切回），不新增
          左侧 rail 视图、不动 switchView 状态机（移动端天然全宽，无需适配）。
-         v1 曾自建数据层经 corsfix 代理调 daizhige.org API；v2 弃用代理（用户
-         2026-10-19 要求）：实测官方站未设 X-Frame-Options / CSP 可嵌入，且官方
-         前端读取 q/mode/page/size/collection 全部 URL 参数——结果区直接嵌
-         https://daizhige.org/?q=… 官方检索页，我方只拼 URL、零 API 请求。
-         模式三选：逐字（fulltext，不支持分类过滤）/ 分词（normal，官方默认）/
-         精确（exact）；collection 单数可重复（reference.md 实测参数表）。
-         分页/高亮/书名自动补全/公告全部由官方页自带，我方不再实现。 -->
+         用户 2026-10-19 定稿「自建框架不要了，点开直接就进 iframe」：v2 的检索
+         输入框/模式三选/十大分类/状态行全部删除——官方页自带完整检索 UI，我方
+         只做「入口 → iframe 直连 https://daizhige.org/（懒加载，首次才设 src）」
+         + 返回。iframe 由 app.js initDzg 挂 src，见那里注释。 -->
       <div class="me-dzg" id="meDzg" hidden>
         <div class="dzg-bar">
           <button class="dzg-back" type="button" id="dzgBack"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>我的</button>
           <div class="dzg-bar__t">殆知阁<i>在线古籍检索 · daizhige.org</i></div>
         </div>
-        <div class="dzg-search">
-          <input class="dzg-input" id="dzgInput" type="search" placeholder="检索古籍全文，如：天地不仁" autocomplete="off">
-          <button class="dzg-go" type="button" id="dzgGo">检索</button>
-        </div>
-        <div class="dzg-opts">
-          <div class="dzg-modes" id="dzgModes">
-            <button type="button" data-mode="fulltext" class="is-active" title="逐字扫描全文 · 不支持分类过滤">逐字</button>
-            <button type="button" data-mode="normal" title="分词检索 · 相关度排序">分词</button>
-            <button type="button" data-mode="exact" title="分词索引 · 精确串匹配">精确</button>
-          </div>
-          <div class="dzg-cats" id="dzgCats" title="限定分类（可多选；全不选 = 不限）。逐字模式不支持分类过滤"></div>
-        </div>
-        <div class="dzg-status" id="dzgStatus">输入检索词——结果由官方检索页直连提供，无代理、无额度限制</div>
-        <div class="dzg-frame" id="dzgFrameWrap" hidden>
-          <iframe id="dzgFrame" title="殆知阁官方检索结果"></iframe>
+        <div class="dzg-frame">
+          <iframe id="dzgFrame" title="殆知阁 · daizhige.org 官方检索页"></iframe>
         </div>
       </div>
     </section>
@@ -3736,6 +3726,6 @@ html, body {
  就没有任何入口，逻辑（app.js）/样式（index.html 内联块）/本段 HTML 一并移除。别再恢复。 -->
 </div>
 </div>
-<script defer src="app.js?v=20261019h"></script>
+<script defer src="app.js?v=20261019l"></script>
 </body>
 </html>

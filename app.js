@@ -2678,8 +2678,15 @@ const TICKER_TTL = 15000;
             <b>${tradeShortName(it.name)}</b>
             <span>${caret}${it.code} · ${it.kind}</span>
           </span>
-          <span class="wl-price num ${c}">${fmt(it.price, it.decimals)}</span>
-          <span class="wl-pct num ${c}">${fmtPct(it.pct)}</span>
+          <span class="wl-price">
+            <!-- 现价 / 涨跌幅两行（2026-10-19 用户定稿：「涨跌幅写在现价下面副行，
+                 也是绿涨红跌」）—— 省出的一列宽度随侧栏 430→365 让给总资产曲线。
+                 主行现价着色沿用旧口径 c（pct；期权回落 pnl 方向）；
+                 副行涨跌幅只认 pct 本身（cls(null)='flat' → 期权 '--' 走灰，
+                 不再被 pnl 方向染成绿/红——'--' 是无数据，不该带方向色）。 -->
+            <b class="num ${c}">${fmt(it.price, it.decimals)}</b>
+            <i class="num ${cls(it.pct)}">${fmtPct(it.pct)}</i>
+          </span>
           <span class="wl-vp">
             <!-- 市值也跟着涨跌上色（用户 2026-10-05：「市值也根据涨跌变颜色」），
                  用现价/涨跌幅那一档的 cls(pct)；下方盈亏仍按自身正负取色（clsCls(pnl)）。 -->
@@ -3126,17 +3133,20 @@ const TICKER_TTL = 15000;
      字段坑：title/desc 带 HTML 标签与数字实体 → 渲染前必须剥；
              正文股票标签 $名字 (CODE.US)$ → cpEsc 后包 span.cp__futu__sym（蓝色）；
              publish_time 是 Unix **秒**（转毫秒再算相对时间）。
-     节流（ corsfix 60 次/分钟/IP，响应头可查；本应用远低于限额，仍保留三层防护
-            防异常连打 ）：
-           ① 白名单（FUTU_ALLOWED 2 只）+ 缓存（TTL 按环境分流：本地 600s /
-              生产 3600s，内存+localStorage 双写）：缓存新鲜 → 0 请求直接渲染；
-              切票/轮询/聚焦都先过这层，总请求量 ≈2×(3600/TTL) 次/小时。
-           ② 全局最小请求间隔 FUTU_GAP_SEC（180s）：缓存过期后真正发请求前还要过
-              这关——切 tab / 换票 / 聚焦未到点都不发（防连切）；
-              换票被拦但有旧缓存 → 显示旧数据，无缓存 → 'throttled' 倒计时。
-           ③ 退避：连续全败间隔加倍（封顶 600s），成功即复位。
-           轮询 setInterval 固定 gap 秒，仅本 tab 激活 + 页面前台时跑；缓存新鲜时
-           自然空转（不发请求）。换标的由 #qCode 的 MutationObserver 即时触发。
+     触发与额度（corsfix 60 次/分钟/IP，响应头可查；本应用用量远低于限额）：
+     **纯手动刷新**（2026-10-19 用户定稿）——唯一拉取触发是面板头部「↻ 刷新」
+     按钮（fetchFutuFeed(true)）：点一次才拉，不轮询、不聚焦补刷、换票不拉；
+     进评论 tab / 切口径只渲染本地缓存（内存+localStorage 双写），0 请求，
+     无缓存显示「点 ↻ 刷新 加载」引导。换票（个股口径）只作废旧数据不拉取
+     （watchFutuSym），下次点刷新才拉新票。
+           ① 白名单 FUTU_ALLOWED 2 只（ORCL/QQQ）：只有这 2 只拉社区帖，
+              合并口径 = 2 只混排；点一次刷新 = 2 只各拉一次。
+           ② TTL 按环境分流（本地 600s / 生产 3600s）：**只管非 force 拉取**——
+              当前唯一触发就是 force=true（用户点刷新就是要新数据，不能被缓存
+              年龄挡住）→ TTL 不拦刷新，也不参与渲染（渲染纯读缓存）。
+           ③ 遗留保险（当前不可达，为将来恢复自动触发预留）：全局最小请求间隔
+              FUTU_GAP_SEC（180s）+ 连续全败间隔加倍（封顶 600s）都只在 !force
+              分支里，手动刷新全部绕过；若将来加轮询/聚焦/换票触发即自动生效。
      =================================================================== */
   const FUTU_FEED_SRCS = [
     /* timeout：单次尝试超时（ms）。corsfix 实测 2.2~2.9s/次 → 10s 留足慢速余量
@@ -3185,11 +3195,11 @@ const TICKER_TTL = 15000;
      GitHub Pages 等）按免费档 100MB/月 省着用。file:// 直开无 Origin 头、
      代理必 400，本就看不了评论，无需适配。 */
   const FUTU_IS_LOCAL = /^(localhost|127\.|192\.168\.|0\.0\.0\.0|\[::1\])/.test(location.hostname);
-  /* 固定刷新间隔（秒）。所有触发共用这一个全局间隔，等于把请求按时间摊平。
-     ?futugap=<秒> 可覆盖（回归测试传 0 = 关闸门）。
-     终值 180s：corsfix 限额 60/min 而稳态仅 ≈2 次/小时（生产 TTL 3600s）
-     / ≈12 次/小时（本地 TTL 600s），限额完全不紧；
-     取 180s 是评论新鲜度（3 分钟延迟无感）与「切 tab/换票不连打」的折中。 */
+  /* 全局最小请求间隔（秒）：非 force 拉取前还要过这关——距上次真实请求不足
+     gap 就不发（防连打）。?futugap=<秒> 可覆盖（回归测试传 0 = 关闸门）。
+     ⚠️ 2026-10-19 纯手动刷新后**当前不可达**：唯一触发「↻ 刷新」是 force=true
+     直接绕过；保留是为将来恢复自动触发（轮询/聚焦/换票）时的保险，别当生效中
+     的逻辑读。终值 180s：corsfix 限额 60/min，自动触发场景稳态也就十几次/小时。 */
   const FUTU_GAP_SEC = (function () {
     const m = /[?&]futugap=(\d+)/.exec(location.search);
     return m ? Math.max(0, parseInt(m[1], 10)) : 180;
@@ -3237,12 +3247,21 @@ const TICKER_TTL = 15000;
   function futuLsSet(sym, items, atTs) {
     try {
       localStorage.setItem(FUTU_LS_PREFIX + sym, JSON.stringify({
-        items: items.slice(0, 60).map((p) => ({ id: p.id, text: p.text, ts: p.ts, url: p.url })),
+        items: futuRawItems(items).slice(0, 60),
         atTs: atTs,
       }));
     } catch (e) { /* 隐私模式/超额：静默降级为内存缓存 */ }
   }
   /* 裸 item → 渲染 item：补 cashtag 蓝色高亮 html（缓存只存 text，渲染时重生成） */
+  /* 存缓存一律只存**原文**（id/text/ts/url，不含 html）：html 是展示层产物
+     （简→繁 + 股票标签高亮），必须渲染时经 futuDecorate 现算。
+     2026-10-19 修：曾把 futuFetchOne 产出的**未转换** html 一并存进 FUTU_CACHE，
+     而 futuItemHtml 见 html 非空就直接用 → 合并口径（默认视图）和单票「新拉」
+     路径渲染的全是简体，只有 localStorage 回填的（恰好不含 html）才是繁体——
+     同一页面两种口径。现在缓存层统一原文，渲染层统一转换。 */
+  function futuRawItems(items) {
+    return (items || []).map((p) => ({ id: p.id, text: p.text, ts: p.ts, url: p.url }));
+  }
   /* 简→繁转换器（opencc cn→t 标准繁体，2026-10-19 用户定稿「评论内容转繁体，要标准繁体不要台湾正体」）。
      实现为两段式的第一段 only：from.cn（单字表+短语表）输出即 OpenCC 标准繁体，
      不挂 to.tw 地区变体（着→著/裏→裡/羣→群 那 42 组不做，用户明确不要）。
@@ -3498,7 +3517,9 @@ const TICKER_TTL = 15000;
     }
     const gapMs = (FUTU_STATE.gapSec || FUTU_GAP_SEC) * 1000;
     if (!force && FUTU_STATE.lastReqTs && Date.now() - FUTU_STATE.lastReqTs < gapMs) {
-      /* 闸门拦下：照常把现有缓存画出来（不足 2 只也只画已有的，不发请求） */
+      /* 闸门拦下：照常把现有缓存画出来（不足 2 只也只画已有的，不发请求）。
+         ⚠️ !force 才可达；当前唯一触发「↻ 刷新」是 force=true，手动刷新模式下
+         这堵墙形同虚设（为将来自动触发预留，见文件头「触发与额度」注释）。 */
       if (cpTab === 'futu') { renderFutu(); paintCpAt(); }
       return;
     }
@@ -3522,7 +3543,8 @@ const TICKER_TTL = 15000;
           continue;
         }
         const atTs = Date.now();
-        FUTU_CACHE[sym] = { items: r.items, atTs: atTs };
+        /* 只存原文（不含 html）：展示层转换见 futuRawItems 注释 */
+        FUTU_CACHE[sym] = { items: futuRawItems(r.items), atTs: atTs };
         futuLsSet(sym, r.items, atTs);
         FUTU_STATE.gapSec = 0;               // 有成功 → 退避复位
         /* 逐票渲染（2026-10-18 改）：原来只在 4 只全跑完后才画一次，冷启动时
@@ -3580,7 +3602,9 @@ const TICKER_TTL = 15000;
     /* 限流闸门（全局）：距上次真实请求不足 gap → 不发请求。
        换票被拦 → 若已有旧数据则保留显示（渲染层 err='throttled' 时追加提示），
        无数据则 err='throttled'（渲染层显示倒计时）；
-       同票被拦 → 静默返回，界面保持上次成功的数据。 */
+       同票被拦 → 静默返回，界面保持上次成功的数据。
+       ⚠️ 同样只在 !force 可达：纯手动刷新（唯一触发 force=true）下不会进这里，
+       保留供将来自动触发用。 */
     const gapMs = (FUTU_STATE.gapSec || FUTU_GAP_SEC) * 1000;
     if (!force && FUTU_STATE.lastReqTs && Date.now() - FUTU_STATE.lastReqTs < gapMs) {
       if (FUTU_STATE.sym !== sym) {
@@ -3597,12 +3621,13 @@ const TICKER_TTL = 15000;
       const r = await futuFetchOne(sym);
       if (r.ok) {
         FUTU_STATE.sym = sym; FUTU_STATE.loaded = true; FUTU_STATE.err = '';
-        FUTU_STATE.items = r.items;
+        /* 展示层现转繁体（与缓存命中路径 3571 行同口径）；缓存只存原文 */
+        FUTU_STATE.items = r.items.map(futuDecorate);
         FUTU_STATE.atTs = Date.now();
         FUTU_STATE.gapSec = 0; /* 成功 → 退避复位 */
         FUTU_STATE.at = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
         /* 双写缓存：内存（本会话切票秒切）+ localStorage（跨会话/刷新） */
-        FUTU_CACHE[sym] = { items: r.items, atTs: FUTU_STATE.atTs };
+        FUTU_CACHE[sym] = { items: futuRawItems(r.items), atTs: FUTU_STATE.atTs };
         futuLsSet(sym, r.items, FUTU_STATE.atTs);
       } else {
         /* 所有源都失败：err 记上；已有数据是**别的票**的 → 清空（不能混着显示）；
@@ -3629,6 +3654,28 @@ const TICKER_TTL = 15000;
         <div class="cp__futu__meta">${src}<span>${cpEsc(futuAgo(d.ts))}</span>${
       d.url ? '<a href="' + cpEsc(d.url) + '" target="_blank" rel="noopener">查看原文</a>' : ''}</div>
       </li>`;
+  }
+
+  /* 正文 5 行钳制的收尾（2026-10-19 用户定稿）：CSS 已把 .cp__futu__text 钳到
+     5 行+省略号，这里只量**实际是否溢出**——溢出的才插「全文」按钮并加 is-clamp
+     （可点光标），不溢出的短帖什么都不加，保持列表干净。
+     ⚠️ 每次渲染后必须重跑：innerHTML 整块替换 → 旧节点/旧类/展开态全丢，
+     重新渲染（刷新/切 tab/切票）自然回到钳制态，符合「点开看全文」的一次性心智。
+     ⚠️ 依赖可见布局：scrollHeight 在 display:none 的面板上恒为 0 → 隐藏中的
+     面板不插按钮；现有渲染时机（切 tab/切视图/刷新）都发生在面板可见时，不漏。 */
+  function futuBindClamp(root) {
+    if (!root) return;
+    root.querySelectorAll('.cp__futu__text').forEach((p) => {
+      if (p.scrollHeight <= p.clientHeight + 1) return;   // 没溢出：短帖不加按钮
+      p.classList.add('is-clamp');
+      const next = p.nextElementSibling;
+      if (next && next.classList.contains('cp__futu__more')) return;  // 已有按钮
+      const more = document.createElement('button');
+      more.type = 'button';
+      more.className = 'cp__futu__more';
+      more.textContent = '全文';
+      p.parentNode.insertBefore(more, next);
+    });
   }
 
   /* 合并口径（总评论）渲染：2 只票的缓存拼一条时间倒序流。
@@ -3659,7 +3706,7 @@ const TICKER_TTL = 15000;
          刷新失败只标头部后缀；「待补」也删——冷启动缺票时列表就是短一截，
          下一轮自动补上，挂在尾巴上反而像报错。 */
     }
-    els.forEach((ul) => { ul.innerHTML = html; });
+    els.forEach((ul) => { ul.innerHTML = html; futuBindClamp(ul); });
   }
 
   function renderFutu() {
@@ -3684,7 +3731,7 @@ const TICKER_TTL = 15000;
         ? Math.max(1, Math.ceil((FUTU_STATE.gapSec || FUTU_GAP_SEC) - (Date.now() - FUTU_STATE.lastReqTs) / 1000))
         : FUTU_GAP_SEC;
       html = '<li class="cp__item cp__item--empty"><p class="cp__text">正在为下一只票节省请求额度<br>'
-        + left + ' 秒后自动刷新（公共代理限流，按固定间隔拉取）</p></li>';
+        + left + ' 秒后可再次手动刷新（公共代理限流，按固定间隔拉取）</p></li>';
     } else if (FUTU_STATE.err === 'throttled' && FUTU_STATE.items.length) {
       /* 换票被闸门拦但缓存里有旧数据：先显示旧数据，尾条说明 */
       html = FUTU_STATE.items.map((p) => futuItemHtml(p, '', false)).join('')
@@ -3703,7 +3750,7 @@ const TICKER_TTL = 15000;
             + cpEsc(futuAgo(Math.floor((FUTU_STATE.atTs || 0) / 1000)) || '较早') + '的数据</li>'
           : '');
     }
-    els.forEach((ul) => { ul.innerHTML = html; });
+    els.forEach((ul) => { ul.innerHTML = html; futuBindClamp(ul); });
   }
 
   /* 标的变化即时跟上（不用干等 60s 轮询）：监听报价头 #qCode 文本。
@@ -3724,6 +3771,22 @@ const TICKER_TTL = 15000;
       FUTU_STATE.items = []; FUTU_STATE.err = '';
     }).observe(el, { childList: true, characterData: true, subtree: true });
   })();
+
+  /* 正文展开/收起（2026-10-19）：点被钳制的正文或「全文」按钮 → 切 .is-open。
+     事件委托挂 document：列表 innerHTML 每次渲染整块替换，直接给节点绑监听
+     下次渲染就丢；.cp__futu 只存在于评论流，选择器不会误伤其它面板。
+     按钮文案跟着状态走（全文↔收起）。 */
+  document.addEventListener('click', (e) => {
+    const t = e.target.closest('.cp__futu__text.is-clamp, .cp__futu__more');
+    if (!t) return;
+    const li = t.closest('.cp__futu');
+    if (!li) return;
+    const p = li.querySelector('.cp__futu__text');
+    if (!p) return;
+    const open = p.classList.toggle('is-open');
+    const more = li.querySelector('.cp__futu__more');
+    if (more) more.textContent = open ? '收起' : '全文';
+  });
 
   const cpEsc = (s) => String(s == null ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -5055,7 +5118,7 @@ const TICKER_TTL = 15000;
           : '')
       + '</div>';
     rtFillBase();    /* 先填基准价 → 实时列初始即显示快照价（等建连节拍期间也有价格看） */
-    host.innerHTML = bar + renderIndexTable(rows, { noW: true, sortable: true, sort: ALL_SORT, rt: true, rtSyms: rtTopSet(), rank: true, fmpActive: d.fmpActive });
+    host.innerHTML = bar + renderIndexTable(rows, { noW: true, sortable: true, sort: ALL_SORT, rt: true, rtSyms: rtTopSet(), rank: true, fmpActive: d.fmpActive, fiSub: true });
     rtStart();       /* 幂等：首帧才建连接；排序/切 tab 重绘后只补刷已有价格 */
     rtRepaintAll();
     rtUpdateStatus();
@@ -5939,6 +6002,12 @@ const TICKER_TTL = 15000;
     /* opts.fmpActive → 现价列副行显示 FMP 当日涨跌幅（前 120 有）：现价用 FMP 数据时
     才带涨跌幅；回退 HOM（FMP 未刷新/断了）则不显示（用户 2026-10-16 定稿）。 */
     const fmpActive = !!(opts && opts.fmpActive);
+    /* opts.fiSub → 名称副行在**代码后**带 FMP 细行业（Semiconductors / Drug
+     Manufacturers - General…，用户 2026-10-19：「把 fmp 行业写到全部个股名称副行，
+     代码后面」）。仅「全部个股」表传（drawAllStocks）；成分股单表行上没有 fi 也不传。
+     ⚠️ fetch_fmp_profiles.py 每日只补前 120 只 → 其余行 fi=null 不显示（**不回落
+     指数行业 ind**：FMP 细行业与指数粗行业不是一套口径，混排比空着更糟）。 */
+    const fiSub = !!(opts && opts.fiSub);
     const SORT_COLS = [
       { k: 'idx', t: '序号', tip: '恢复默认（市值降序）' },
       { k: 'code', t: '名称', tip: '按代码排序' },
@@ -5972,6 +6041,12 @@ const TICKER_TTL = 15000;
       cv.font = '500 13px ' + ff;
       let mx = 0;
       for (const x of rows) mx = Math.max(mx, cv.measureText(x.n || '').width);
+      /* 副行（代码 · FMP 细行业，11px）也可能比主行公司名宽 → 一并参与实测，
+         否则带行业的行副行被无谓截断（如「英伟达」3 字符名 vs "NVDA · Semiconductors"）。 */
+      if (fiSub) {
+        cv.font = '500 11px ' + ff;
+        for (const x of rows) if (x.fi) mx = Math.max(mx, cv.measureText(x.c + ' · ' + x.fi).width);
+      }
       nmW = mx > 0 ? Math.round(mx) + 18 : 240;
     } catch (e) { nmW = 240; }
     nmW = Math.max(150, Math.min(340, nmW));
@@ -5984,7 +6059,9 @@ const TICKER_TTL = 15000;
         return '<div class="us-top__row">'
           + (rank ? rankArrowHtml(x.rk) : '')
           + '<span class="us-top__i">' + (i + 1) + '</span>'
-          + '<span class="us-top__n"><b>' + cpEsc(x.n) + '</b><i>' + cpEsc(x.c) + '</i></span>'
+          + '<span class="us-top__n"><b>' + cpEsc(x.n) + '</b><i>' + cpEsc(x.c)
+          + (fiSub && x.fi ? '<span class="us-top__fi">' + cpEsc(x.fi) + '</span>' : '')
+          + '</i></span>'
           + '<span class="us-top__m num">'
           + (noW ? cpEsc(fmtCap(x.mc)) : ('<b>' + fmtCap(x.mc) + '</b><i>' + wTxt + '</i>'))
           + '</span>'
@@ -11592,126 +11669,49 @@ fundAmount += f.amount;
     }
   })();
   /* ===================================================================
-     「我的」页 → 殆知阁：古籍检索（2026-10-19 v2 · iframe 官方页直连）
+     「我的」页 → 殆知阁：古籍检索（2026-10-19 v3 · iframe 官方页直连）
      -------------------------------------------------------------------
-     入口：「我的」页菜单「殆知阁」（原「功能建议」视觉行，v1 接真功能，
-     按钮 id="meDzgEntry"）。面板 #meDzg 盖住 .me-page，返回按钮切回 ——
-     不新增 rail 视图、不动 switchView 状态机（移动端天然全宽）。
-     v1 曾自建数据层：corsfix 代理调 daizhige.org API + 自渲染结果列表。
-     v2 弃用代理（用户 2026-10-19 要求），依据三组实测：
-       · daizhige.org 未设 X-Frame-Options / CSP → 可被 iframe 嵌入；
-       · 官方前端读取 q / mode / page / size / collection 全部 URL 参数
-         （扒首页 JS 确认）→ 带参打开即自动检索；
-       · API 对任何带 Origin 的浏览器请求一律 403、JSONP 不支持
-         （callback 被忽略）、公共代理 allorigins/codetabs 实测 522 全挂
-         → iframe 是唯一零代理通路。
-     于是本模块退化为「URL 拼装器」：结果区 iframe 加载官方检索页，
-     我方零 API 请求、零代理依赖；分页 / 高亮 / 书名自动补全 / 公告
-     全部由官方页自带。检索全程用户主动触发，无轮询无预取。
-     仍守 reference.md 语义：fulltext 不支持分类过滤 → 分类条置灰；
-     collection 单数、可重复；全不选 = 不发该参数 = 官方默认全选（不限）。
+     入口：「我的」页菜单「殆知阁」（按钮 id="meDzgEntry"）。面板 #meDzg
+     盖住 .me-page，返回按钮切回 —— 不新增 rail 视图、不动 switchView
+     状态机（移动端天然全宽）。
+     演进：v1 自建数据层（corsfix 代理调 API + 自渲染结果列表）→
+     v2 保留自建检索框架（输入框/模式三选/十大分类）+ iframe 结果区 →
+     **v3 用户定稿「自建框架不要了，点开殆知阁直接就进 iframe 页面」**：
+     框架全删——官方页自带完整检索 UI（输入/模式/分类/分页/书名补全/
+     公告），我方只剩两件事：
+       ① 点入口 → iframe 挂 src = 官方首页（**懒加载**：首次才设，不拖累
+          首屏；返回再进不重载，保留用户在官方页里的检索状态）；
+       ② 返回按钮切回 .me-page。
+     依据（2026-10-18/19 实测）：daizhige.org 未设 X-Frame-Options / CSP
+     → 可被 iframe 嵌入；官方 API 对任何带 Origin 的浏览器请求一律 403、
+     JSONP 不支持、公共代理 allorigins/codetabs 实测全挂 → iframe 是
+     唯一零代理通路。
+     ⚠️ 移动端「打开页面突然放大」根因（2026-10-19 用户反馈）：v2 打开
+     面板时 input.focus()，而输入框字号 14px < 16px → iOS Safari 聚焦
+     自动放大页面。v3 输入框已删，bug 随之消失——别为了「自动聚焦方便」
+     再加回来（要加回来就把字号顶到 16px）。
      =================================================================== */
   (function initDzg() {
-    /* 十大分类：daizhige.org 首页复选框实测值（2026-10-19 抓首页核对，
-       顺序照首页）。全不选 = 不发 collection 参数 = 不限分类。 */
-    const DZG_COLLECTIONS = ['道藏', '佛藏', '儒藏', '史藏', '子藏', '集藏', '诗藏', '艺藏', '易藏', '医藏'];
     const DZG_BASE = 'https://daizhige.org/';
-
     const view = document.getElementById('meDzg');
     const mePage = document.querySelector('.me-page');
     const entry = document.getElementById('meDzgEntry');
     if (!view || !entry || !mePage) return;
+    const frame = document.getElementById('dzgFrame');
+    const back = document.getElementById('dzgBack');
 
-    const els = {
-      back: document.getElementById('dzgBack'),
-      input: document.getElementById('dzgInput'),
-      go: document.getElementById('dzgGo'),
-      modes: document.getElementById('dzgModes'),
-      cats: document.getElementById('dzgCats'),
-      status: document.getElementById('dzgStatus'),
-      frameWrap: document.getElementById('dzgFrameWrap'),
-      frame: document.getElementById('dzgFrame'),
-    };
+    /* 懒加载标记：iframe src 只设一次。返回再进不重新加载 ——
+       保留用户在官方页里的检索状态（官方页是 SPA，内部跳转不丢）。 */
+    let loaded = false;
 
-    /* 运行态。mode：fulltext(逐字) / normal(分词·官方默认) / exact(精确)；
-       opened = 是否已发起过检索（决定 iframe 显隐 + 切模式/分类是否自动刷新） */
-    const st = { mode: 'fulltext', collections: DZG_COLLECTIONS.slice(), q: '', opened: false };
-
-    /* 拼官方页 URL（参数口径扒自官方首页 JS）：
-       q 必带；mode 仅 exact/fulltext 显式带（normal 是官方默认，省略）；
-       page/size 交由官方页内分页自行维护，这里固定首页 size=20；
-       collection 仅分词/精确模式携带，单数可重复。
-       #resultsSection 锚点：分词/精确模式官方页先渲染站头+表单、结果在
-       下方，锚点让加载完成后自动滚到结果区（2026-10-19 实测 scrollY=633、
-       结果区 top=0；逐字模式结果本就在首屏，锚点无害）。 */
-    function dzgUrl() {
-      let u = DZG_BASE + '?q=' + encodeURIComponent(st.q) + '&page=0&size=20';
-      if (st.mode !== 'normal') u += '&mode=' + st.mode;
-      if (st.mode !== 'fulltext') {
-        st.collections.forEach((c) => { u += '&collection=' + encodeURIComponent(c); });
-      }
-      return u + '#resultsSection';
-    }
-
-    /* ---- 入口 / 返回 ---- */
     entry.addEventListener('click', () => {
       mePage.hidden = true;
       view.hidden = false;
-      if (!st.opened) els.input.focus();
+      if (!loaded) { frame.src = DZG_BASE; loaded = true; }
     });
-    els.back.addEventListener('click', () => {
+    back.addEventListener('click', () => {
       view.hidden = true;
       mePage.hidden = false;
     });
-
-    /* ---- 模式切换（fulltext 禁分类：reference.md 明示服务端无该参数） ---- */
-    els.modes.addEventListener('click', (e) => {
-      const b = e.target.closest ? e.target.closest('button[data-mode]') : null;
-      if (!b) return;
-      const m = b.dataset.mode;
-      if (m === st.mode) return;
-      st.mode = m;
-      els.modes.querySelectorAll('button').forEach((x) => x.classList.toggle('is-active', x === b));
-      els.cats.classList.toggle('is-off', m === 'fulltext');
-      if (st.opened) openResults();   // 已在检索态：切模式自动刷新官方页
-    });
-
-    /* ---- 分类筹码（JS 生成，单一数据源 DZG_COLLECTIONS） ---- */
-    DZG_COLLECTIONS.forEach((c) => {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'dzg-cat is-on';
-      b.textContent = c;
-      b.addEventListener('click', () => {
-        if (st.mode === 'fulltext') return;    // 逐字模式禁用（is-off 置灰，双保险）
-        const i = st.collections.indexOf(c);
-        if (i >= 0) st.collections.splice(i, 1); else st.collections.push(c);
-        b.classList.toggle('is-on', st.collections.indexOf(c) >= 0);
-        if (st.opened) openResults();          // 已在检索态：切分类自动刷新
-      });
-      els.cats.appendChild(b);
-    });
-
-    /* ---- 检索触发：按钮 / 回车 ---- */
-    els.go.addEventListener('click', openResults);
-    els.input.addEventListener('keydown', (e) => { if (e.key === 'Enter') openResults(); });
-
-    function openResults() {
-      const q = els.input.value.trim();
-      if (!q) {
-        els.status.textContent = '输入检索词开始，如：天地不仁';
-        return;
-      }
-      st.q = q;
-      st.opened = true;
-      els.frameWrap.hidden = false;
-      els.frame.src = dzgUrl();
-      const modeLabel = st.mode === 'fulltext' ? '逐字' : (st.mode === 'exact' ? '精确' : '分词');
-      const catLabel = st.mode === 'fulltext' ? ''
-        : (st.collections.length < DZG_COLLECTIONS.length
-          ? ' · 分类：' + (st.collections.join('、') || '不限') : '');
-      els.status.textContent = modeLabel + '「' + q + '」已在官方检索页打开' + catLabel
-        + ' · 直连 daizhige.org，无代理';
-    }
   })();
 })();

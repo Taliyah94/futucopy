@@ -4202,9 +4202,26 @@ const TICKER_TTL = 15000;
       timeEl.textContent = '美东 ' + MM + '/' + dd + ' ' + hh + ':' + mm + ':' + ss;
       if (tagEl) {
         /* ⚠️ usSession() 返回值语义不能动（自选行 ext 昨收快照依赖 null=盘中）；
-           「休市」只在渲染层兜底：非交易日（周末/假日）显示休市，其余走原时段口径。 */
-        if (!rtIsTradingDay()) tagEl.textContent = '休市';
-        else tagEl.textContent = usSession() || '盘中';
+           「休市」只在渲染层兜底：非交易日（周末/假日）显示休市，其余走原时段口径。
+           ⚠️ 周末晚间特判（2026-10-19 用户截图反馈：周日晚 21:39 显示「休市」）：
+           按本文件定稿模型「美东 20:00 夜盘开始为 1D 的开始」（见上方时段注释），
+           周日 20:00 后已进入**周一**交易日；但 usSession() 只认钟点（返回夜盘）、
+           rtIsTradingDay() 只认自然日（周日=false），两者一夹击就把周日晚间误判
+           成休市。补一刀：非自然交易日时，仅当 ET≥20:00 且**次日是工作日**
+           （周一~五，不问假期——节日前一晚期货照样开，如 MLK 前周日晚）才走
+           时段口径（=夜盘）；周六夜间次日是周日 → 仍休市（期货周日晚 18:00
+           才开，与本模型 20:00 起点之间的两小时不特殊化，维持休市）。 */
+        const mins = et.getHours() * 60 + et.getMinutes();
+        let tonightIsSession = true;
+        if (!rtIsTradingDay()) {
+          let tmWd = '';
+          try {
+            tmWd = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', weekday: 'short' })
+              .format(new Date(Date.now() + 86400000));
+          } catch (e2) { /* 时区异常 → 按休市 */ }
+          tonightIsSession = mins >= 1200 && !!tmWd && tmWd !== 'Sat' && tmWd !== 'Sun';
+        }
+        tagEl.textContent = tonightIsSession ? (usSession() || '盘中') : '休市';
         tagEl.hidden = false;
       }
     } catch (e) { /* 时区不可用时保持占位 */ }

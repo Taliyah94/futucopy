@@ -3046,10 +3046,30 @@ const TICKER_TTL = 15000;
       if (!el) {
         el = document.createElement('span');
         el.className = 'js-news-at cp__at';
+        /* 手动刷新按钮（2026-10-19）：每个评论面板头部动态挂一个，
+           点击经事件委托 → fetchFutuFeed(true) 立即拉。 */
+        let rf = h.querySelector('.cp__refresh');
+        if (!rf) {
+          rf = document.createElement('button');
+          rf.type = 'button';
+          rf.className = 'cp__refresh cp__srcbtn';
+          rf.textContent = '↻ 刷新';
+          rf.title = '手动刷新评论（不自动拉取）';
+        }
         const close = h.querySelector('.cp__close, .trade-news__close');
-        if (close) h.insertBefore(el, close); else h.appendChild(el);
+        if (close) { h.insertBefore(el, close); h.insertBefore(rf, close); }
+        else { h.appendChild(el); h.appendChild(rf); }
       }
       el.textContent = txt;
+      /* 刷新按钮 loading 态：拉取中禁用并显示「刷新中…」 */
+      const rf = h.querySelector('.cp__refresh');
+      if (rf) {
+        const loading = (cpTab === 'futu')
+          ? (futuScope === 'all' ? FUTU_MSTATE.loading : FUTU_STATE.loading)
+          : false;
+        rf.disabled = !!loading;
+        rf.textContent = loading ? '刷新中…' : '↻ 刷新';
+      }
     });
   }
 
@@ -3341,9 +3361,9 @@ const TICKER_TTL = 15000;
       FUTU_STATE.err = ''; FUTU_STATE.at = ''; FUTU_STATE.atTs = 0;
     }
     if (cpTab === 'futu') {
+      /* 手动刷新模式（2026-10-19）：进视图只渲染本地缓存，绝不强拉；
+         无缓存时显示「点 ↻ 刷新 加载」引导，拉取完全由用户点刷新按钮触发。 */
       renderFutu(); paintCpAt();
-      /* 进视图即刷新（内部有缓存 TTL + 全局闸门兜底，新鲜时 0 请求） */
-      fetchFutuFeed();
     }
   }
 
@@ -3627,11 +3647,11 @@ const TICKER_TTL = 15000;
     if (!shown.length) {
       if (err) {
         html = '<li class="cp__item cp__item--empty"><p class="cp__text">社区评论加载失败（' + cpEsc(err) + '）<br>'
-          + '公共代理可能限流/不可达，将按固定间隔自动重试</p></li>';
+          + '点上方「↻ 刷新」重试</p></li>';
       } else if (FUTU_MSTATE.loading) {
         html = '<li class="cp__item cp__item--empty"><p class="cp__text">社区评论加载中…</p></li>';
       } else {
-        html = '<li class="cp__item cp__item--empty"><p class="cp__text">暂无社区评论</p></li>';
+        html = '<li class="cp__item cp__item--empty"><p class="cp__text">暂无社区评论<br>点上方「↻ 刷新」加载最新</p></li>';
       }
     } else {
       html = shown.map((x) => futuItemHtml(x.p, x.sym, true)).join('');
@@ -3652,7 +3672,7 @@ const TICKER_TTL = 15000;
     if (FUTU_STATE.err === 'nosym') {
       html = '<li class="cp__item cp__item--empty"><p class="cp__text">该标的暂未接入社区评论<br>'
         + '（当前仅 ' + cpEsc(FUTU_ALLOWED.join(' / ')) + '）</p></li>';
-    } else if (!FUTU_STATE.loaded && !FUTU_STATE.items.length && !FUTU_STATE.err) {
+    } else if (FUTU_STATE.loading && !FUTU_STATE.items.length && !FUTU_STATE.err) {
       /* 仅在「从未成功且当前无任何错误」时显示转圈——即首屏进 tab 到首次请求
          返回的极短窗口。一旦请求失败（err 被置位），必须落到下面的失败分支
          显示原因，绝不能再显示「加载中」把错误藏起来（2026-10-18 实测：
@@ -3674,7 +3694,7 @@ const TICKER_TTL = 15000;
       html = '<li class="cp__item cp__item--empty"><p class="cp__text">社区评论加载失败（' + cpEsc(FUTU_STATE.err) + '）<br>'
         + '公共代理可能限流/不可达，将按固定间隔自动重试</p></li>';
     } else if (!FUTU_STATE.items.length) {
-      html = '<li class="cp__item cp__item--empty"><p class="cp__text">暂无社区评论</p></li>';
+      html = '<li class="cp__item cp__item--empty"><p class="cp__text">暂无社区评论<br>点上方「↻ 刷新」加载最新</p></li>';
     } else {
       html = FUTU_STATE.items.map((p) => futuItemHtml(p, '', false)).join('')
         /* 刷新失败但有旧数据：留一条提示，别让用户以为数据是新的 */
@@ -3699,11 +3719,9 @@ const TICKER_TTL = 15000;
       if (s === last) return;
       last = s;
       if (futuScope !== 'single') return;
-      if (cpTab === 'futu') fetchFutuFeed();
-      else {
-        FUTU_STATE.sym = ''; FUTU_STATE.loaded = false;
-        FUTU_STATE.items = []; FUTU_STATE.err = '';
-      }
+      /* 手动刷新模式（2026-10-19）：换票只作废旧数据，下次用户点 ↻ 刷新才拉新票 */
+      FUTU_STATE.sym = ''; FUTU_STATE.loaded = false;
+      FUTU_STATE.items = []; FUTU_STATE.err = '';
     }).observe(el, { childList: true, characterData: true, subtree: true });
   })();
 
@@ -4187,6 +4205,9 @@ const TICKER_TTL = 15000;
   document.querySelectorAll('[data-tabs]').forEach((group) => {
     group.addEventListener('click', (e) => {
       const btn = e.target.closest('.tab, .ct-tab, .ci-tab, .cp-tab');
+      // 手动刷新评论（2026-10-19）：点「↻ 刷新」立即拉（force 绕过 TTL/闸门），优先于 tab 切换
+      const rf = e.target.closest('.cp__refresh');
+      if (rf) { fetchFutuFeed(true); paintCpAt(); return; }
       if (!btn || !group.contains(btn)) return;
       group.querySelectorAll('.tab, .ct-tab, .ci-tab, .cp-tab')
         .forEach((b) => b.classList.remove('is-active'));
@@ -4220,8 +4241,7 @@ const TICKER_TTL = 15000;
         // 每次切到「推荐」都重拉一次（源侧有 ~45 分钟延迟，但刷新仍能拿到该源此刻的最新一条；
         // 原来只在首次 !loaded 时拉，重新打开页面看到的可能是 30 秒前的旧快照）
         if (cpTab === 'news') fetchJin10();
-        // 切到「评论」：拉富途社区（内部 60s 新鲜度闸门，连点不重复请求）
-        else if (cpTab === 'futu') fetchFutuFeed();
+        // 切到「评论」：手动刷新模式（2026-10-19），只渲染本地缓存，不自动拉（见 setFutuScope）
       }
     });
   });
@@ -6494,20 +6514,14 @@ const applyMode = (mode, skipDraw) => {
   fetchJin10();
   setInterval(() => { if (!document.hidden) fetchJin10(); }, 60000);
 
-  /* 「评论」tab（富途社区）轮询：固定 FUTU_GAP_SEC 秒（见 FUTU_GAP_SEC 注释），
-     只在**本 tab 激活 + 页面前台**时跑；未到点会被
-     fetchFutuFeed 里的全局闸门拦下，不发请求。换标的由 #qCode 的
-     MutationObserver 即时触发（同样受全局闸门管）。 */
-  setInterval(() => { if (!document.hidden && cpTab === 'futu') fetchFutuFeed(); }, Math.max(60, FUTU_GAP_SEC) * 1000);
-  // 「切回页面 / 窗口聚焦」立即补刷一次：离开 60s 周期回来不用干等（距上次超 5s 才补，避免抖动）
+  /* 「评论」tab（富途社区）：手动刷新模式（2026-10-19）——不再自动轮询，
+     拉取完全由用户点「↻ 刷新」触发（fetchFutuFeed(true) 绕过 TTL/闸门立即拉）。
+     下方「推荐」轮询与可见性补刷保留（金十仍需自动拉）。 */
+  // 「切回页面 / 窗口聚焦」立即补刷：仅「推荐」（金十）自动补；评论为手动刷新模式，
+  // 切回只显示本地缓存，由用户点「↻ 刷新」决定何时拉（2026-10-19）。
   function tryRefreshOnVisible() {
     if (document.hidden) return;
     if (Date.now() - (NEWS_STATE.atTs || 0) > 5000) fetchJin10();
-    /* 评论 tab 激活时同样补刷（fetchFutuFeed 内部 60s 闸门兜底，数据够新就跳过）；
-       atTs=0（从未成功拉到过）时恒判定为过期，回来即重试。
-       新鲜度按**当前口径**取：合并视图看 2 只票里最新的那个，否则「单票旧数据」
-       会让总评论一直以为自己是新的、永远不补另外几只。 */
-    if (cpTab === 'futu' && Date.now() - (futuAtInfo().atTs || 0) > 5000) fetchFutuFeed();
   }
   document.addEventListener('visibilitychange', tryRefreshOnVisible);
   window.addEventListener('focus', tryRefreshOnVisible);

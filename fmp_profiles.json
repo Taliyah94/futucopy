@@ -1,6 +1,6 @@
 {
   "AAPL": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 0.4269,
     "fmpIndustry": "Consumer Electronics",
     "fmpSector": "Technology",
@@ -8,7 +8,7 @@
     "price": 343.46
   },
   "ABBV": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 0.7128,
     "fmpIndustry": "Drug Manufacturers - General",
     "fmpSector": "Healthcare",
@@ -16,7 +16,7 @@
     "price": 285.42
   },
   "ABT": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 0.1911,
     "fmpIndustry": "Medical - Devices",
     "fmpSector": "Healthcare",
@@ -24,7 +24,7 @@
     "price": 104.88
   },
   "ACN": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 2.1163,
     "fmpIndustry": "Information Technology Services",
     "fmpSector": "Technology",
@@ -32,7 +32,7 @@
     "price": 229.68
   },
   "ADI": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -2.1067,
     "fmpIndustry": "Semiconductors",
     "fmpSector": "Technology",
@@ -40,7 +40,7 @@
     "price": 395.44
   },
   "ADP": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 1.1378,
     "fmpIndustry": "Software - Application",
     "fmpSector": "Technology",
@@ -48,7 +48,7 @@
     "price": 288.9
   },
   "AMAT": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -4.8185,
     "fmpIndustry": "Semiconductors",
     "fmpSector": "Technology",
@@ -56,7 +56,7 @@
     "price": 409.29
   },
   "AMD": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -5.9549,
     "fmpIndustry": "Semiconductors",
     "fmpSector": "Technology",
@@ -64,7 +64,7 @@
     "price": 528.75
   },
   "AMGN": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -0.3548,
     "fmpIndustry": "Drug Manufacturers - General",
     "fmpSector": "Healthcare",
@@ -72,7 +72,7 @@
     "price": 432.49
   },
   "AMZN": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -1.8684,
     "fmpIndustry": "Specialty Retail",
     "fmpSector": "Consumer Cyclical",
@@ -80,7 +80,7 @@
     "price": 250.0
   },
   "ANET": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -4.6341,
     "fmpIndustry": "Computer Hardware",
     "fmpSector": "Technology",
@@ -88,7 +88,7 @@
     "price": 176.98
   },
   "APH": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -2.6261,
     "fmpIndustry": "Hardware, Equipment & Parts",
     "fmpSector": "Technology",
@@ -96,7 +96,7 @@
     "price": 79.35
   },
   "ARM": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -6.9406,
     "fmpIndustry": "Semiconductors",
     "fmpSector": "Technology",
@@ -104,15 +104,15 @@
     "price": 227.8
   },
   "ASML": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -0.9605,
     "fmpIndustry": "Semiconductors",
     "fmpSector": "Technology",
-    "marketCap": 632671340586,
+    "marketCap": 633148267807,
     "price": 1641.52
   },
   "AVGO": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -4.5247,
     "fmpIndustry": "Semiconductors",
     "fmpSector": "Technology",
@@ -120,7 +120,7 @@
     "price": 328.75
   },
   "AXP": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -0.0892,
     "fmpIndustry": "Financial - Credit Services",
     "fmpSector": "Financial Services",
@@ -128,7 +128,7 @@
     "price": 313.59
   },
   "BA": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 0.7842,
     "fmpIndustry": "Aerospace & Defense",
     "fmpSector": "Industrials",
@@ -136,7 +136,7 @@
     "price": 190.21
   },
   "BAC": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -0.9091,
     "fmpIndustry": "Banks - Diversified",
     "fmpSector": "Financial Services",
@@ -144,7 +144,7 @@
     "price": 51.23
   },
   "BKNG": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -1.4174,
     "fmpIndustry": "Travel Services",
     "fmpSector": "Consumer Cyclical",
@@ -152,7 +152,7 @@
     "price": 163.45
   },
   "BLK": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 1.2134,
     "fmpIndustry": "Asset Management",
     "fmpSector": "Financial Services",
@@ -160,7 +160,7 @@
     "price": 1134.38
   },
   "BMY": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -1.3538,
     "fmpIndustry": "Drug Manufacturers - General",
     "fmpSector": "Healthcare",
@@ -168,7 +168,7 @@
     "price": 59.75
   },
   "BRK.B": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 1.2289,
     "fmpIndustry": "Insurance - Diversified",
     "fmpSector": "Financial Services",
@@ -176,7 +176,7 @@
     "price": 532.14
   },
   "BX": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -2.3535,
     "fmpIndustry": "Asset Management",
     "fmpSector": "Financial Services",
@@ -184,7 +184,7 @@
     "price": 106.63
   },
   "C": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 0.8441,
     "fmpIndustry": "Banks - Diversified",
     "fmpSector": "Financial Services",
@@ -192,7 +192,7 @@
     "price": 124.25
   },
   "CAT": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -0.6634,
     "fmpIndustry": "Agricultural - Machinery",
     "fmpSector": "Industrials",
@@ -200,7 +200,7 @@
     "price": 730.76
   },
   "CB": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 1.9842,
     "fmpIndustry": "Insurance - Property & Casualty",
     "fmpSector": "Financial Services",
@@ -208,7 +208,7 @@
     "price": 359.79
   },
   "CME": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 1.5235,
     "fmpIndustry": "Financial - Data & Stock Exchanges",
     "fmpSector": "Financial Services",
@@ -216,7 +216,7 @@
     "price": 293.87
   },
   "COF": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 1.4483,
     "fmpIndustry": "Financial - Credit Services",
     "fmpSector": "Financial Services",
@@ -224,7 +224,7 @@
     "price": 201.74
   },
   "COP": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 3.3726,
     "fmpIndustry": "Oil & Gas Exploration & Production",
     "fmpSector": "Energy",
@@ -232,7 +232,7 @@
     "price": 146.51
   },
   "COST": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 1.135,
     "fmpIndustry": "Discount Stores",
     "fmpSector": "Consumer Defensive",
@@ -240,15 +240,15 @@
     "price": 989.11
   },
   "CRM": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -2.4479,
     "fmpIndustry": "Software - Application",
     "fmpSector": "Technology",
-    "marketCap": 198096097352,
+    "marketCap": 198096100000,
     "price": 240.7
   },
   "CRWD": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -7.0246,
     "fmpIndustry": "Software - Infrastructure",
     "fmpSector": "Technology",
@@ -256,7 +256,7 @@
     "price": 227.39
   },
   "CSCO": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -2.2394,
     "fmpIndustry": "Communication Equipment",
     "fmpSector": "Technology",
@@ -264,7 +264,7 @@
     "price": 107.39
   },
   "CVS": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -0.2376,
     "fmpIndustry": "Medical - Healthcare Plans",
     "fmpSector": "Healthcare",
@@ -272,7 +272,7 @@
     "price": 92.36
   },
   "CVX": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 2.5807,
     "fmpIndustry": "Oil & Gas Integrated",
     "fmpSector": "Energy",
@@ -280,7 +280,7 @@
     "price": 224.98
   },
   "DE": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -1.354,
     "fmpIndustry": "Agricultural - Machinery",
     "fmpSector": "Industrials",
@@ -288,7 +288,7 @@
     "price": 641.86
   },
   "DELL": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -4.6156,
     "fmpIndustry": "Computer Hardware",
     "fmpSector": "Technology",
@@ -296,7 +296,7 @@
     "price": 451.54
   },
   "DHR": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -1.0626,
     "fmpIndustry": "Medical - Diagnostics & Research",
     "fmpSector": "Healthcare",
@@ -304,7 +304,7 @@
     "price": 229.04
   },
   "DIS": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -0.1175,
     "fmpIndustry": "Entertainment",
     "fmpSector": "Communication Services",
@@ -312,7 +312,7 @@
     "price": 110.55
   },
   "ETN": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -2.7902,
     "fmpIndustry": "Electrical Equipment & Parts",
     "fmpSector": "Industrials",
@@ -320,7 +320,7 @@
     "price": 391.25
   },
   "FTNT": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -7.0255,
     "fmpIndustry": "Software - Infrastructure",
     "fmpSector": "Technology",
@@ -328,7 +328,7 @@
     "price": 169.13
   },
   "GE": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 0.5865,
     "fmpIndustry": "Aerospace & Defense",
     "fmpSector": "Industrials",
@@ -336,7 +336,7 @@
     "price": 313.83
   },
   "GEV": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -0.5656,
     "fmpIndustry": "Industrial - Machinery",
     "fmpSector": "Industrials",
@@ -344,7 +344,7 @@
     "price": 921.2
   },
   "GILD": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -0.7498,
     "fmpIndustry": "Drug Manufacturers - General",
     "fmpSector": "Healthcare",
@@ -352,7 +352,7 @@
     "price": 156.19
   },
   "GLW": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -4.6016,
     "fmpIndustry": "Hardware, Equipment & Parts",
     "fmpSector": "Technology",
@@ -360,7 +360,7 @@
     "price": 132.06
   },
   "GOOG": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -2.3194,
     "fmpIndustry": "Internet Content & Information",
     "fmpSector": "Communication Services",
@@ -368,7 +368,7 @@
     "price": 336.91
   },
   "GOOGL": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -2.4712,
     "fmpIndustry": "Internet Content & Information",
     "fmpSector": "Communication Services",
@@ -376,7 +376,7 @@
     "price": 340.59
   },
   "GS": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -1.1242,
     "fmpIndustry": "Financial - Capital Markets",
     "fmpSector": "Financial Services",
@@ -384,7 +384,7 @@
     "price": 881.26
   },
   "HD": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 0.4509,
     "fmpIndustry": "Home Improvement",
     "fmpSector": "Consumer Cyclical",
@@ -392,7 +392,7 @@
     "price": 309.63
   },
   "IBKR": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -3.8824,
     "fmpIndustry": "Investment - Banking & Investment Services",
     "fmpSector": "Financial Services",
@@ -400,7 +400,7 @@
     "price": 82.69
   },
   "IBM": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -0.8457,
     "fmpIndustry": "Information Technology Services",
     "fmpSector": "Technology",
@@ -408,7 +408,7 @@
     "price": 232.14
   },
   "INTC": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -5.788,
     "fmpIndustry": "Semiconductors",
     "fmpSector": "Technology",
@@ -416,7 +416,7 @@
     "price": 89.85
   },
   "ISRG": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -0.2711,
     "fmpIndustry": "Medical - Instruments & Supplies",
     "fmpSector": "Healthcare",
@@ -424,7 +424,7 @@
     "price": 426.7
   },
   "JNJ": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 0.9002,
     "fmpIndustry": "Drug Manufacturers - General",
     "fmpSector": "Healthcare",
@@ -432,7 +432,7 @@
     "price": 255.56
   },
   "JPM": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 1.2488,
     "fmpIndustry": "Banks - Diversified",
     "fmpSector": "Financial Services",
@@ -440,7 +440,7 @@
     "price": 339.72
   },
   "KLAC": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -4.9983,
     "fmpIndustry": "Semiconductors",
     "fmpSector": "Technology",
@@ -448,7 +448,7 @@
     "price": 165.74
   },
   "KO": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 2.0652,
     "fmpIndustry": "Beverages - Non-Alcoholic",
     "fmpSector": "Consumer Defensive",
@@ -456,7 +456,7 @@
     "price": 93.9
   },
   "LIN": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 1.0563,
     "fmpIndustry": "Chemicals - Specialty",
     "fmpSector": "Basic Materials",
@@ -464,7 +464,7 @@
     "price": 498.43
   },
   "LLY": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 0.433,
     "fmpIndustry": "Drug Manufacturers - General",
     "fmpSector": "Healthcare",
@@ -472,7 +472,7 @@
     "price": 1257.03
   },
   "LMT": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 3.6516,
     "fmpIndustry": "Aerospace & Defense",
     "fmpSector": "Industrials",
@@ -480,7 +480,7 @@
     "price": 552.09
   },
   "LOW": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 0.8124,
     "fmpIndustry": "Home Improvement",
     "fmpSector": "Consumer Cyclical",
@@ -488,7 +488,7 @@
     "price": 197.31
   },
   "LRCX": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -4.8728,
     "fmpIndustry": "Semiconductors",
     "fmpSector": "Technology",
@@ -496,7 +496,7 @@
     "price": 263.94
   },
   "MA": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 0.1785,
     "fmpIndustry": "Financial - Credit Services",
     "fmpSector": "Financial Services",
@@ -504,7 +504,7 @@
     "price": 617.42
   },
   "MCD": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 0.1938,
     "fmpIndustry": "Restaurants",
     "fmpSector": "Consumer Cyclical",
@@ -512,7 +512,7 @@
     "price": 242.97
   },
   "MCK": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 0.6208,
     "fmpIndustry": "Medical - Distribution",
     "fmpSector": "Healthcare",
@@ -520,7 +520,7 @@
     "price": 1004.84
   },
   "MDT": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -0.7334,
     "fmpIndustry": "Medical - Devices",
     "fmpSector": "Healthcare",
@@ -528,23 +528,15 @@
     "price": 94.75
   },
   "META": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -3.7185,
     "fmpIndustry": "Internet Content & Information",
     "fmpSector": "Communication Services",
     "marketCap": 1807009819001,
     "price": 709.325
   },
-  "MNST": {
-    "asof": "2026-10-18",
-    "chgPct": 0.8602,
-    "fmpIndustry": "Beverages - Non-Alcoholic",
-    "fmpSector": "Consumer Defensive",
-    "marketCap": 89587356500,
-    "price": 45.73
-  },
   "MO": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 1.7199,
     "fmpIndustry": "Tobacco",
     "fmpSector": "Consumer Defensive",
@@ -552,7 +544,7 @@
     "price": 75.11
   },
   "MPC": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 0.2411,
     "fmpIndustry": "Oil & Gas Refining & Marketing",
     "fmpSector": "Energy",
@@ -560,7 +552,7 @@
     "price": 478.07
   },
   "MRK": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 0.5338,
     "fmpIndustry": "Drug Manufacturers - General",
     "fmpSector": "Healthcare",
@@ -568,7 +560,7 @@
     "price": 145.965
   },
   "MRVL": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -5.5588,
     "fmpIndustry": "Semiconductors",
     "fmpSector": "Technology",
@@ -576,7 +568,7 @@
     "price": 227.83
   },
   "MS": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -0.8567,
     "fmpIndustry": "Financial - Capital Markets",
     "fmpSector": "Financial Services",
@@ -584,7 +576,7 @@
     "price": 180.54
   },
   "MSFT": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -1.9261,
     "fmpIndustry": "Software - Infrastructure",
     "fmpSector": "Technology",
@@ -592,7 +584,7 @@
     "price": 529.05
   },
   "MU": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -5.6269,
     "fmpIndustry": "Semiconductors",
     "fmpSector": "Technology",
@@ -600,7 +592,7 @@
     "price": 878.84
   },
   "NEE": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 1.0638,
     "fmpIndustry": "Regulated Electric",
     "fmpSector": "Utilities",
@@ -608,7 +600,7 @@
     "price": 79.8
   },
   "NEM": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 2.4268,
     "fmpIndustry": "Gold",
     "fmpSector": "Basic Materials",
@@ -616,7 +608,7 @@
     "price": 118.6
   },
   "NFLX": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -2.8646,
     "fmpIndustry": "Entertainment",
     "fmpSector": "Communication Services",
@@ -624,7 +616,7 @@
     "price": 70.53
   },
   "NOW": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -4.4424,
     "fmpIndustry": "Software - Application",
     "fmpSector": "Technology",
@@ -632,7 +624,7 @@
     "price": 141.97
   },
   "NVDA": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -1.4271,
     "fmpIndustry": "Semiconductors",
     "fmpSector": "Technology",
@@ -640,7 +632,7 @@
     "price": 214.13
   },
   "ORCL": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -4.6479,
     "fmpIndustry": "Software - Infrastructure",
     "fmpSector": "Technology",
@@ -648,7 +640,7 @@
     "price": 128.22
   },
   "PANW": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -7.635,
     "fmpIndustry": "Software - Infrastructure",
     "fmpSector": "Technology",
@@ -656,23 +648,23 @@
     "price": 342.0
   },
   "PDD": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -1.7593,
     "fmpIndustry": "Specialty Retail",
     "fmpSector": "Consumer Cyclical",
-    "marketCap": 113896002979,
+    "marketCap": 115252411528,
     "price": 80.97
   },
   "PEP": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 2.4225,
     "fmpIndustry": "Beverages - Non-Alcoholic",
     "fmpSector": "Consumer Defensive",
-    "marketCap": 179186837495,
+    "marketCap": 179186832499,
     "price": 131.49
   },
   "PFE": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 0.4755,
     "fmpIndustry": "Drug Manufacturers - General",
     "fmpSector": "Healthcare",
@@ -680,7 +672,7 @@
     "price": 29.58
   },
   "PG": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 1.4197,
     "fmpIndustry": "Household & Personal Products",
     "fmpSector": "Consumer Defensive",
@@ -688,7 +680,7 @@
     "price": 159.31
   },
   "PGR": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 2.2175,
     "fmpIndustry": "Insurance - Property & Casualty",
     "fmpSector": "Financial Services",
@@ -696,7 +688,7 @@
     "price": 218.49
   },
   "PH": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 0.1653,
     "fmpIndustry": "Industrial - Machinery",
     "fmpSector": "Industrials",
@@ -704,7 +696,7 @@
     "price": 963.34
   },
   "PLD": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -0.9375,
     "fmpIndustry": "REIT - Industrial",
     "fmpSector": "Real Estate",
@@ -712,7 +704,7 @@
     "price": 125.75
   },
   "PLTR": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -7.217,
     "fmpIndustry": "Software - Infrastructure",
     "fmpSector": "Technology",
@@ -720,7 +712,7 @@
     "price": 186.03
   },
   "PM": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 2.6513,
     "fmpIndustry": "Tobacco",
     "fmpSector": "Consumer Defensive",
@@ -728,7 +720,7 @@
     "price": 205.2
   },
   "PSX": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 1.3728,
     "fmpIndustry": "Oil & Gas Refining & Marketing",
     "fmpSector": "Energy",
@@ -736,7 +728,7 @@
     "price": 293.17
   },
   "QCOM": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -3.5258,
     "fmpIndustry": "Semiconductors",
     "fmpSector": "Technology",
@@ -744,7 +736,7 @@
     "price": 172.11
   },
   "RTX": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 3.7283,
     "fmpIndustry": "Aerospace & Defense",
     "fmpSector": "Industrials",
@@ -752,7 +744,7 @@
     "price": 193.92
   },
   "SBUX": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 0.6606,
     "fmpIndustry": "Restaurants",
     "fmpSector": "Consumer Cyclical",
@@ -760,7 +752,7 @@
     "price": 97.52
   },
   "SCHW": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -2.3364,
     "fmpIndustry": "Financial - Capital Markets",
     "fmpSector": "Financial Services",
@@ -768,7 +760,7 @@
     "price": 91.96
   },
   "SHOP": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -4.8389,
     "fmpIndustry": "Software - Application",
     "fmpSector": "Technology",
@@ -776,15 +768,23 @@
     "price": 169.52
   },
   "SNDK": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -6.8489,
     "fmpIndustry": "Computer Hardware",
     "fmpSector": "Technology",
     "marketCap": 187784663905,
     "price": 1299.3
   },
+  "SO": {
+    "asof": "2026-10-19",
+    "chgPct": 2.2427,
+    "fmpIndustry": "Regulated Electric",
+    "fmpSector": "Utilities",
+    "marketCap": 104889824800,
+    "price": 91.18
+  },
   "SPCX": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -1.7427,
     "fmpIndustry": "Aerospace & Defense",
     "fmpSector": "Industrials",
@@ -792,7 +792,7 @@
     "price": 146.03
   },
   "SPGI": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 1.137,
     "fmpIndustry": "Financial - Data & Stock Exchanges",
     "fmpSector": "Financial Services",
@@ -800,7 +800,7 @@
     "price": 429.64
   },
   "STX": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -7.4984,
     "fmpIndustry": "Computer Hardware",
     "fmpSector": "Technology",
@@ -808,7 +808,7 @@
     "price": 639.01
   },
   "SYK": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 0.4877,
     "fmpIndustry": "Medical - Devices",
     "fmpSector": "Healthcare",
@@ -816,7 +816,7 @@
     "price": 294.66
   },
   "T": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -0.2979,
     "fmpIndustry": "Telecommunications Services",
     "fmpSector": "Communication Services",
@@ -824,7 +824,7 @@
     "price": 23.43
   },
   "TJX": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 1.8951,
     "fmpIndustry": "Apparel - Retail",
     "fmpSector": "Consumer Cyclical",
@@ -832,7 +832,7 @@
     "price": 147.32
   },
   "TMO": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -0.9318,
     "fmpIndustry": "Medical - Diagnostics & Research",
     "fmpSector": "Healthcare",
@@ -840,7 +840,7 @@
     "price": 690.0
   },
   "TMUS": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 1.3182,
     "fmpIndustry": "Telecommunications Services",
     "fmpSector": "Communication Services",
@@ -848,7 +848,7 @@
     "price": 159.1
   },
   "TSLA": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -2.13,
     "fmpIndustry": "Auto - Manufacturers",
     "fmpSector": "Consumer Cyclical",
@@ -856,7 +856,7 @@
     "price": 354.72
   },
   "TXN": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -0.9458,
     "fmpIndustry": "Semiconductors",
     "fmpSector": "Technology",
@@ -864,7 +864,7 @@
     "price": 276.48
   },
   "UBER": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -1.2909,
     "fmpIndustry": "Software - Application",
     "fmpSector": "Technology",
@@ -872,7 +872,7 @@
     "price": 70.35
   },
   "UNH": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -1.2885,
     "fmpIndustry": "Medical - Healthcare Plans",
     "fmpSector": "Healthcare",
@@ -880,7 +880,7 @@
     "price": 401.43
   },
   "UNP": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 0.1143,
     "fmpIndustry": "Railroads",
     "fmpSector": "Industrials",
@@ -888,15 +888,15 @@
     "price": 289.04
   },
   "V": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 0.7154,
     "fmpIndustry": "Financial - Credit Services",
     "fmpSector": "Financial Services",
-    "marketCap": 751691922713,
+    "marketCap": 751691909427,
     "price": 402.61
   },
   "VLO": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 0.1464,
     "fmpIndustry": "Oil & Gas Refining & Marketing",
     "fmpSector": "Energy",
@@ -904,7 +904,7 @@
     "price": 444.71
   },
   "VRTX": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -1.771,
     "fmpIndustry": "Biotechnology",
     "fmpSector": "Healthcare",
@@ -912,7 +912,7 @@
     "price": 499.74
   },
   "VZ": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 0.8784,
     "fmpIndustry": "Telecommunications Services",
     "fmpSector": "Communication Services",
@@ -920,7 +920,7 @@
     "price": 44.79
   },
   "WDC": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": -6.8593,
     "fmpIndustry": "Computer Hardware",
     "fmpSector": "Technology",
@@ -928,7 +928,7 @@
     "price": 332.0
   },
   "WELL": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 0.0938,
     "fmpIndustry": "REIT - Healthcare Facilities",
     "fmpSector": "Real Estate",
@@ -936,7 +936,7 @@
     "price": 234.85
   },
   "WFC": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 1.3535,
     "fmpIndustry": "Banks - Diversified",
     "fmpSector": "Financial Services",
@@ -944,7 +944,7 @@
     "price": 83.87
   },
   "WMT": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 0.7975,
     "fmpIndustry": "Discount Stores",
     "fmpSector": "Consumer Defensive",
@@ -952,7 +952,7 @@
     "price": 118.81
   },
   "XOM": {
-    "asof": "2026-10-18",
+    "asof": "2026-10-19",
     "chgPct": 2.4616,
     "fmpIndustry": "Oil & Gas Integrated",
     "fmpSector": "Energy",

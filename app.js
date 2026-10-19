@@ -3223,14 +3223,53 @@ const TICKER_TTL = 15000;
     } catch (e) { /* 隐私模式/超额：静默降级为内存缓存 */ }
   }
   /* 裸 item → 渲染 item：补 cashtag 蓝色高亮 html（缓存只存 text，渲染时重生成） */
+  /* 简→繁转换器（opencc cn→t 标准繁体，2026-10-19 用户定稿「评论内容转繁体，要标准繁体不要台湾正体」）。
+     实现为两段式的第一段 only：from.cn（单字表+短语表）输出即 OpenCC 标准繁体，
+     不挂 to.tw 地区变体（着→著/裏→裡/羣→群 那 42 组不做，用户明确不要）。
+     vendor/opencc-cn2t.js 为自打包 bundle（gzip 约 478KB），**懒加载**：
+     评论 tab 首次渲染时才拉，首屏/其他 tab 不花这笔流量。
+     - 就绪前 renderFutu/renderFutuMulti 直接不渲染（排队重渲），避免简体→繁体二次跳变；
+     - 加载失败静默降级为简体原文（CN2T_STATE='failed'），不阻塞、不重试；
+     - 转换只发生在 futuDecorate 的展示层，缓存（FUTU_CACHE/localStorage）永远存原文。 */
+  var CN2T = null;
+  var CN2T_STATE = 'idle'; // idle → loading → ready | failed
+  var CN2T_CBS = [];
+  function cn2tReady() { return CN2T_STATE === 'ready' || CN2T_STATE === 'failed'; }
+  function ensureCn2Tw(cb) {
+    if (cn2tReady()) return true;
+    if (cb) CN2T_CBS.push(cb);
+    if (CN2T_STATE !== 'idle') return false;
+    CN2T_STATE = 'loading';
+    var s = document.createElement('script');
+    s.src = 'vendor/opencc-cn2t.js?v=20261019e';
+    s.onload = function () {
+      CN2T = (window.OpenCCCn2T && window.OpenCCCn2T.default) || null;
+      CN2T_STATE = CN2T ? 'ready' : 'failed';
+      var cbs = CN2T_CBS; CN2T_CBS = [];
+      cbs.forEach(function (f) { try { f(); } catch (e) { } });
+    };
+    s.onerror = function () {
+      CN2T_STATE = 'failed';
+      var cbs = CN2T_CBS; CN2T_CBS = [];
+      cbs.forEach(function (f) { try { f(); } catch (e) { } });
+    };
+    document.head.appendChild(s);
+    return false;
+  }
+
   function futuDecorate(p) {
+    /* 展示层简→繁（OpenCC 标准繁体）：在 cpEsc 之前对纯文本转换，股票标签
+       $名字(CODE.US)$ 的代码与 $ 标记不受影响（opencc 不动拉丁字符）。
+       一对多字（发→發/髮、只→隻/只、干→乾/幹）由 bundle 内短语词典按上下文处理。 */
+    var raw = String(p.text || '');
+    if (CN2T) raw = CN2T(raw);
     return {
       id: String(p.id || ''),
-      text: String(p.text || ''),
-      /* 富途正文股票标签 $甲骨文 (ORCL.US)$ → 蓝色高亮（$ 为标记符，不显示；
+      text: raw,
+      /* 富途正文股票标签 $名字(CODE.US)$ → 蓝色高亮（$ 为标记符，不显示；
          必须含「(代码)」才匹配，避免 $500 和 $600 这类金额被误伤）。
          先 cpEsc 再替换：$ 间内容已是转义后的纯文本，不存在注入面 */
-      html: cpEsc(String(p.text || '')).replace(/\$([^$\n()]{0,40}\s*\([A-Za-z0-9.\-]{1,12}\))\$/g, '<span class="cp__futu__sym">$1</span>'),
+      html: cpEsc(raw).replace(/\$([^$\n()]{0,40}\s*\([A-Za-z0-9.\-]{1,12}\))\$/g, '<span class="cp__futu__sym">$1</span>'),
       ts: Number(p.ts) || 0,
       url: String(p.url || ''),
     };
@@ -3577,6 +3616,8 @@ const TICKER_TTL = 15000;
      （否则一只 429 会把另一只也抹掉）；失败只标头部后缀，列表尾不挂任何提示条
      （2026-10-18 用户定稿：失败条、「待补」条全删）。 */
   function renderFutuMulti() {
+    /* 简→繁转换器就绪前不渲染（排队重渲）：避免列表先简体后繁体的二次跳变（2026-10-19） */
+    if (!cn2tReady()) { ensureCn2Tw(renderFutuMulti); return; }
     const els = cpListEls();
     if (!els.length) return;
     const all = futuMergeItems();
@@ -3602,6 +3643,8 @@ const TICKER_TTL = 15000;
   }
 
   function renderFutu() {
+    /* 简→繁转换器就绪前不渲染（排队重渲）：避免列表先简体后繁体的二次跳变（2026-10-19） */
+    if (!cn2tReady()) { ensureCn2Tw(renderFutu); return; }
     if (futuScope === 'all') return renderFutuMulti();
     const els = cpListEls();
     if (!els.length) return;

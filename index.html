@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<link rel="preload" href="app.js?v=20261019d" as="script" />
+<link rel="preload" href="app.js?v=20261019e" as="script" />
 <!-- ⚠️ 用户要求「没读到数据就显示 --，别产生误导」：
  报价头/账户汇总的初始值一律 --（原来是硬编码的 137.790 / +5.190 / +3.91% 等假数字，
  页面刚加载、JS 还没跑到时就会显示出来）。真实值由 renderQuote / 账户页数据填充。 -->
@@ -747,7 +747,17 @@ html, body {
  无 CORS → 经 corsfix 单源转发（主源 + 自重试一次），见 app.js FUTU_FEED_SRCS）。
  富途原站没有「作者名」字段（该端点只回 id/title/desc/publish_time/url），
  所以不做头像/昵称行，正文 + 相对时间 + 原文链接即可。 */
-.cp__futu__text { margin: 0 0 6px; font-size: 13px; line-height: 1.55; color: var(--text); word-break: break-word; }
+.cp__futu__text {
+  margin: 0 0 6px; font-size: 13px; line-height: 1.65; color: var(--text); word-break: break-word;
+  /* 富途评论正文楷体（2026-10-19 用户定稿）：系统楷体，不引 Web Font。
+     曾试用霞鹜文楷 TC 自托管（fonts/lxgw-wenkai-tc/，已删）——用户嫌不好看，回退系统栈。
+     KaiTi=Windows 简体楷体、Kaiti SC=macOS 简体楷体、STKaiti=macOS 旧版，最后 serif 兜底。
+     行高 1.55→1.65：楷体笔画密，原行高略挤。仅正文换字体；11px/10px 的 meta、
+     时间、标签、UI 骨架保持无衬线（小字号楷体笔画发虚）。
+     正文简→繁转换见 app.js futuDecorate（opencc cn→t 标准繁体，仅展示层，缓存仍存原文）——
+     转换与字体独立，任何字体下都生效。 */
+  font-family: "KaiTi", "Kaiti SC", "STKaiti", serif;
+}
 .cp__futu__meta { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--text-3); }
 .cp__futu__meta a { margin-left: auto; color: var(--accent); text-decoration: none; }
 .cp__futu__meta a:hover { text-decoration: underline; }
@@ -3613,6 +3623,6 @@ html, body {
  就没有任何入口，逻辑（app.js）/样式（index.html 内联块）/本段 HTML 一并移除。别再恢复。 -->
 </div>
 </div>
-<script defer src="app.js?v=20261019d"></script>
+<script defer src="app.js?v=20261019e"></script>
 </body>
 </html>

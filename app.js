@@ -11577,4 +11577,127 @@ fundAmount += f.amount;
       }).observe(codeEl, { childList: true, characterData: true, subtree: true });
     }
   })();
+  /* ===================================================================
+     「我的」页 → 殆知阁：古籍检索（2026-10-19 v2 · iframe 官方页直连）
+     -------------------------------------------------------------------
+     入口：「我的」页菜单「殆知阁」（原「功能建议」视觉行，v1 接真功能，
+     按钮 id="meDzgEntry"）。面板 #meDzg 盖住 .me-page，返回按钮切回 ——
+     不新增 rail 视图、不动 switchView 状态机（移动端天然全宽）。
+     v1 曾自建数据层：corsfix 代理调 daizhige.org API + 自渲染结果列表。
+     v2 弃用代理（用户 2026-10-19 要求），依据三组实测：
+       · daizhige.org 未设 X-Frame-Options / CSP → 可被 iframe 嵌入；
+       · 官方前端读取 q / mode / page / size / collection 全部 URL 参数
+         （扒首页 JS 确认）→ 带参打开即自动检索；
+       · API 对任何带 Origin 的浏览器请求一律 403、JSONP 不支持
+         （callback 被忽略）、公共代理 allorigins/codetabs 实测 522 全挂
+         → iframe 是唯一零代理通路。
+     于是本模块退化为「URL 拼装器」：结果区 iframe 加载官方检索页，
+     我方零 API 请求、零代理依赖；分页 / 高亮 / 书名自动补全 / 公告
+     全部由官方页自带。检索全程用户主动触发，无轮询无预取。
+     仍守 reference.md 语义：fulltext 不支持分类过滤 → 分类条置灰；
+     collection 单数、可重复；全不选 = 不发该参数 = 官方默认全选（不限）。
+     =================================================================== */
+  (function initDzg() {
+    /* 十大分类：daizhige.org 首页复选框实测值（2026-10-19 抓首页核对，
+       顺序照首页）。全不选 = 不发 collection 参数 = 不限分类。 */
+    const DZG_COLLECTIONS = ['道藏', '佛藏', '儒藏', '史藏', '子藏', '集藏', '诗藏', '艺藏', '易藏', '医藏'];
+    const DZG_BASE = 'https://daizhige.org/';
+
+    const view = document.getElementById('meDzg');
+    const mePage = document.querySelector('.me-page');
+    const entry = document.getElementById('meDzgEntry');
+    if (!view || !entry || !mePage) return;
+
+    const els = {
+      back: document.getElementById('dzgBack'),
+      input: document.getElementById('dzgInput'),
+      go: document.getElementById('dzgGo'),
+      modes: document.getElementById('dzgModes'),
+      cats: document.getElementById('dzgCats'),
+      status: document.getElementById('dzgStatus'),
+      frameWrap: document.getElementById('dzgFrameWrap'),
+      frame: document.getElementById('dzgFrame'),
+    };
+
+    /* 运行态。mode：fulltext(逐字) / normal(分词·官方默认) / exact(精确)；
+       opened = 是否已发起过检索（决定 iframe 显隐 + 切模式/分类是否自动刷新） */
+    const st = { mode: 'fulltext', collections: DZG_COLLECTIONS.slice(), q: '', opened: false };
+
+    /* 拼官方页 URL（参数口径扒自官方首页 JS）：
+       q 必带；mode 仅 exact/fulltext 显式带（normal 是官方默认，省略）；
+       page/size 交由官方页内分页自行维护，这里固定首页 size=20；
+       collection 仅分词/精确模式携带，单数可重复。
+       #resultsSection 锚点：分词/精确模式官方页先渲染站头+表单、结果在
+       下方，锚点让加载完成后自动滚到结果区（2026-10-19 实测 scrollY=633、
+       结果区 top=0；逐字模式结果本就在首屏，锚点无害）。 */
+    function dzgUrl() {
+      let u = DZG_BASE + '?q=' + encodeURIComponent(st.q) + '&page=0&size=20';
+      if (st.mode !== 'normal') u += '&mode=' + st.mode;
+      if (st.mode !== 'fulltext') {
+        st.collections.forEach((c) => { u += '&collection=' + encodeURIComponent(c); });
+      }
+      return u + '#resultsSection';
+    }
+
+    /* ---- 入口 / 返回 ---- */
+    entry.addEventListener('click', () => {
+      mePage.hidden = true;
+      view.hidden = false;
+      if (!st.opened) els.input.focus();
+    });
+    els.back.addEventListener('click', () => {
+      view.hidden = true;
+      mePage.hidden = false;
+    });
+
+    /* ---- 模式切换（fulltext 禁分类：reference.md 明示服务端无该参数） ---- */
+    els.modes.addEventListener('click', (e) => {
+      const b = e.target.closest ? e.target.closest('button[data-mode]') : null;
+      if (!b) return;
+      const m = b.dataset.mode;
+      if (m === st.mode) return;
+      st.mode = m;
+      els.modes.querySelectorAll('button').forEach((x) => x.classList.toggle('is-active', x === b));
+      els.cats.classList.toggle('is-off', m === 'fulltext');
+      if (st.opened) openResults();   // 已在检索态：切模式自动刷新官方页
+    });
+
+    /* ---- 分类筹码（JS 生成，单一数据源 DZG_COLLECTIONS） ---- */
+    DZG_COLLECTIONS.forEach((c) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'dzg-cat is-on';
+      b.textContent = c;
+      b.addEventListener('click', () => {
+        if (st.mode === 'fulltext') return;    // 逐字模式禁用（is-off 置灰，双保险）
+        const i = st.collections.indexOf(c);
+        if (i >= 0) st.collections.splice(i, 1); else st.collections.push(c);
+        b.classList.toggle('is-on', st.collections.indexOf(c) >= 0);
+        if (st.opened) openResults();          // 已在检索态：切分类自动刷新
+      });
+      els.cats.appendChild(b);
+    });
+
+    /* ---- 检索触发：按钮 / 回车 ---- */
+    els.go.addEventListener('click', openResults);
+    els.input.addEventListener('keydown', (e) => { if (e.key === 'Enter') openResults(); });
+
+    function openResults() {
+      const q = els.input.value.trim();
+      if (!q) {
+        els.status.textContent = '输入检索词开始，如：天地不仁';
+        return;
+      }
+      st.q = q;
+      st.opened = true;
+      els.frameWrap.hidden = false;
+      els.frame.src = dzgUrl();
+      const modeLabel = st.mode === 'fulltext' ? '逐字' : (st.mode === 'exact' ? '精确' : '分词');
+      const catLabel = st.mode === 'fulltext' ? ''
+        : (st.collections.length < DZG_COLLECTIONS.length
+          ? ' · 分类：' + (st.collections.join('、') || '不限') : '');
+      els.status.textContent = modeLabel + '「' + q + '」已在官方检索页打开' + catLabel
+        + ' · 直连 daizhige.org，无代理';
+    }
+  })();
 })();

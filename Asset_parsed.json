@@ -4,7 +4,7 @@
     "accountName": "XIAOMEI REN",
     "currency": "USD",
     "openDate": "2026-02-06",
-    "lastTradeDate": "2026-10-16"
+    "lastTradeDate": "2026-10-19"
   },
   "totalNetValueDaily": [
     {
@@ -730,6 +730,10 @@
     {
       "date": "2026-10-16",
       "value": 31227.47262784
+    },
+    {
+      "date": "2026-10-19",
+      "value": 31703.01070204
     }
   ],
   "cashDaily": [
@@ -1498,19 +1502,44 @@
       "date": "2026-10-16",
       "value": -7356.45737216,
       "accrued": -20.07
+    },
+    {
+      "date": "2026-10-19",
+      "value": -6817.58929796,
+      "accrued": -23.4
     }
   ],
-  "ibkrAccruedInterest": -20.07,
+  "ibkrAccruedInterest": -23.4,
   "holdings": [
     {
       "symbol": "ORCL",
       "side": "Long",
       "position": 300.0,
       "costBasisPrice": 141.694305573,
-      "markPrice": 128.23,
-      "positionValue": 38469.0,
+      "markPrice": 129.59,
+      "positionValue": 38877.0,
       "costBasisMoney": 42508.291672,
-      "unrealizedPnl": -4039.291672
+      "unrealizedPnl": -3631.291672
+    },
+    {
+      "symbol": "ORCL  261023C00135000",
+      "side": "Short",
+      "position": -3.0,
+      "costBasisPrice": 1.223071863,
+      "markPrice": 1.165,
+      "positionValue": -349.5,
+      "costBasisMoney": -366.921559,
+      "unrealizedPnl": 17.421559
+    },
+    {
+      "symbol": "ORCL  261023C00140000",
+      "side": "Short",
+      "position": -3.0,
+      "costBasisPrice": 0.57315505,
+      "markPrice": 0.395,
+      "positionValue": -118.5,
+      "costBasisMoney": -171.946515,
+      "unrealizedPnl": 53.446515
     }
   ],
   "electronicFundTransfers": [
@@ -1610,6 +1639,39 @@
     }
   ],
   "trades": [
+    {
+      "date": "2026-10-19",
+      "symbol": "ORCL  261023C00135000",
+      "underlying": "ORCL",
+      "cat": "OPT",
+      "buySell": "SELL",
+      "quantity": -3.0,
+      "price": 1.23,
+      "realized": 0.0,
+      "tradeId": "10407621247"
+    },
+    {
+      "date": "2026-10-19",
+      "symbol": "ORCL  261023C00140000",
+      "underlying": "ORCL",
+      "cat": "OPT",
+      "buySell": "SELL",
+      "quantity": -1.0,
+      "price": 0.58,
+      "realized": 0.0,
+      "tradeId": "10406619640"
+    },
+    {
+      "date": "2026-10-19",
+      "symbol": "ORCL  261023C00140000",
+      "underlying": "ORCL",
+      "cat": "OPT",
+      "buySell": "SELL",
+      "quantity": -2.0,
+      "price": 0.58,
+      "realized": 0.0,
+      "tradeId": "10406620474"
+    },
     {
       "date": "2026-10-16",
       "symbol": "ORCL  261016C00132000",
@@ -2293,7 +2355,7 @@
       "tradeId": "10256006917"
     }
   ],
-  "lastSync": "2026-10-19",
+  "lastSync": "2026-10-20",
   "seed": {
     "pa_funds": [
       {
